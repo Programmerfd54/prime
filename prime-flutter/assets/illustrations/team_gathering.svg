@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" fill="none">
+  <defs>
+    
+    <radialGradient id="t1" cx="0.35" cy="0.3" r="0.7"><stop offset="0%" stop-color="#DDD6FE"/><stop offset="100%" stop-color="#7C3AED"/></radialGradient>
+    <radialGradient id="t2" cx="0.35" cy="0.3" r="0.7"><stop offset="0%" stop-color="#FBCFE8"/><stop offset="100%" stop-color="#BE185D"/></radialGradient>
+    <radialGradient id="t3" cx="0.35" cy="0.3" r="0.7"><stop offset="0%" stop-color="#A7F3D0"/><stop offset="100%" stop-color="#059669"/></radialGradient>
+    <radialGradient id="t4" cx="0.35" cy="0.3" r="0.7"><stop offset="0%" stop-color="#FDE68A"/><stop offset="100%" stop-color="#D97706"/></radialGradient>
+    <radialGradient id="t5" cx="0.35" cy="0.3" r="0.7"><stop offset="0%" stop-color="#BAE6FD"/><stop offset="100%" stop-color="#0284C7"/></radialGradient>
+    <radialGradient id="t6" cx="0.35" cy="0.3" r="0.7"><stop offset="0%" stop-color="#E9D5FF"/><stop offset="100%" stop-color="#8B5CF6"/></radialGradient>
+
+  </defs>
+  <!-- soft ground shadow -->
+  <ellipse cx="80" cy="142" rx="42" ry="8" fill="#000" opacity="0.28"/>
+  
+  <circle cx="80" cy="80" r="48" fill="none" stroke="#8B5CF6" stroke-width="2" opacity="0.35" stroke-dasharray="6 5"/>
+  <circle cx="80" cy="42" r="14" fill="url(#t1)"/>
+  <circle cx="118" cy="70" r="14" fill="url(#t2)"/>
+  <circle cx="104" cy="112" r="14" fill="url(#t3)"/>
+  <circle cx="56" cy="112" r="14" fill="url(#t4)"/>
+  <circle cx="42" cy="70" r="14" fill="url(#t5)"/>
+  <circle cx="80" cy="80" r="10" fill="url(#t6)"/>
+  <circle cx="80" cy="42" r="0" /><!-- faces -->
+  <circle cx="76" cy="40" r="1.6" fill="#1A1622"/><circle cx="84" cy="40" r="1.6" fill="#1A1622"/>
+
+</svg>

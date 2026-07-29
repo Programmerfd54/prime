@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" fill="none">
+  <defs>
+    
+    <linearGradient id="box" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#2A2535"/><stop offset="100%" stop-color="#1F1B28"/></linearGradient>
+
+  </defs>
+  <!-- soft ground shadow -->
+  <ellipse cx="80" cy="142" rx="42" ry="8" fill="#000" opacity="0.28"/>
+  
+  <rect x="40" y="48" width="80" height="64" rx="14" fill="url(#box)" opacity="0.85"/>
+  <path d="M40 64 L80 48 L120 64" stroke="#A78BFA" stroke-width="2.5" fill="none" opacity="0.6"/>
+  <circle cx="80" cy="88" r="14" fill="none" stroke="#C4B5FD" stroke-width="2" stroke-dasharray="4 4"/>
+  <path d="M74 88 H86 M80 82 V94" stroke="#C4B5FD" stroke-width="2.5" stroke-linecap="round" opacity="0.7"/>
+
+</svg>

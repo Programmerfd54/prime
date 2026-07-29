@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" fill="none">
+  <defs>
+    
+    <radialGradient id="cloud" cx="0.4" cy="0.35" r="0.7"><stop offset="0%" stop-color="#E2E8F0"/><stop offset="100%" stop-color="#64748B"/></radialGradient>
+
+  </defs>
+  <!-- soft ground shadow -->
+  <ellipse cx="80" cy="142" rx="42" ry="8" fill="#000" opacity="0.28"/>
+  
+  <path d="M50 96 H108 C120 96 128 86 128 74 C128 62 118 54 106 54 C104 40 92 32 78 34 C64 36 56 48 56 60 C44 62 36 72 36 82 C36 90 42 96 50 96 Z" fill="url(#cloud)"/>
+  <line x1="48" y1="48" x2="118" y2="108" stroke="#FB7185" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="80" cy="118" r="4" fill="#FB7185" opacity="0.5"/>
+
+</svg>

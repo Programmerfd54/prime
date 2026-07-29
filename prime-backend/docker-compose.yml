@@ -1,0 +1,53 @@
+services:
+  prime-postgres:
+    image: postgres:16-alpine
+    container_name: prime-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-prime}
+      POSTGRES_USER: ${POSTGRES_USER:-prime}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - prime_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-prime} -d ${POSTGRES_DB:-prime}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  prime-api:
+    build: .
+    container_name: prime-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-prime}:${POSTGRES_PASSWORD}@prime-postgres:5432/${POSTGRES_DB:-prime}
+    depends_on:
+      prime-postgres:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./logs:/app/logs
+      - ./uploads:/app/uploads
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  matrix-synapse:
+    image: matrixdotorg/synapse:latest
+    container_name: prime-matrix-synapse
+    restart: unless-stopped
+    environment:
+      SYNAPSE_CONFIG_DIR: /data
+      SYNAPSE_CONFIG_PATH: /data/homeserver.yaml
+    ports:
+      - "8008:8008"
+    volumes:
+      - ./matrix:/data
+
+volumes:
+  prime_postgres_data:

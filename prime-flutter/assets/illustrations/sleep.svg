@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" fill="none">
+  <defs>
+    
+    <radialGradient id="moon" cx="0.35" cy="0.3" r="0.7"><stop offset="0%" stop-color="#E2E8F0"/><stop offset="100%" stop-color="#64748B"/></radialGradient>
+
+  </defs>
+  <!-- soft ground shadow -->
+  <ellipse cx="80" cy="142" rx="42" ry="8" fill="#000" opacity="0.28"/>
+  
+  <circle cx="88" cy="70" r="40" fill="url(#moon)"/>
+  <circle cx="108" cy="58" r="34" fill="#12101A"/>
+  <circle cx="72" cy="62" r="3" fill="#1A1622"/>
+  <path d="M66 78 Q74 84 82 76" stroke="#1A1622" stroke-width="2.2" stroke-linecap="round"/>
+  <circle cx="48" cy="40" r="3" fill="#C4B5FD" opacity="0.8"/>
+  <circle cx="120" cy="36" r="2" fill="#A78BFA" opacity="0.7"/>
+  <circle cx="36" cy="90" r="2.5" fill="#DDD6FE" opacity="0.6"/>
+  <path d="M50 50 Q54 46 58 50" stroke="#C4B5FD" stroke-width="1.5" opacity="0.6"/>
+
+</svg>

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" fill="none">
+  <defs>
+    
+    <linearGradient id="book1" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#94A3B8"/><stop offset="100%" stop-color="#475569"/></linearGradient>
+    <linearGradient id="book2" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#CBD5E1"/><stop offset="100%" stop-color="#64748B"/></linearGradient>
+    <linearGradient id="book3" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#E2E8F0"/><stop offset="100%" stop-color="#94A3B8"/></linearGradient>
+    <radialGradient id="pageOrb" cx="0.35" cy="0.3" r="0.7"><stop offset="0%" stop-color="#F8FAFC"/><stop offset="100%" stop-color="#94A3B8"/></radialGradient>
+
+  </defs>
+  <!-- soft ground shadow -->
+  <ellipse cx="80" cy="142" rx="42" ry="8" fill="#000" opacity="0.28"/>
+  
+  <rect x="38" y="78" width="84" height="18" rx="4" fill="url(#book1)" transform="rotate(-6 80 87)"/>
+  <rect x="40" y="62" width="80" height="18" rx="4" fill="url(#book2)" transform="rotate(3 80 71)"/>
+  <rect x="44" y="44" width="72" height="22" rx="4" fill="url(#book3)"/>
+  <rect x="48" y="48" width="4" height="14" rx="1" fill="#FCD34D"/>
+  <path d="M110 44 L118 52 L110 66 Z" fill="#F59E0B"/>
+  <circle cx="118" cy="36" r="10" fill="url(#pageOrb)"/>
+
+</svg>

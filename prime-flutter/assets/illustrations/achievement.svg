@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" fill="none">
+  <defs>
+    
+    <radialGradient id="medal" cx="0.35" cy="0.3" r="0.7"><stop offset="0%" stop-color="#FDE68A"/><stop offset="100%" stop-color="#B45309"/></radialGradient>
+    <radialGradient id="medalInner" cx="0.4" cy="0.35" r="0.65"><stop offset="0%" stop-color="#FCD34D"/><stop offset="100%" stop-color="#D97706"/></radialGradient>
+    <linearGradient id="ribbon" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#8B5CF6"/><stop offset="100%" stop-color="#4C1D95"/></linearGradient>
+
+  </defs>
+  <!-- soft ground shadow -->
+  <ellipse cx="80" cy="142" rx="42" ry="8" fill="#000" opacity="0.28"/>
+  
+  <circle cx="80" cy="68" r="36" fill="url(#medal)"/>
+  <circle cx="80" cy="68" r="26" fill="url(#medalInner)"/>
+  <path d="M80 52 L84 62 L95 63 L86 70 L89 81 L80 75 L71 81 L74 70 L65 63 L76 62 Z" fill="#FFF7ED"/>
+  <path d="M52 100 L48 130 L80 118 L112 130 L108 100" fill="url(#ribbon)" opacity="0.9"/>
+  <rect x="58" y="96" width="44" height="10" rx="3" fill="#B45309"/>
+
+</svg>

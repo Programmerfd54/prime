@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" fill="none">
+  <defs>
+    
+    <linearGradient id="bar" x1="0" y1="1" x2="0" y2="0"><stop offset="0%" stop-color="#0F766E"/><stop offset="100%" stop-color="#5EEAD4"/></linearGradient>
+    <linearGradient id="bar2" x1="0" y1="1" x2="0" y2="0"><stop offset="0%" stop-color="#8B5CF6"/><stop offset="100%" stop-color="#C4B5FD"/></linearGradient>
+    <radialGradient id="star" cx="0.35" cy="0.3" r="0.7"><stop offset="0%" stop-color="#FDE68A"/><stop offset="100%" stop-color="#F59E0B"/></radialGradient>
+
+  </defs>
+  <!-- soft ground shadow -->
+  <ellipse cx="80" cy="142" rx="42" ry="8" fill="#000" opacity="0.28"/>
+  
+  <rect x="40" y="100" width="16" height="28" rx="4" fill="#5EEAD4" opacity="0.45"/>
+  <rect x="62" y="78" width="16" height="50" rx="4" fill="#5EEAD4" opacity="0.7"/>
+  <rect x="84" y="54" width="16" height="74" rx="4" fill="url(#bar)"/>
+  <rect x="106" y="36" width="16" height="92" rx="4" fill="url(#bar2)"/>
+  <circle cx="114" cy="28" r="12" fill="url(#star)"/>
+  <path d="M114 20 L116 26 L122 26 L117 30 L119 36 L114 32 L109 36 L111 30 L106 26 L112 26 Z" fill="#FFF"/>
+
+</svg>
