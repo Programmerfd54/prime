@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
-import 'package:prime/design/liquid/liquid_glass.dart';
 import 'package:prime/design/tokens.dart';
 import 'package:prime/design/typography.dart';
+import 'package:prime/ui/kit/tokens/kit_surfaces.dart';
 
 /// Compact insight card with icon, title, and message.
 class PrimeInsightCard extends StatelessWidget {
@@ -21,11 +21,9 @@ class PrimeInsightCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return LiquidGlass(
-      forceTier: LiquidTier.lite,
-      radius: AppRadius.lg,
+    final body = Container(
       padding: const EdgeInsets.all(AppSpacing.md),
-      onTap: onTap,
+      decoration: kitSurfaceDecoration(context, PrimeSurfaceLevel.solid),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -65,6 +63,15 @@ class PrimeInsightCard extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+    if (onTap == null) return body;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        child: body,
       ),
     );
   }

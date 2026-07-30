@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
 
 import '../../../design/lottie_registry.dart';
+import '../../../design/theme/prime_theme_context.dart';
 import '../../../design/tokens.dart';
 import '../../../design/typography.dart';
-import '../../../design/visuals/ambient_and_progress.dart';
 import '../../../design/visuals/charts/charts.dart';
 import '../../../design/visuals/habit_art.dart';
 import '../../../l10n/copy.dart';
 import '../../../models/group.dart';
+import '../../kit/components/prime_content_card.dart';
+import '../../kit/tokens/kit_surfaces.dart';
+import '../../kit/tokens/kit_typography.dart';
 import '../app_primary_button.dart';
 import '../app_secondary_button.dart';
 import '../profile/app_avatar.dart';
@@ -18,21 +21,8 @@ class AppGroupEmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(AppSpacing.lg),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(AppRadius.xl),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            AppColors.accentSurface.withValues(alpha: 0.4),
-            AppColors.surfaceSoft,
-          ],
-        ),
-        border: Border.all(color: AppColors.border),
-      ),
+    final p = context.prime;
+    return PrimeContentCard(
       child: Column(
         children: [
           const PrimeLottie(
@@ -50,14 +40,14 @@ class AppGroupEmptyState extends StatelessWidget {
           const SizedBox(height: AppSpacing.md),
           Text(
             'Команда ждёт вас',
-            style: AppTypography.title1,
+            style: AppTypography.title1.copyWith(color: p.ink),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: AppSpacing.xs),
           Text(
             'Выберите ${AppCopy.habit} во вкладке «${AppCopy.habits}» и нажмите «${AppCopy.findTeam}». Здесь появится живой поиск и orbit участников.',
             textAlign: TextAlign.center,
-            style: AppTypography.bodySecondary,
+            style: AppTypography.bodySecondary.copyWith(color: p.inkSecondary),
           ),
         ],
       ),
@@ -73,62 +63,54 @@ class AppGroupMatchedBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(AppRadius.xl),
-      child: Container(
-        padding: const EdgeInsets.all(AppSpacing.lg),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [
-              AppColors.mint.withValues(alpha: 0.12),
-              AppColors.surface,
+    final p = context.prime;
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      decoration: kitSurfaceDecoration(
+        context,
+        PrimeSurfaceLevel.accent,
+        radius: AppRadius.xl,
+        accent: KitAccent.mint,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              PrimeRadialProgress(
+                progress: 1,
+                valueLabel: '6/6',
+                size: 64,
+                stroke: 7,
+                color: p.mint,
+              ),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      AppCopy.teamReadyConfirm,
+                      style: KitTypography.sectionTitle.copyWith(color: p.mint),
+                    ),
+                    const SizedBox(height: AppSpacing.xxs),
+                    Text(
+                      'Подтвердите участие и перейдите к правилам',
+                      style: KitTypography.caption.copyWith(color: p.inkSecondary),
+                    ),
+                  ],
+                ),
+              ),
             ],
           ),
-          border: Border.all(color: AppColors.success.withValues(alpha: 0.35)),
-          borderRadius: BorderRadius.circular(AppRadius.xl),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                AppProgressRing(
-                  progress: 1,
-                  label: '6',
-                  subtitle: 'из 6',
-                  size: 64,
-                  color: AppColors.success,
-                ),
-                const SizedBox(width: AppSpacing.md),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        AppCopy.teamReadyConfirm,
-                        style: AppTypography.title2.copyWith(
-                          color: AppColors.success,
-                        ),
-                      ),
-                      const SizedBox(height: AppSpacing.xxs),
-                      const Text(
-                        'Подтвердите участие и перейдите к правилам',
-                        style: AppTypography.caption,
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: AppSpacing.md),
-            AppPrimaryButton(
-              label: AppCopy.confirmParticipation,
-              icon: Icons.groups_2,
-              success: true,
-              onPressed: onOpen,
-            ),
-          ],
-        ),
+          const SizedBox(height: AppSpacing.md),
+          AppPrimaryButton(
+            label: AppCopy.confirmParticipation,
+            icon: Icons.groups_2,
+            success: true,
+            onPressed: onOpen,
+          ),
+        ],
       ),
     );
   }
@@ -145,91 +127,91 @@ class AppGroupDetailHero extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = context.prime;
     final kind = habitArtKindFor(group.skillName ?? group.name);
     final accent = habitArtAccent(kind);
     final confirmed =
         group.members.where((m) => m.confirmedParticipation).length;
     final progress = group.maxMembers == 0 ? 0.0 : confirmed / group.maxMembers;
 
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(AppRadius.xl),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(AppSpacing.lg),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              accent.withValues(alpha: 0.14),
-              AppColors.heroSurfaceEnd,
-            ],
-          ),
-          border: Border.all(color: AppColors.border),
-          borderRadius: BorderRadius.circular(AppRadius.xl),
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    group.skillName ?? group.name,
-                    style: AppTypography.largeTitle.copyWith(fontSize: 22),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
+    return PrimeContentCard(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  group.skillName ?? group.name,
+                  style: AppTypography.largeTitle.copyWith(
+                    fontSize: 22,
+                    color: p.ink,
                   ),
-                  const SizedBox(height: AppSpacing.xxs),
-                  Text(
-                    _statusLabel(group.status),
-                    style: AppTypography.caption.copyWith(color: accent),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: AppSpacing.xxs),
+                Text(
+                  _statusLabel(group.status),
+                  style: AppTypography.caption.copyWith(color: accent),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (group.isPrivate && group.inviteCode != null) ...[
+                  const SizedBox(height: AppSpacing.sm),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.sm,
+                      vertical: AppSpacing.xxs,
+                    ),
+                    decoration: BoxDecoration(
+                      color: p.surfaceSoft,
+                      borderRadius: BorderRadius.circular(AppRadius.pill),
+                      border: Border.all(color: p.hairline),
+                    ),
+                    child: Text(
+                      'Код: ${group.inviteCode}',
+                      style: AppTypography.caption.copyWith(color: p.inkMuted),
+                    ),
                   ),
-                  if (group.isPrivate && group.inviteCode != null) ...[
-                    const SizedBox(height: AppSpacing.sm),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: AppSpacing.sm,
-                        vertical: AppSpacing.xxs,
-                      ),
-                      decoration: BoxDecoration(
-                        color: AppColors.surfaceSoft,
-                        borderRadius: BorderRadius.circular(AppRadius.pill),
-                      ),
+                ],
+                const SizedBox(height: AppSpacing.md),
+                Row(
+                  children: [
+                    PrimeRadialProgress(
+                      progress: progress.clamp(0.0, 1.0),
+                      valueLabel: '$confirmed/${group.maxMembers}',
+                      caption: 'подтвердили',
+                      size: 68,
+                      stroke: 7,
+                      color: accent,
+                    ),
+                    const SizedBox(width: AppSpacing.sm),
+                    Expanded(
                       child: Text(
-                        'Код: ${group.inviteCode}',
-                        style: AppTypography.caption,
+                        '${group.membersCount} участников в команде',
+                        style: AppTypography.bodySecondary.copyWith(
+                          color: p.inkSecondary,
+                        ),
                       ),
                     ),
                   ],
-                  const SizedBox(height: AppSpacing.md),
-                  Row(
-                    children: [
-                      AppProgressRing(
-                        progress: progress.clamp(0.0, 1.0),
-                        label: '$confirmed',
-                        subtitle: '/${group.maxMembers}',
-                        size: 68,
-                        color: accent,
-                      ),
-                      const SizedBox(width: AppSpacing.sm),
-                      Expanded(
-                        child: Text(
-                          '${group.membersCount} участников в команде',
-                          style: AppTypography.bodySecondary,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
-            HabitArtObject(kind: kind, size: 88),
-          ],
-        ),
+          ),
+          const SizedBox(width: AppSpacing.sm),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(AppRadius.md),
+            child: Image.asset(
+              habitPhotoAsset(kind),
+              width: 88,
+              height: 88,
+              fit: BoxFit.cover,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -238,7 +220,7 @@ class AppGroupDetailHero extends StatelessWidget {
     return switch (status) {
       GroupStatus.forming => 'Набор участников',
       GroupStatus.introduction => 'Этап знакомства',
-      GroupStatus.rulesPending => 'Принятие правил',
+      GroupStatus.rulesPending => 'Командный договор',
       GroupStatus.active => 'Трекер активен',
       GroupStatus.rotating => 'Режим добора',
       GroupStatus.voting => 'Голосование за продолжение',
@@ -266,20 +248,16 @@ class AppGroupDailyActions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(AppSpacing.lg),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceSoft.withValues(alpha: 0.55),
-        borderRadius: BorderRadius.circular(AppRadius.xl),
-      ),
+    final p = context.prime;
+    return PrimeContentCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text('Сегодня', style: AppTypography.title2),
+          Text('Сегодня', style: AppTypography.title2.copyWith(color: p.ink)),
           const SizedBox(height: AppSpacing.xxs),
-          const Text(
+          Text(
             'Отправьте отчёт и поддержите команду в чате',
-            style: AppTypography.bodySecondary,
+            style: AppTypography.bodySecondary.copyWith(color: p.inkSecondary),
           ),
           const SizedBox(height: AppSpacing.md),
           AppPrimaryButton(
@@ -310,13 +288,24 @@ class AppGroupMemberRow extends StatelessWidget {
     super.key,
     required this.member,
     this.onTap,
+    this.statusPhase,
   });
 
   final MemberModel member;
   final VoidCallback? onTap;
+  /// When set, controls which confirmation flag drives the status icon.
+  final GroupStatus? statusPhase;
+
+  bool get _isReady {
+    if (statusPhase == GroupStatus.rulesPending) {
+      return member.acceptedRules;
+    }
+    return member.confirmedParticipation;
+  }
 
   @override
   Widget build(BuildContext context) {
+    final p = context.prime;
     final profile = member.profile;
     final name = profile?.name.isNotEmpty == true
         ? profile!.name
@@ -336,7 +325,8 @@ class AppGroupMemberRow extends StatelessWidget {
           ),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(AppRadius.lg),
-            color: AppColors.surface.withValues(alpha: 0.6),
+            color: p.surfaceElevated,
+            border: Border.all(color: p.hairline, width: 0.5),
           ),
           child: Row(
             children: [
@@ -352,14 +342,17 @@ class AppGroupMemberRow extends StatelessWidget {
                   children: [
                     Text(
                       name,
-                      style: AppTypography.title2.copyWith(fontSize: 16),
+                      style: AppTypography.title2.copyWith(
+                        fontSize: 16,
+                        color: p.ink,
+                      ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
                     if (profile?.nickname.isNotEmpty == true)
                       Text(
                         '@${profile!.nickname}',
-                        style: AppTypography.caption,
+                        style: AppTypography.caption.copyWith(color: p.inkMuted),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -367,12 +360,10 @@ class AppGroupMemberRow extends StatelessWidget {
                 ),
               ),
               Icon(
-                member.confirmedParticipation
+                _isReady
                     ? Icons.check_circle_rounded
                     : Icons.hourglass_empty_rounded,
-                color: member.confirmedParticipation
-                    ? AppColors.success
-                    : AppColors.textMuted,
+                color: _isReady ? p.mint : p.inkMuted,
                 size: AppIconSizes.sm,
               ),
             ],
@@ -396,6 +387,7 @@ class AppGroupIntroPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = context.prime;
     final confirmed =
         group.members.where((m) => m.confirmedParticipation).length;
     final progress =
@@ -404,17 +396,11 @@ class AppGroupIntroPanel extends StatelessWidget {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(AppSpacing.lg),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(AppRadius.xl),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            AppColors.mint.withValues(alpha: 0.1),
-            AppColors.surfaceSoft,
-          ],
-        ),
-        border: Border.all(color: AppColors.success.withValues(alpha: 0.35)),
+      decoration: kitSurfaceDecoration(
+        context,
+        PrimeSurfaceLevel.accent,
+        radius: AppRadius.xl,
+        accent: KitAccent.mint,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -426,14 +412,12 @@ class AppGroupIntroPanel extends StatelessWidget {
                 height: 44,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: AppColors.success.withValues(alpha: 0.14),
-                  border: Border.all(
-                    color: AppColors.success.withValues(alpha: 0.4),
-                  ),
+                  color: p.mint.withValues(alpha: 0.14),
+                  border: Border.all(color: p.mint.withValues(alpha: 0.4)),
                 ),
                 child: Icon(
                   Icons.groups_rounded,
-                  color: AppColors.success,
+                  color: p.mint,
                   size: AppIconSizes.sm,
                 ),
               ),
@@ -441,9 +425,7 @@ class AppGroupIntroPanel extends StatelessWidget {
               Expanded(
                 child: Text(
                   'Команда найдена',
-                  style: AppTypography.title2.copyWith(
-                    color: AppColors.success,
-                  ),
+                  style: AppTypography.title2.copyWith(color: p.mint),
                 ),
               ),
             ],
@@ -454,19 +436,21 @@ class AppGroupIntroPanel extends StatelessWidget {
             style: AppTypography.bodySecondary,
           ),
           const SizedBox(height: AppSpacing.sm),
+          _TimezoneContractRow(group: group),
+          const SizedBox(height: AppSpacing.sm),
           ClipRRect(
             borderRadius: BorderRadius.circular(AppRadius.pill),
             child: LinearProgressIndicator(
               value: progress,
               minHeight: 6,
-              backgroundColor: AppColors.elevatedSurface,
-              color: AppColors.success,
+              backgroundColor: p.surfaceSoft,
+              color: p.mint,
             ),
           ),
           const SizedBox(height: AppSpacing.xxs),
           Text(
             'Готовы продолжить: $confirmed/${group.maxMembers}',
-            style: AppTypography.caption,
+            style: AppTypography.caption.copyWith(color: p.inkSecondary),
           ),
           const SizedBox(height: AppSpacing.md),
           ...group.members.map(
@@ -477,6 +461,50 @@ class AppGroupIntroPanel extends StatelessWidget {
                 onTap: member.profile == null
                     ? null
                     : () => onOpenProfile(member),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TimezoneContractRow extends StatelessWidget {
+  const _TimezoneContractRow({required this.group});
+
+  final GroupModel group;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.prime;
+    final regions = <String>{
+      if (group.regionName?.isNotEmpty == true) group.regionName!,
+      for (final m in group.members)
+        if (m.profile?.regionName?.isNotEmpty == true) m.profile!.regionName!,
+    };
+    final label = regions.isEmpty
+        ? 'Отчёты отправляются вечером по местному времени каждого участника'
+        : 'Регионы команды: ${regions.join(', ')} · вечерний отчёт по местному времени';
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(AppSpacing.sm),
+      decoration: BoxDecoration(
+        color: p.surfaceSoft,
+        borderRadius: BorderRadius.circular(AppRadius.button),
+        border: Border.all(color: p.hairline),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.schedule_rounded, size: 18, color: p.brand),
+          const SizedBox(width: AppSpacing.xs),
+          Expanded(
+            child: Text(
+              label,
+              style: AppTypography.caption.copyWith(
+                color: p.inkSecondary,
+                height: 1.35,
               ),
             ),
           ),
@@ -499,6 +527,7 @@ class AppGroupIntroParticipantTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = context.prime;
     final profile = member.profile;
     final name = profile?.name.isNotEmpty == true
         ? profile!.name
@@ -513,8 +542,8 @@ class AppGroupIntroParticipantTile extends StatelessWidget {
           padding: const EdgeInsets.all(AppSpacing.sm),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(AppRadius.lg),
-            color: AppColors.surface.withValues(alpha: 0.65),
-            border: Border.all(color: AppColors.border),
+            color: p.surfaceElevated,
+            border: Border.all(color: p.hairline, width: 0.5),
           ),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -534,7 +563,7 @@ class AppGroupIntroParticipantTile extends StatelessWidget {
                         Expanded(
                           child: Text(
                             name,
-                            style: AppTypography.title2,
+                            style: AppTypography.title2.copyWith(color: p.ink),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
@@ -544,8 +573,8 @@ class AppGroupIntroParticipantTile extends StatelessWidget {
                               ? Icons.check_circle_rounded
                               : Icons.hourglass_empty_rounded,
                           color: member.confirmedParticipation
-                              ? AppColors.success
-                              : AppColors.textMuted,
+                              ? p.mint
+                              : p.inkMuted,
                           size: 18,
                         ),
                       ],
@@ -555,7 +584,7 @@ class AppGroupIntroParticipantTile extends StatelessWidget {
                       Text(
                         '@${profile!.nickname}',
                         style: AppTypography.caption.copyWith(
-                          color: AppColors.primarySoft,
+                          color: p.brandSoft,
                         ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -568,7 +597,7 @@ class AppGroupIntroParticipantTile extends StatelessWidget {
                           if (profile?.city != null) profile!.city,
                           if (profile?.age != null) '${profile!.age} лет',
                         ].join(' · '),
-                        style: AppTypography.caption,
+                        style: AppTypography.caption.copyWith(color: p.inkMuted),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -579,7 +608,9 @@ class AppGroupIntroParticipantTile extends StatelessWidget {
                         profile!.about,
                         maxLines: 3,
                         overflow: TextOverflow.ellipsis,
-                        style: AppTypography.bodySecondary,
+                        style: AppTypography.bodySecondary.copyWith(
+                          color: p.inkSecondary,
+                        ),
                       ),
                     ],
                   ],
@@ -593,52 +624,38 @@ class AppGroupIntroParticipantTile extends StatelessWidget {
   }
 }
 
-/// Rules acceptance panel — scroll-friendly editorial block.
+/// Team pact acceptance — V6 supportive contract (replaces shame-based rules).
 class AppGroupRulesPanel extends StatelessWidget {
   const AppGroupRulesPanel({super.key});
 
   static const _principles = [
-    'Ежедневный отчёт о выполненных действиях.',
-    'Абсолютная честность с собой и группой.',
-    'Поддержка единомышленников каждый день (реакции, эмодзи, текст).',
-    'Доверие и экологичное общение (без политики, религии, обсуждения доходов).',
-    'Фокус на личном развитии.',
+    'Ежедневный отчёт о сделанном действии — коротко и честно.',
+    'Поддержка участников: реакции и слова, которые помогают вернуться в ритм.',
+    'Уважительное общение — без политики, религии и сравнения доходов.',
+    'Фокус на личном росте, а не на оценке других.',
+    'Пропуск дня не означает провал — важно вернуться на следующий.',
   ];
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(AppSpacing.lg),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(AppRadius.xl),
-        color: AppColors.surfaceSoft.withValues(alpha: 0.7),
-        border: Border.all(color: AppColors.border),
-      ),
+    final p = context.prime;
+    return PrimeContentCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Главное правило ПРАЙМА',
-            style: AppTypography.title2.copyWith(color: AppColors.primarySoft),
+            AppCopy.teamPactTitle,
+            style: AppTypography.title2.copyWith(color: p.brandSoft),
           ),
           const SizedBox(height: AppSpacing.xs),
-          const Text(
-            'Если ты согласен взять на себя ответственность перед самим собой '
-            'и перед группой, то с момента старта развития важной и полезной '
-            'для тебя привычки твоё слово имеет огромную ценность для тебя '
-            'и как минимум для данной группы единомышленников.\n\n'
-            'Помни: если кто-то проявил слабость и нарушил своё слово — '
-            'то есть перестал отправлять отчёты без уважительной причины — '
-            'то ты должен понять, что в этом мире есть люди слабее тебя, '
-            'а ответственность за будущее всегда была, есть и будет в руках '
-            'сильных людей. За тех, кто всегда в Прайме.',
-            style: AppTypography.bodySecondary,
+          Text(
+            AppCopy.teamPactLead,
+            style: AppTypography.bodySecondary.copyWith(color: p.inkSecondary),
           ),
           const SizedBox(height: AppSpacing.md),
           Text(
-            '5 принципов группы',
-            style: AppTypography.title2.copyWith(color: AppColors.primarySoft),
+            '5 принципов команды',
+            style: AppTypography.title2.copyWith(color: p.brandSoft),
           ),
           const SizedBox(height: AppSpacing.xs),
           ..._principles.asMap().entries.map(
@@ -650,14 +667,16 @@ class AppGroupRulesPanel extends StatelessWidget {
                       Text(
                         '${entry.key + 1}. ',
                         style: AppTypography.bodySecondary.copyWith(
-                          color: AppColors.primarySoft,
+                          color: p.brandSoft,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
                       Expanded(
                         child: Text(
                           entry.value,
-                          style: AppTypography.bodySecondary,
+                          style: AppTypography.bodySecondary.copyWith(
+                            color: p.inkSecondary,
+                          ),
                         ),
                       ),
                     ],
@@ -668,18 +687,108 @@ class AppGroupRulesPanel extends StatelessWidget {
           Container(
             padding: const EdgeInsets.all(AppSpacing.sm),
             decoration: BoxDecoration(
-              color: AppColors.accentSurface.withValues(alpha: 0.55),
-              borderRadius: BorderRadius.circular(AppRadius.md),
-              border: Border.all(color: AppColors.primary.withValues(alpha: 0.2)),
+              color: p.surfaceSoft,
+              borderRadius: BorderRadius.circular(AppRadius.button),
+              border: Border.all(color: p.hairline),
             ),
-            child: const Text(
-              'Чат группы будет доступен только после того, как все 6 участников '
-              'проскроллят правила до конца и нажмут «Принять».',
-              style: AppTypography.caption,
+            child: Text(
+              AppCopy.teamPactChatGate,
+              style: AppTypography.caption.copyWith(color: p.inkMuted),
             ),
           ),
         ],
       ),
+    );
+  }
+}
+
+/// End-of-cycle summary before continuation vote (Phase 5).
+class AppGroupCycleCompletionPanel extends StatelessWidget {
+  const AppGroupCycleCompletionPanel({
+    super.key,
+    required this.group,
+  });
+
+  final GroupModel group;
+
+  int get _cycleDays {
+    final start = group.cycleStartAt;
+    if (start == null) return 30;
+    final days = DateTime.now().difference(start).inDays + 1;
+    return days.clamp(1, 30);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.prime;
+    final bestStreak = group.members
+        .map((m) => m.bestStreak)
+        .fold(0, (a, b) => a > b ? a : b);
+    return PrimeContentCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Первый цикл завершён',
+            style: AppTypography.title2.copyWith(color: p.mint),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            '${group.skillName ?? 'Привычка'} · $_cycleDays ${AppCopy.cycleDays}',
+            style: AppTypography.caption.copyWith(color: p.inkSecondary),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: AppSpacing.md),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              _CompletionStat(
+                label: 'Участников',
+                value: '${group.membersCount}',
+              ),
+              _CompletionStat(
+                label: 'Лучшая серия',
+                value: '$bestStreak',
+              ),
+              _CompletionStat(
+                label: 'Цикл',
+                value: '30',
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.md),
+          Text(
+            AppCopy.cycleContinuationFootnote,
+            style: AppTypography.caption.copyWith(
+              color: p.inkSecondary,
+              height: 1.4,
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CompletionStat extends StatelessWidget {
+  const _CompletionStat({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.prime;
+    return Column(
+      children: [
+        Text(
+          value,
+          style: AppTypography.title1.copyWith(color: p.brand),
+        ),
+        Text(label, style: AppTypography.caption.copyWith(color: p.inkMuted)),
+      ],
     );
   }
 }
@@ -697,25 +806,20 @@ class AppGroupVotingPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(AppSpacing.lg),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(AppRadius.xl),
-        gradient: LinearGradient(
-          colors: [
-            AppColors.accentSurface.withValues(alpha: 0.45),
-            AppColors.surface,
-          ],
-        ),
-        border: Border.all(color: AppColors.border),
-      ),
+    final p = context.prime;
+    return PrimeContentCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
             'Итоги 30-дневного цикла',
-            style: AppTypography.title2,
+            style: AppTypography.title2.copyWith(color: p.ink),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            AppCopy.cycleContinuationFootnote,
+            style: AppTypography.caption.copyWith(color: p.inkSecondary),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: AppSpacing.sm),
@@ -753,92 +857,84 @@ class AppGroupActiveCycleHero extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = context.prime;
     final kind = habitArtKindFor(group.skillName ?? group.name);
     final accent = habitArtAccent(kind);
     final cycleDay = cycleDayFromStart(group.cycleStartAt);
     final progress =
         cycleDay != null ? (cycleDay / 30).clamp(0.0, 1.0) : null;
 
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(AppRadius.xl),
-        child: Ink(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(AppRadius.xl),
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                accent.withValues(alpha: 0.16),
-                AppColors.surface,
-                AppColors.elevatedSurface,
-              ],
-            ),
-            border: Border.all(color: accent.withValues(alpha: 0.45)),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(AppSpacing.lg),
-            child: Row(
+    return PrimeContentCard(
+      onTap: onTap,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                Text(
+                  group.skillName ?? group.name,
+                  style: AppTypography.title1.copyWith(color: p.ink),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: AppSpacing.xxs),
+                Text(
+                  'Активный цикл · ${group.membersCount}/${group.maxMembers}',
+                  style: AppTypography.caption.copyWith(color: accent),
+                ),
+                if (cycleDay != null) ...[
+                  const SizedBox(height: AppSpacing.md),
+                  Row(
                     children: [
-                      Text(
-                        group.skillName ?? group.name,
-                        style: AppTypography.title1,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
+                      PrimeRadialProgress(
+                        progress: progress!,
+                        valueLabel: '$cycleDay/30',
+                        caption: 'день цикла',
+                        size: 68,
+                        stroke: 7,
+                        color: accent,
                       ),
-                      const SizedBox(height: AppSpacing.xxs),
-                      Text(
-                        'Активный цикл · ${group.membersCount}/${group.maxMembers}',
-                        style: AppTypography.caption.copyWith(color: accent),
-                      ),
-                      if (cycleDay != null) ...[
-                        const SizedBox(height: AppSpacing.md),
-                        Row(
+                      const SizedBox(width: AppSpacing.sm),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            AppProgressRing(
-                              progress: progress!,
-                              label: '$cycleDay',
-                              subtitle: 'из 30',
-                              size: 68,
-                              color: accent,
+                            Text(
+                              'День $cycleDay',
+                              style: AppTypography.title2.copyWith(
+                                fontSize: 16,
+                                color: p.ink,
+                              ),
                             ),
-                            const SizedBox(width: AppSpacing.sm),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    'День $cycleDay',
-                                    style: AppTypography.title2.copyWith(
-                                      fontSize: 16,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    AppCopy.cycleDays,
-                                    style: AppTypography.caption,
-                                  ),
-                                ],
+                            const SizedBox(height: 2),
+                            Text(
+                              AppCopy.cycleDays,
+                              style: AppTypography.caption.copyWith(
+                                color: p.inkMuted,
                               ),
                             ),
                           ],
                         ),
-                      ],
+                      ),
                     ],
                   ),
-                ),
-                HabitArtObject(kind: kind, size: 72),
+                ],
               ],
             ),
           ),
-        ),
+          const SizedBox(width: AppSpacing.sm),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(AppRadius.md),
+            child: Image.asset(
+              habitPhotoAsset(kind),
+              width: 72,
+              height: 72,
+              fit: BoxFit.cover,
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
 import 'package:forui/forui.dart';
@@ -17,9 +18,11 @@ import 'data/api_client.dart';
 import 'design/forui_theme.dart';
 import 'design/routes.dart';
 import 'design/scroll_behavior.dart';
+import 'design/theme/prime_cupertino_theme.dart';
 import 'design/theme/prime_theme_context.dart';
 import 'design/tokens.dart';
 import 'providers/auth_provider.dart';
+import 'providers/chats_inbox_provider.dart';
 
 void main() {
   // Bindings and runApp must share one zone (avoids Zone mismatch on web).
@@ -84,6 +87,13 @@ class PrimeApp extends StatelessWidget {
         ChangeNotifierProvider<RealtimeClient>(
           create: (ctx) => RealtimeClient(ctx.read<ApiClient>()),
         ),
+        ChangeNotifierProvider<ChatsInboxProvider>(
+          create: (ctx) {
+            final inbox = ChatsInboxProvider(ctx.read<ApiClient>());
+            unawaited(inbox.ensureLoaded());
+            return inbox;
+          },
+        ),
       ],
       child: Consumer<ThemeModeController>(
         builder: (context, themeCtrl, _) {
@@ -127,14 +137,17 @@ class PrimeApp extends StatelessWidget {
                 final brightness = Theme.of(context).brightness;
                 ThemeBinding.bind(brightness);
                 final prime = context.prime;
-                return FTheme(
-                  data: primeForuiTheme(prime),
-                  child: FToaster(
-                    child: FTooltipGroup(
-                      child: ShadAppBuilder(
-                        backgroundColor: Colors.transparent,
-                        child: _DesktopWebFrame(
-                          child: child ?? const SizedBox.shrink(),
+                return CupertinoTheme(
+                  data: PrimeCupertinoTheme.fromColors(prime),
+                  child: FTheme(
+                    data: primeForuiTheme(prime),
+                    child: FToaster(
+                      child: FTooltipGroup(
+                        child: ShadAppBuilder(
+                          backgroundColor: Colors.transparent,
+                          child: _DesktopWebFrame(
+                            child: child ?? const SizedBox.shrink(),
+                          ),
                         ),
                       ),
                     ),

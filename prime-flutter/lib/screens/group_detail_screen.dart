@@ -9,9 +9,10 @@ import 'package:provider/provider.dart';
 import '../core/analytics/analytics.dart';
 import '../core/errors/failure_mapper.dart';
 import '../core/pending/report_queue.dart';
+import '../core/sync/realtime_client.dart';
 import '../data/api_client.dart';
-import '../design/glass.dart';
 import '../design/routes.dart';
+import '../design/theme/prime_theme_context.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
 import '../l10n/copy.dart';
@@ -19,7 +20,10 @@ import '../models/group.dart';
 import '../models/report.dart';
 import '../providers/auth_provider.dart';
 import '../design/visuals/ambient_and_progress.dart';
+import '../ui/kit/components/prime_content_card.dart';
+import '../ui/kit/presentation/profile_surfaces.dart';
 import '../ui/components/app_dialog.dart';
+import '../ui/components/editorial/app_group_prep_chat.dart';
 import '../ui/components/editorial/app_group_editorial.dart';
 import '../ui/components/editorial/app_weekly_team_challenge.dart';
 import '../ui/components/editorial/app_group_pulse.dart';
@@ -54,9 +58,13 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
   String? _actionWindow;
   bool _cycleCompletedEmitted = false;
   final _reportCtrl = TextEditingController();
+  RealtimeClient? _realtime;
+  Timer? _prepPollTimer;
 
   @override
   void dispose() {
+    _prepPollTimer?.cancel();
+    _realtime?.removeGroupUpdateListener(_onGroupUpdate);
     _reportCtrl.dispose();
     super.dispose();
   }
@@ -66,11 +74,35 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
   @override
   void initState() {
     super.initState();
-    _load();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _realtime = context.read<RealtimeClient>();
+      _realtime!.addGroupUpdateListener(_onGroupUpdate);
+    });
+    _loadInitial();
   }
 
-  Future<void> _load() async {
-    if (mounted) {
+  void _onGroupUpdate(GroupUpdatePush push) {
+    if (push.groupId != widget.groupId || !mounted) return;
+    unawaited(_refreshGroup(silent: true));
+  }
+
+  void _syncPrepPoll(GroupModel? group) {
+    _prepPollTimer?.cancel();
+    if (group == null ||
+        (group.status != GroupStatus.introduction &&
+            group.status != GroupStatus.rulesPending)) {
+      return;
+    }
+    _prepPollTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      if (mounted) unawaited(_refreshGroup(silent: true));
+    });
+  }
+
+  Future<void> _loadInitial() => _refreshGroup(silent: false);
+
+  Future<void> _refreshGroup({required bool silent}) async {
+    if (mounted && !silent) {
       setState(() {
         _loading = true;
         _error = null;
@@ -92,8 +124,17 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
           }
         }
       }
-      _group = group;
-      _todayReport = todayReport;
+      if (mounted) {
+        setState(() {
+          _group = group;
+          _todayReport = todayReport;
+          if (!silent) _loading = false;
+        });
+        _syncPrepPoll(group);
+      } else {
+        _group = group;
+        _todayReport = todayReport;
+      }
       if (group.status == GroupStatus.completed && !_cycleCompletedEmitted) {
         _cycleCompletedEmitted = true;
         Analytics.instance.cycleCompleted(
@@ -103,33 +144,81 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
       }
       try {
         final prefs = await api.getPreferences();
-        _actionWindow = prefs['preferred_action_window'] as String?;
+        if (mounted) {
+          setState(() => _actionWindow = prefs['preferred_action_window'] as String?);
+        } else {
+          _actionWindow = prefs['preferred_action_window'] as String?;
+        }
       } catch (_) {
-        _actionWindow = null;
+        if (mounted) setState(() => _actionWindow = null);
       }
     } catch (e) {
       if (mounted) {
         final failure = FailureMapper.from(e);
-        _error = failure.message;
-        _errorCorrelationId = failure.correlationId;
+        setState(() {
+          _error = failure.message;
+          _errorCorrelationId = failure.correlationId;
+          if (!silent) _loading = false;
+        });
       }
     }
-    if (mounted) setState(() => _loading = false);
+  }
+
+  Future<void> _load() => _refreshGroup(silent: false);
+
+  void _applyGroupJson(Map<String, dynamic> json) {
+    if (!mounted) return;
+    setState(() {
+      _group = GroupModel.fromJson(json);
+    });
+    _syncPrepPoll(_group);
+  }
+
+  MemberModel? _myMember(GroupModel group) {
+    final userId = context.read<AuthProvider>().user?.id;
+    if (userId == null) return null;
+    for (final member in group.members) {
+      if (member.userId == userId) return member;
+    }
+    return null;
+  }
+
+  GroupModel _optimisticConfirm(GroupModel group, {required bool rules}) {
+    final userId = context.read<AuthProvider>().user?.id;
+    if (userId == null) return group;
+    final members = group.members.map((member) {
+      if (member.userId != userId) return member;
+      return member.copyWith(
+        confirmedParticipation: rules ? member.confirmedParticipation : true,
+        acceptedRules: rules ? true : member.acceptedRules,
+      );
+    }).toList();
+    return group.copyWith(members: members);
   }
 
   bool _sameDate(DateTime a, DateTime b) =>
       a.year == b.year && a.month == b.month && a.day == b.day;
 
   Future<void> _confirm() async {
-    await _runAction(
+    final previous = _group;
+    if (previous != null) {
+      setState(() => _group = _optimisticConfirm(previous, rules: false));
+    }
+    await _runGroupAction(
       () => context.read<ApiClient>().confirmParticipation(widget.groupId),
       onSuccess: () => Analytics.instance.teamJoinConfirmed(widget.groupId),
+      rollback: previous,
     );
   }
 
   Future<void> _acceptRules() async {
-    await _runAction(
+    final previous = _group;
+    if (previous != null) {
+      setState(() => _group = _optimisticConfirm(previous, rules: true));
+    }
+    await _runGroupAction(
       () => context.read<ApiClient>().acceptRules(widget.groupId),
+      rollback: previous,
     );
   }
 
@@ -151,7 +240,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     setState(() => _checkInSending = true);
     try {
       await context.read<ApiClient>().groupCheckIn(widget.groupId, kind);
-      await _load();
+      await _refreshGroup(silent: true);
     } catch (e) {
       if (ApiClient.isNetworkError(e)) {
         await ReportQueue.instance.enqueueCheckIn(
@@ -169,6 +258,29 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     }
   }
 
+  Future<void> _runGroupAction(
+    Future<Map<String, dynamic>> Function() action, {
+    VoidCallback? onSuccess,
+    GroupModel? rollback,
+  }) async {
+    if (_actionInProgress) return;
+    setState(() => _actionInProgress = true);
+    try {
+      final payload = await action();
+      _applyGroupJson(payload);
+      onSuccess?.call();
+    } catch (e) {
+      if (rollback != null && mounted) {
+        setState(() => _group = rollback);
+      }
+      if (mounted) {
+        showAppSnackBar(context, FailureMapper.from(e).message);
+      }
+    } finally {
+      if (mounted) setState(() => _actionInProgress = false);
+    }
+  }
+
   Future<void> _runAction(
     Future<Object?> Function() action, {
     VoidCallback? onSuccess,
@@ -177,7 +289,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     setState(() => _actionInProgress = true);
     try {
       await action();
-      await _load();
+      await _refreshGroup(silent: true);
       onSuccess?.call();
     } catch (e) {
       if (mounted) {
@@ -215,7 +327,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
           wasAlreadyReported ? 'Отчёт обновлён!' : 'Отчёт отправлен!',
         );
         await context.read<AuthProvider>().refreshUser();
-        await _load();
+        await _refreshGroup(silent: true);
       }
       return true;
     } catch (e) {
@@ -295,32 +407,30 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
         body: Center(
           child: Padding(
             padding: const EdgeInsets.all(AppSpacing.lg),
-            child: GlassContainer(
-              padding: const EdgeInsets.symmetric(
-                horizontal: AppSpacing.xl,
-                vertical: AppSpacing.lg,
-              ),
-              borderRadius: BorderRadius.circular(AppRadius.bentoOuter),
-              fillOpacity: 0.05,
+            child: PrimeContentCard(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Icon(
                     Icons.groups_outlined,
                     size: 48,
-                    color: AppColors.textMuted,
+                    color: context.prime.inkMuted,
                   ),
                   const SizedBox(height: AppSpacing.md),
                   Text(
                     'Группа не найдена',
                     textAlign: TextAlign.center,
-                    style: AppTypography.titleSerif,
+                    style: AppTypography.titleSerif.copyWith(
+                      color: context.prime.ink,
+                    ),
                   ),
                   const SizedBox(height: AppSpacing.xs),
                   Text(
                     'Возможно, ссылка устарела или доступ закрыт.',
                     textAlign: TextAlign.center,
-                    style: AppTypography.bodySecondary,
+                    style: AppTypography.bodySecondary.copyWith(
+                      color: context.prime.inkSecondary,
+                    ),
                   ),
                 ],
               ),
@@ -329,73 +439,119 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
         ),
       );
     }
+    final myMember = _myMember(g);
+    final confirmedCount =
+        g.members.where((m) => m.confirmedParticipation).length;
+    final acceptedCount = g.members.where((m) => m.acceptedRules).length;
+    final showPrepChat = g.status == GroupStatus.introduction ||
+        g.status == GroupStatus.rulesPending;
+    final memberStatusPhase = g.status == GroupStatus.rulesPending
+        ? GroupStatus.rulesPending
+        : GroupStatus.introduction;
+
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: ProfileSurfaces.canvas,
       appBar: buildAppBackBar(context, title: g.name),
       body: AmbientCanvas(
-        child: RefreshIndicator(
-        onRefresh: _load,
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(
-            AppSpacing.md,
-            AppSpacing.md,
-            AppSpacing.md,
-            AppSpacing.xl,
-          ),
+        child: Column(
           children: [
-            AppGroupDetailHero(group: g),
-            const SizedBox(height: AppSpacing.md),
-            if (g.status == GroupStatus.introduction) ...[
-              AppGroupIntroPanel(
-                group: g,
-                onOpenProfile: (member) {
-                  final p = member.profile;
-                  if (p == null) return;
-                  Navigator.of(context).push(
-                    PrimeRoute.sharedAxis(
-                      builder: (_) => PublicProfileScreen(
-                        profile: p,
-                        reportStatus: member.reportStatus,
-                        acceptedRules: member.acceptedRules,
+            Expanded(
+              child: RefreshIndicator(
+                onRefresh: _loadInitial,
+                child: ListView(
+                  padding: const EdgeInsets.fromLTRB(
+                    AppSpacing.md,
+                    AppSpacing.md,
+                    AppSpacing.md,
+                    AppSpacing.xl,
+                  ),
+                  children: [
+                    AppGroupDetailHero(group: g),
+                    const SizedBox(height: AppSpacing.md),
+                    if (g.status == GroupStatus.introduction) ...[
+                      AppGroupIntroPanel(
+                        group: g,
+                        onOpenProfile: (member) {
+                          final p = member.profile;
+                          if (p == null) return;
+                          Navigator.of(context).push(
+                            PrimeRoute.sharedAxis(
+                              builder: (_) => PublicProfileScreen(
+                                profile: p,
+                                reportStatus: member.reportStatus,
+                                acceptedRules: member.acceptedRules,
+                              ),
+                            ),
+                          );
+                        },
                       ),
-                    ),
-                  );
-                },
-              ),
-              const SizedBox(height: AppSpacing.sm),
-              Text(
-                AppCopy.teamReadyConfirm,
-                textAlign: TextAlign.center,
-                style: AppTypography.caption.copyWith(
-                  color: AppColors.success,
-                ),
-              ),
-              const SizedBox(height: AppSpacing.sm),
-              AppPrimaryButton(
-                label: AppCopy.confirmParticipation,
-                icon: Icons.check_circle_outline,
-                loading: _actionInProgress,
-                success: true,
-                onPressed: _actionInProgress ? null : _confirm,
-              ),
-              const SizedBox(height: AppSpacing.xs),
-              AppSecondaryButton(
-                label: 'Сменить группу',
-                onPressed: _actionInProgress ? null : _changeGroup,
-              ),
-              const SizedBox(height: AppSpacing.md),
-            ],
-            if (g.status == GroupStatus.rulesPending) ...[
-              const AppGroupRulesPanel(),
-              const SizedBox(height: AppSpacing.sm),
-              AppPrimaryButton(
-                label: 'Принять правила',
-                icon: Icons.verified_user_outlined,
-                loading: _actionInProgress,
-                onPressed: _actionInProgress ? null : _acceptRules,
-              ),
-              const SizedBox(height: AppSpacing.md),
-            ],
+                      const SizedBox(height: AppSpacing.sm),
+                      if (myMember?.confirmedParticipation != true) ...[
+                        Text(
+                          AppCopy.teamReadyConfirm,
+                          textAlign: TextAlign.center,
+                          style: AppTypography.caption.copyWith(
+                            color: AppColors.success,
+                          ),
+                        ),
+                        const SizedBox(height: AppSpacing.sm),
+                        AppPrimaryButton(
+                          label: AppCopy.confirmParticipation,
+                          icon: Icons.check_circle_outline,
+                          loading: _actionInProgress,
+                          success: true,
+                          onPressed: _actionInProgress ? null : _confirm,
+                        ),
+                      ] else ...[
+                        Text(
+                          'Вы подтвердили · ждём ${g.maxMembers - confirmedCount} из ${g.maxMembers}',
+                          textAlign: TextAlign.center,
+                          style: AppTypography.caption.copyWith(
+                            color: AppColors.success,
+                          ),
+                        ),
+                        const SizedBox(height: AppSpacing.sm),
+                        AppPrimaryButton(
+                          label: 'Участие подтверждено',
+                          icon: Icons.check_circle,
+                          success: true,
+                          onPressed: null,
+                        ),
+                      ],
+                      const SizedBox(height: AppSpacing.xs),
+                      AppSecondaryButton(
+                        label: 'Сменить группу',
+                        onPressed: _actionInProgress ? null : _changeGroup,
+                      ),
+                      const SizedBox(height: AppSpacing.md),
+                    ],
+                    if (g.status == GroupStatus.rulesPending) ...[
+                      const AppGroupRulesPanel(),
+                      const SizedBox(height: AppSpacing.sm),
+                      if (myMember?.acceptedRules != true) ...[
+                        AppPrimaryButton(
+                          label: AppCopy.teamPactTitle,
+                          icon: Icons.verified_user_outlined,
+                          loading: _actionInProgress,
+                          onPressed: _actionInProgress ? null : _acceptRules,
+                        ),
+                      ] else ...[
+                        Text(
+                          'Вы приняли договор · ждём ${g.maxMembers - acceptedCount} из ${g.maxMembers}',
+                          textAlign: TextAlign.center,
+                          style: AppTypography.caption.copyWith(
+                            color: AppColors.success,
+                          ),
+                        ),
+                        const SizedBox(height: AppSpacing.sm),
+                        AppPrimaryButton(
+                          label: 'Договор принят',
+                          icon: Icons.verified_user,
+                          onPressed: null,
+                        ),
+                      ],
+                      const SizedBox(height: AppSpacing.md),
+                    ],
             if (g.status == GroupStatus.active) ...[
               AppGroupDailyActions(
                 reportSending: _sendingReport,
@@ -425,6 +581,10 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                 const SizedBox(height: AppSpacing.md),
               ],
             ],
+            if (g.status == GroupStatus.completed) ...[
+              AppGroupCycleCompletionPanel(group: g),
+              const SizedBox(height: AppSpacing.md),
+            ],
             if (g.status == GroupStatus.voting) ...[
               AppGroupVotingPanel(
                 onContinueTogether: () => _vote('continue_together'),
@@ -442,6 +602,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                 padding: const EdgeInsets.only(bottom: AppSpacing.xs),
                 child: AppGroupMemberRow(
                   member: m,
+                  statusPhase: showPrepChat ? memberStatusPhase : null,
                   onTap: m.profile == null
                       ? null
                       : () => Navigator.of(context).push(
@@ -456,8 +617,16 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                 ),
               ),
             ),
+                  ],
+                ),
+              ),
+            ),
+            if (showPrepChat)
+              AppGroupPrepChat(
+                groupId: g.id,
+                members: g.members,
+              ),
           ],
-        ),
         ),
       ),
     );

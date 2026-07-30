@@ -2,10 +2,10 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
-import 'package:prime/design/liquid/liquid_glass.dart';
 import 'package:prime/design/motion.dart';
 import 'package:prime/design/tokens.dart';
 import 'package:prime/design/typography.dart';
+import 'package:prime/ui/kit/tokens/kit_surfaces.dart';
 
 /// Metric card with animated value, optional sparkline, and delta pill.
 class PrimeStatCard extends StatelessWidget {
@@ -30,11 +30,10 @@ class PrimeStatCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return LiquidGlass(
-      forceTier: LiquidTier.lite,
-      radius: AppRadius.xl,
+    final body = Container(
       padding: const EdgeInsets.all(AppSpacing.md),
-      onTap: onTap,
+      decoration: kitSurfaceDecoration(context, PrimeSurfaceLevel.solid,
+          radius: AppRadius.xl),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
@@ -71,6 +70,15 @@ class PrimeStatCard extends StatelessWidget {
             ),
           ],
         ],
+      ),
+    );
+    if (onTap == null) return body;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(AppRadius.xl),
+        child: body,
       ),
     );
   }

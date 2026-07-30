@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:prime/core/home/home_state.dart';
+import 'package:prime/l10n/copy.dart';
 import 'package:prime/models/group.dart';
 
 void main() {
@@ -23,6 +24,26 @@ void main() {
     );
     expect(state.phase, HomePhase.teamMatched);
     expect(state.focusGroupId, 'g1');
+  });
+
+  test('pending rules phase wins over matchedGroupId', () {
+    final state = HomeStateResolver.resolve(
+      const HomeStateInput(
+        hasActiveGroups: false,
+        reportedToday: false,
+        hasHistory: false,
+        searching: false,
+        matchedGroupId: 'g1',
+        pendingGroup: HomePendingGroup(
+          groupId: 'rules-1',
+          skillName: 'Фокус',
+          status: GroupStatus.rulesPending,
+        ),
+      ),
+    );
+    expect(state.phase, HomePhase.groupRulesPending);
+    expect(state.focusGroupId, 'rules-1');
+    expect(state.hero.title, AppCopy.continueYourHabit);
   });
 
   test('searching when in queue without match', () {
@@ -74,6 +95,7 @@ void main() {
       ),
     );
     expect(state.phase, HomePhase.groupRulesPending);
+    expect(state.hero.title, AppCopy.continueYourHabit);
   });
 
   test('report due vs complete for active groups', () {

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/home/home_state.dart';
+import '../../../core/media/media_urls.dart';
 import '../../../design/theme/prime_theme_context.dart';
 import '../../../design/tokens.dart';
 import '../../../design/typography.dart';
@@ -20,6 +21,7 @@ import '../tokens/kit_surfaces.dart';
 import '../tokens/kit_typography.dart';
 import '../../../screens/dashboard/home_next_step_card.dart';
 import 'home_feed_widgets.dart';
+import 'home_waiting_companion.dart';
 
 /// Visual-reset home feed — rich composition inspired by wellness references.
 class GateHomePresentation extends StatelessWidget {
@@ -50,6 +52,15 @@ class GateHomePresentation extends StatelessWidget {
     this.onOpenHabits,
     this.onNudgeTeam,
     this.showExpandedReport = false,
+    this.waitingRegionSearching = 0,
+    this.waitingSkillSearching = 0,
+    this.waitingOnlineInPool = 0,
+    this.waitingRegionLabel,
+    this.waitingScopeIsRussia = false,
+    this.waitingPeopleWaiting = 0,
+    this.waitingNeeded = 6,
+    this.waitingSkillName,
+    this.onFindFriends,
   });
 
   final UserModel? user;
@@ -77,6 +88,15 @@ class GateHomePresentation extends StatelessWidget {
   final VoidCallback? onOpenHabits;
   final VoidCallback? onNudgeTeam;
   final bool showExpandedReport;
+  final int waitingRegionSearching;
+  final int waitingSkillSearching;
+  final int waitingOnlineInPool;
+  final String? waitingRegionLabel;
+  final bool waitingScopeIsRussia;
+  final int waitingPeopleWaiting;
+  final int waitingNeeded;
+  final String? waitingSkillName;
+  final VoidCallback? onFindFriends;
 
   String get _greeting {
     final hour = DateTime.now().hour;
@@ -105,6 +125,15 @@ class GateHomePresentation extends StatelessWidget {
         ),
         const SizedBox(height: AppSpacing.md),
         HomeNextStepCard(state: homeState, onPrimaryAction: onPrimaryAction),
+        if (homeState.showReportComposer && reportComposer != null) ...[
+          const SizedBox(height: AppSpacing.lg),
+          _DailyReportSection(
+            reportComposer: reportComposer!,
+            selectedMood: selectedMood,
+            onMoodSelected: onMoodSelected,
+            showExpandedReport: showExpandedReport,
+          ),
+        ],
         const SizedBox(height: AppSpacing.lg),
         HomeCategoriesRow(
           activeKind: activeHabitKind,
@@ -118,6 +147,23 @@ class GateHomePresentation extends StatelessWidget {
           successDays: successDays,
           onPrimesTap: onPrimesTap,
         ),
+        if (homeState.showWaitingCompanion) ...[
+          const SizedBox(height: AppSpacing.lg),
+          HomeWaitingCompanion(
+            skillName: waitingSkillName ?? 'Привычка',
+            peopleWaiting: waitingPeopleWaiting,
+            needed: waitingNeeded,
+            regionSearching: waitingRegionSearching,
+            skillSearching: waitingSkillSearching,
+            onlineInPool: waitingOnlineInPool,
+            regionLabel: waitingRegionLabel ?? 'вашем городе',
+            scopeIsRussia: waitingScopeIsRussia,
+            onOpenGroups: onOpenGroup,
+            onOpenChats: onOpenChats,
+            onFindFriends: onFindFriends,
+            showFriendsCta: directChats.isEmpty,
+          ),
+        ],
         if (homeState.showCalendar && calendar != null) ...[
           const SizedBox(height: AppSpacing.lg),
           HomeCalendarStrip(calendar: calendar),
@@ -140,6 +186,7 @@ class GateHomePresentation extends StatelessWidget {
             teamTotal: teamTotal,
             avatars: avatars,
             waitingNames: waitingNames,
+            pulseStatus: teamPulse?.status,
             onTap: onOpenGroup,
             onNudge: onNudgeTeam,
           ),
@@ -151,44 +198,6 @@ class GateHomePresentation extends StatelessWidget {
             onSeeAll: onOpenGroup,
           ),
         ],
-        if (homeState.showReportComposer && onMoodSelected != null) ...[
-          const SizedBox(height: AppSpacing.lg),
-          PrimeContentCard(
-            glass: true,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                HomeMoodPicker(
-                  selected: selectedMood,
-                  onSelected: onMoodSelected!,
-                ),
-                if (showExpandedReport && reportComposer != null) ...[
-                  const SizedBox(height: AppSpacing.md),
-                  reportComposer!,
-                ],
-              ],
-            ),
-          ),
-        ] else if (reportComposer != null) ...[
-          const SizedBox(height: AppSpacing.lg),
-          PrimeContentCard(
-            glass: true,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Сегодня',
-                  style: AppTypography.titleSerif.copyWith(
-                    fontSize: 18,
-                    color: context.prime.ink,
-                  ),
-                ),
-                const SizedBox(height: AppSpacing.sm),
-                reportComposer!,
-              ],
-            ),
-          ),
-        ],
         if (directChats.isNotEmpty) ...[
           const SizedBox(height: AppSpacing.lg),
           HomeSectionHeader(title: 'Активность'),
@@ -197,7 +206,6 @@ class GateHomePresentation extends StatelessWidget {
             (chat) => Padding(
               padding: const EdgeInsets.only(bottom: AppSpacing.xs),
               child: PrimeContentCard(
-                glass: true,
                 padding: const EdgeInsets.symmetric(
                   horizontal: AppSpacing.md,
                   vertical: AppSpacing.sm,
@@ -207,8 +215,8 @@ class GateHomePresentation extends StatelessWidget {
                   children: [
                     CircleAvatar(
                       radius: 18,
-                      backgroundImage: chat.friend.photoUrl != null
-                          ? NetworkImage(chat.friend.photoUrl!)
+                      backgroundImage: absolutePhotoUrl(chat.friend.photoUrl) != null
+                          ? NetworkImage(absolutePhotoUrl(chat.friend.photoUrl)!)
                           : null,
                       child: chat.friend.photoUrl == null
                           ? Text(
@@ -277,6 +285,51 @@ class GateHomePresentation extends StatelessWidget {
       (i) => PrimeSocialAvatar(
         name: String.fromCharCode(65 + i),
         ready: i < teamReady,
+      ),
+    );
+  }
+}
+
+/// Primary daily report block — above team pulse (V6 Phase 4 hierarchy).
+class _DailyReportSection extends StatelessWidget {
+  const _DailyReportSection({
+    required this.reportComposer,
+    this.selectedMood,
+    this.onMoodSelected,
+    required this.showExpandedReport,
+  });
+
+  final Widget reportComposer;
+  final String? selectedMood;
+  final ValueChanged<String>? onMoodSelected;
+  final bool showExpandedReport;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.prime;
+    return PrimeContentCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Ежедневный отчёт',
+            style: AppTypography.title2.copyWith(color: p.ink),
+          ),
+          const SizedBox(height: AppSpacing.xxs),
+          Text(
+            'Главное действие дня — коротко зафиксируйте прогресс',
+            style: AppTypography.caption.copyWith(color: p.inkSecondary),
+          ),
+          if (onMoodSelected != null) ...[
+            const SizedBox(height: AppSpacing.md),
+            HomeMoodPicker(
+              selected: selectedMood,
+              onSelected: onMoodSelected!,
+            ),
+          ],
+          const SizedBox(height: AppSpacing.md),
+          reportComposer,
+        ],
       ),
     );
   }

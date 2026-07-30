@@ -60,7 +60,7 @@ void main() {
       ),
     );
 
-    await tester.tap(find.byTooltip('Отправить'));
+    await tester.tap(find.byIcon(Icons.arrow_upward_rounded));
     await tester.pump();
     expect(sent, isTrue);
   });

@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 
-import 'package:prime/design/liquid/liquid_glass.dart';
 import 'package:prime/design/shapes/prime_squircle.dart';
 import 'package:prime/design/tokens.dart';
 import 'package:prime/design/typography.dart';
+import 'package:prime/ui/kit/tokens/kit_surfaces.dart';
 
 /// Photo card with favorite affordance and meta tag chips.
 class PrimeMediaCard extends StatelessWidget {
@@ -180,22 +180,24 @@ class _FavoriteButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return LiquidGlass(
-      forceTier: LiquidTier.lite,
-      radius: AppRadius.pill,
-      padding: EdgeInsets.zero,
-      clip: true,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onFavorite,
-        child: SizedBox(
-          width: 40,
-          height: 40,
-          child: Icon(
-            favorited ? Icons.favorite_rounded : Icons.favorite_border_rounded,
-            size: AppIconSizes.sm,
-            color: favorited ? AppColors.coral : AppColors.textPrimary,
-          ),
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onFavorite,
+      child: Container(
+        width: 40,
+        height: 40,
+        alignment: Alignment.center,
+        decoration: kitSurfaceDecoration(
+          context,
+          PrimeSurfaceLevel.solid,
+          radius: AppRadius.pill,
+        ).copyWith(
+          color: AppColors.elevatedSurface.withValues(alpha: 0.92),
+        ),
+        child: Icon(
+          favorited ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+          size: AppIconSizes.sm,
+          color: favorited ? AppColors.coral : AppColors.textPrimary,
         ),
       ),
     );

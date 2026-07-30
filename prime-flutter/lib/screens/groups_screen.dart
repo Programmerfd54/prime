@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -6,7 +8,10 @@ import '../core/errors/failure_mapper.dart';
 import '../core/sync/waiting_room_poller.dart';
 import '../data/api_client.dart';
 import '../design/routes.dart';
-import '../design/glass.dart';
+import '../ui/kit/tokens/kit_layout.dart';
+import '../ui/kit/components/prime_content_card.dart';
+import '../ui/kit/presentation/gate_groups_active_presentation.dart';
+import '../ui/kit/presentation/gate_groups_presentation.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
 import '../l10n/copy.dart';
@@ -14,10 +19,8 @@ import '../models/group.dart';
 import '../models/skill.dart';
 import '../providers/auth_provider.dart';
 import '../screens/group_detail_screen.dart';
-import '../screens/profile_screen.dart';
 import '../design/visuals/ambient_and_progress.dart';
 import '../design/visuals/habit_art.dart';
-import '../ui/components/app_destructive_button.dart';
 import '../ui/components/app_dialog.dart';
 import '../ui/components/app_primary_button.dart';
 import '../ui/components/app_secondary_button.dart';
@@ -26,6 +29,8 @@ import '../ui/components/app_skeleton.dart';
 import '../ui/components/editorial/app_group_editorial.dart';
 import '../ui/components/editorial/app_team_formation.dart';
 import '../ui/components/groups/invite_friends_sheet.dart';
+import '../ui/components/profile/about_before_team_sheet.dart';
+import '../ui/components/profile/rhythm_support_sheet.dart';
 import '../widgets/async_error_view.dart';
 
 class GroupsScreen extends StatefulWidget {
@@ -51,6 +56,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
   bool _stopping = false;
   bool _expanding = false;
   bool _assembling = false;
+  bool _startingEarlyStart = false;
   String? _error;
   String? _errorCorrelationId;
   String? _handledMatchedGroupId;
@@ -99,6 +105,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
         matchedId.isNotEmpty &&
         matchedId != _handledMatchedGroupId) {
       _handledMatchedGroupId = matchedId;
+      unawaited(_load());
     }
   }
 
@@ -113,7 +120,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
     final api = context.read<ApiClient>();
     final poller = context.read<WaitingRoomPoller>();
     try {
-      final list = await api.listGroups();
+      final list = await api.listGroups(forceRefresh: true);
       _groups = list
           .map((j) => GroupModel.fromJson(j as Map<String, dynamic>))
           .toList();
@@ -216,6 +223,58 @@ class _GroupsScreenState extends State<GroupsScreen> {
     }
   }
 
+  Future<void> _confirmEarlyStart(WaitingRoomStatus status) async {
+    if (_startingEarlyStart) return;
+    final skillLabel = status.skillName ?? status.skillId ?? 'привычку';
+    final agreed = await showAppConfirmDialog(
+      context: context,
+      title: 'Старт втроём?',
+      body:
+          'Вы уверены, что хотите начать «$skillLabel» втроём?\n\n'
+          'Для полной поддержки лучше команда из 4–6 человек: больше мотивации, '
+          'отчётности и взаимной опоры. Но вы можете начать втроём уже сейчас — '
+          'поиск остальных участников продолжится позже.',
+      confirmLabel: 'Да, стартуем втроём',
+      cancelLabel: 'Подождать команду',
+      destructive: true,
+    );
+    if (agreed != true || !mounted) return;
+
+    setState(() => _startingEarlyStart = true);
+    try {
+      final result = await context.read<ApiClient>().confirmEarlyStart(
+            skillId: status.skillId,
+          );
+      if (!mounted) return;
+      final matchedId = result['matched_group_id'] as String?;
+      if (result['waiting_others_confirm'] == true ||
+          result['waiting_partner_confirm'] == true) {
+        showAppSnackBar(
+          context,
+          'Ждём подтверждения от других участников — нужно 3 подтверждения',
+        );
+      } else if (matchedId != null && matchedId.isNotEmpty) {
+        showAppSnackBar(context, 'Команда из трёх человек собрана');
+        _handledMatchedGroupId = matchedId;
+      } else if (result['started'] == true) {
+        showAppSnackBar(context, 'Команда из трёх человек собрана');
+      }
+      await context.read<WaitingRoomPoller>().refresh();
+      if (mounted) {
+        setState(() {
+          _waitingRoom = context.read<WaitingRoomPoller>().status ?? _waitingRoom;
+        });
+      }
+      await _load();
+    } catch (e) {
+      if (mounted) {
+        showAppSnackBar(context, FailureMapper.from(e).message);
+      }
+    } finally {
+      if (mounted) setState(() => _startingEarlyStart = false);
+    }
+  }
+
   Future<void> _confirmStopSearch([WaitingRoomStatus? status]) async {
     final shouldStop = await showAppConfirmDialog(
       context: context,
@@ -236,9 +295,16 @@ class _GroupsScreenState extends State<GroupsScreen> {
             skillId: skillId ?? _waitingRoom?.skillId,
           );
       if (!mounted) return;
-      await _load();
+      final poller = context.read<WaitingRoomPoller>();
+      await poller.refresh();
+      poller.stop();
+      setState(() {
+        _waitingRoom = poller.status;
+        _waitingRoomStats = poller.stats;
+      });
       if (!mounted) return;
       showAppSnackBar(context, 'Поиск остановлен');
+      unawaited(_load());
     } catch (e) {
       if (!mounted) return;
       showAppSnackBar(context, FailureMapper.from(e).message);
@@ -349,8 +415,45 @@ class _GroupsScreenState extends State<GroupsScreen> {
             if (_waitingRoom?.inQueue == true) _waitingRoom!,
           ];
     final inWaiting = queueCards.isNotEmpty;
-    final matchedGroupId = _waitingRoom?.matchedGroupId;
-    final showMatchCta = matchedGroupId != null && matchedGroupId.isNotEmpty;
+    GroupModel? pendingConfirmationGroup;
+    for (final g in _groups) {
+      if (g.status == GroupStatus.introduction ||
+          g.status == GroupStatus.rulesPending) {
+        pendingConfirmationGroup = g;
+        break;
+      }
+    }
+    final matchedGroupId =
+        _waitingRoom?.matchedGroupId ?? pendingConfirmationGroup?.id;
+    GroupModel? matchedGroup = pendingConfirmationGroup;
+    for (final g in _groups) {
+      if (g.id == matchedGroupId) {
+        matchedGroup = g;
+        break;
+      }
+    }
+    final confirmedCount = matchedGroup?.members
+            .where((m) => m.confirmedParticipation)
+            .length ??
+        0;
+    final acceptedCount = matchedGroup?.members
+            .where((m) => m.acceptedRules)
+            .length ??
+        0;
+    final matchTotal = matchedGroup?.maxMembers ?? matchedGroup?.membersCount ?? 6;
+    final showPendingBanner = matchedGroup != null &&
+        (matchedGroup.status == GroupStatus.introduction ||
+            matchedGroup.status == GroupStatus.rulesPending);
+    final currentUserId = context.watch<AuthProvider>().user?.id;
+    MemberModel? myMember;
+    if (currentUserId != null && matchedGroup != null) {
+      for (final member in matchedGroup.members) {
+        if (member.userId == currentUserId) {
+          myMember = member;
+          break;
+        }
+      }
+    }
     final devMode = context.watch<AuthProvider>().developerMode;
     final activeGroups =
         _groups.where((g) => g.status == GroupStatus.active).toList();
@@ -367,32 +470,58 @@ class _GroupsScreenState extends State<GroupsScreen> {
           ),
           slivers: [
             SliverPadding(
-              padding: const EdgeInsets.fromLTRB(
-                AppSpacing.md,
-                AppSpacing.md,
-                AppSpacing.md,
-                AppSpacing.bottomNavClearance,
+              padding: KitLayout.tabScrollPadding(
+                context,
+                left: AppSpacing.md,
+                top: AppSpacing.md,
+                right: AppSpacing.md,
               ),
               sliver: SliverList(
                 delegate: SliverChildListDelegate([
+                  PrimeTabContentFrame(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
                   Text(
                     'Мои группы',
-                    style: AppTypography.display,
+                    style: AppTypography.titleXL,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                   const SizedBox(height: AppSpacing.xxs),
                   const Text(
                     'Команда из шести — ритм, поддержка и общий прогресс',
                     style: AppTypography.bodySecondary,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                   ),
                   const SizedBox(height: AppSpacing.lg),
-                  if (showMatchCta) ...[
-                    AppGroupMatchedBanner(
-                      onOpen: () => _openMatchedGroup(matchedGroupId),
-                    ),
+                  if (showPendingBanner) ...[
+                    if (matchedGroup!.status == GroupStatus.rulesPending)
+                      GateGroupsRulesPendingCard(
+                        onOpen: () => _openMatchedGroup(matchedGroup!.id),
+                        skillName:
+                            _waitingRoom?.skillName ?? matchedGroup.skillName,
+                        acceptedCount: acceptedCount,
+                        total: matchTotal,
+                        userAccepted: myMember?.acceptedRules ?? false,
+                      )
+                    else
+                      GateGroupsConfirmationCard(
+                        onConfirm: () => _openMatchedGroup(matchedGroup!.id),
+                        skillName:
+                            _waitingRoom?.skillName ?? matchedGroup.skillName,
+                        confirmedCount: confirmedCount,
+                        total: matchTotal,
+                        userConfirmed: myMember?.confirmedParticipation ?? false,
+                      ),
                     const SizedBox(height: AppSpacing.md),
                   ],
                   if (hasCycleContent) ...[
-                    _SectionHeader(title: 'Мой цикл'),
+                    const _SectionHeader(
+                      title: 'Мой цикл',
+                      subtitle: 'Активные команды и прогресс дня',
+                    ),
                     const SizedBox(height: AppSpacing.sm),
                     if (activeGroups.isNotEmpty) ...[
                       for (final group in activeGroups) ...[
@@ -431,22 +560,29 @@ class _GroupsScreenState extends State<GroupsScreen> {
                     const SizedBox(height: AppSpacing.md),
                   ],
                   if (inWaiting) ...[
-                    _SectionHeader(title: 'Поиск'),
-                    const SizedBox(height: AppSpacing.xs),
-                    Text(
-                      queueCards.length == 1
-                          ? 'Ищем команду по привычке — поиск идёт в фоне'
-                          : 'Ищем команду по ${queueCards.length} привычкам — стартёт первая собранная',
-                      style: AppTypography.caption,
-                    ),
-                    const SizedBox(height: AppSpacing.sm),
+                    if (queueCards.length > 1) ...[
+                      const _SectionHeader(
+                        title: 'Поиск',
+                        subtitle: 'Собираем команду из 6 человек',
+                      ),
+                      const SizedBox(height: AppSpacing.xs),
+                      Text(
+                        'Ищем команду по ${queueCards.length} привычкам — стартёт первая собранная',
+                        style: AppTypography.caption,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: AppSpacing.sm),
+                    ],
                     _SearchQueuesPanel(
                       queues: queueCards,
                       stats: _waitingRoomStats,
                       stopping: _stopping,
                       expanding: _expanding,
+                      startingEarlyStart: _startingEarlyStart,
                       onStop: _confirmStopSearch,
                       onExpand: _expandSearch,
+                      onEarlyStart: _confirmEarlyStart,
                     ),
                     if (devMode) ...[
                       const SizedBox(height: AppSpacing.sm),
@@ -457,7 +593,10 @@ class _GroupsScreenState extends State<GroupsScreen> {
                     ],
                     const SizedBox(height: AppSpacing.md),
                   ] else if (widget.preselectedSkill != null) ...[
-                    _SectionHeader(title: 'Поиск'),
+                    const _SectionHeader(
+                      title: 'Поиск',
+                      subtitle: 'Собираем команду из 6 человек',
+                    ),
                     const SizedBox(height: AppSpacing.sm),
                     _SkillStartCard(
                       skill: widget.preselectedSkill!,
@@ -473,8 +612,11 @@ class _GroupsScreenState extends State<GroupsScreen> {
                     ],
                     const SizedBox(height: AppSpacing.md),
                   ],
-                  if (_groups.isEmpty && !inWaiting && !showMatchCta)
+                  if (_groups.isEmpty && !inWaiting && !showPendingBanner)
                     const AppGroupEmptyState(),
+                      ],
+                    ),
+                  ),
                 ]),
               ),
             ),
@@ -543,100 +685,54 @@ class _TeamDayCard extends StatelessWidget {
         (total - ready).clamp(0, total);
     final complete = teamDay?.isComplete == true ||
         pulse?.isTeamDayComplete == true;
-    final progress = total > 0 ? (ready / total).clamp(0.0, 1.0) : 0.0;
     final waitingNames = waiting
         .map((m) => m.displayName)
         .where((name) => name.isNotEmpty)
         .take(4)
         .join(', ');
 
-    return GlassContainer(
-      width: double.infinity,
-      padding: const EdgeInsets.all(AppSpacing.lg),
-      borderRadius: BorderRadius.circular(AppRadius.xl),
-      fillOpacity: 0.04,
-      glow: AppGlow.violet(
-        opacity: complete ? 0.08 : 0.14,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              AppProgressRing(
-                progress: progress,
-                label: '$ready',
-                subtitle: 'из $total',
-                size: 72,
-                stroke: 5,
-                color: complete ? AppColors.success : AppColors.habitSocial,
-              ),
-              const SizedBox(width: AppSpacing.md),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      AppCopy.dayClosesTogether,
-                      style: AppTypography.title2,
-                    ),
-                    const SizedBox(height: AppSpacing.xxs),
-                    Text(
-                      complete
-                          ? 'Командный день закрыт'
-                          : AppCopy.waitingReports(remaining),
-                      style: AppTypography.caption.copyWith(
-                        color: complete
-                            ? AppColors.success
-                            : AppColors.primarySoft,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: AppSpacing.xxs),
-                    Text(
-                      complete
-                          ? AppCopy.primesForTeamDay
-                          : waitingNames.isNotEmpty
-                              ? 'Ждём: $waitingNames'
-                              : AppCopy.howDayCounts,
-                      style: AppTypography.bodySecondary,
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.md),
-          AppPrimaryButton(
-            label: 'Отправить отчёт',
-            icon: Icons.edit_note_outlined,
-            onPressed: onOpenGroup,
-          ),
-          if (!complete) ...[
-            const SizedBox(height: AppSpacing.sm),
-            AppSecondaryButton(
-              label: AppCopy.nudgeTeam,
-              icon: Icons.notifications_active_outlined,
-              onPressed: onNudge,
-            ),
-          ],
-        ],
-      ),
+    return GateGroupsActiveCycleCard(
+      ready: ready,
+      total: total,
+      complete: complete,
+      remaining: remaining,
+      waitingNames: waitingNames.isEmpty ? null : waitingNames,
+      onReport: onOpenGroup,
+      onNudge: complete ? null : onNudge,
     );
   }
 }
 
 class _SectionHeader extends StatelessWidget {
-  const _SectionHeader({required this.title});
+  const _SectionHeader({required this.title, this.subtitle});
 
   final String title;
+  final String? subtitle;
 
   @override
   Widget build(BuildContext context) {
-    return Text(title, style: AppTypography.titleSerif);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          title,
+          style: AppTypography.titleSerif,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        if (subtitle != null) ...[
+          const SizedBox(height: 4),
+          Text(
+            subtitle!,
+            style: AppTypography.bodySecondary,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+        const SizedBox(height: 4),
+        Divider(color: AppColors.border.withValues(alpha: 0.6), height: 1),
+      ],
+    );
   }
 }
 
@@ -646,16 +742,20 @@ class _SearchQueuesPanel extends StatefulWidget {
     this.stats,
     required this.stopping,
     required this.expanding,
+    required this.startingEarlyStart,
     required this.onStop,
     required this.onExpand,
+    required this.onEarlyStart,
   });
 
   final List<WaitingRoomStatus> queues;
   final WaitingRoomStats? stats;
   final bool stopping;
   final bool expanding;
+  final bool startingEarlyStart;
   final Future<void> Function([WaitingRoomStatus? status]) onStop;
   final Future<void> Function([WaitingRoomStatus? status]) onExpand;
+  final Future<void> Function(WaitingRoomStatus status) onEarlyStart;
 
   @override
   State<_SearchQueuesPanel> createState() => _SearchQueuesPanelState();
@@ -715,8 +815,10 @@ class _SearchQueuesPanelState extends State<_SearchQueuesPanel> {
           stats: widget.stats,
           stopping: widget.stopping,
           expanding: widget.expanding,
+          startingEarlyStart: widget.startingEarlyStart,
           onStop: () => widget.onStop(selected),
           onExpand: () => widget.onExpand(selected),
+          onEarlyStart: () => widget.onEarlyStart(selected),
         ),
       ],
     );
@@ -755,16 +857,20 @@ class _SearchCard extends StatefulWidget {
   final WaitingRoomStats? stats;
   final bool stopping;
   final bool expanding;
+  final bool startingEarlyStart;
   final VoidCallback onStop;
   final VoidCallback onExpand;
+  final VoidCallback onEarlyStart;
 
   const _SearchCard({
     required this.status,
     this.stats,
     required this.stopping,
     required this.expanding,
+    required this.startingEarlyStart,
     required this.onStop,
     required this.onExpand,
+    required this.onEarlyStart,
   });
 
   @override
@@ -772,10 +878,38 @@ class _SearchCard extends StatefulWidget {
 }
 
 class _SearchCardState extends State<_SearchCard> {
-  void _openProfile() {
-    Navigator.of(context).push(
-      PrimeRoute.sharedAxis(builder: (_) => const ProfileScreen()),
-    );
+  late bool _scopeRussia;
+  Map<String, dynamic>? _preferences;
+
+  @override
+  void initState() {
+    super.initState();
+    _scopeRussia = widget.status.allowOtherRegions;
+    unawaited(_loadPreferences());
+  }
+
+  @override
+  void didUpdateWidget(covariant _SearchCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.status.allowOtherRegions) {
+      _scopeRussia = true;
+    }
+  }
+
+  void _onScopeCity() {
+    if (widget.status.allowOtherRegions) {
+      setState(() => _scopeRussia = false);
+    }
+  }
+
+  void _onScopeRussia() {
+    if (widget.status.allowOtherRegions) {
+      setState(() => _scopeRussia = true);
+      return;
+    }
+    if (widget.status.canExpandSearch && !widget.expanding) {
+      widget.onExpand();
+    }
   }
 
   Future<void> _openInviteFriends() async {
@@ -788,6 +922,27 @@ class _SearchCardState extends State<_SearchCard> {
       skillId: skillId,
       skillName: skillName,
     );
+  }
+
+  Future<void> _loadPreferences() async {
+    try {
+      final prefs = await context.read<ApiClient>().getPreferences();
+      if (mounted) setState(() => _preferences = prefs);
+    } catch (_) {}
+  }
+
+  Future<void> _openAboutSheet() async {
+    await showAboutBeforeTeamSheet(
+      context,
+      reason: AboutBeforeTeamReason.search,
+    );
+  }
+
+  Future<void> _openRhythmSupport() async {
+    final saved = await showRhythmSupportSheet(context);
+    if (saved == true && mounted) {
+      await _loadPreferences();
+    }
   }
 
   String? _medianLine(WaitingRoomStatus status) {
@@ -828,193 +983,50 @@ class _SearchCardState extends State<_SearchCard> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        AppTeamFormationHero(
-          title: skillName,
-          body: status.allowOtherRegions
-              ? 'Ищем по всей России — подключаем участников из других областей'
-              : 'Сначала ищем рядом: $regionLabel. Если не соберёмся — можно расширить.',
-          filled: waiting,
+        GateGroupsPresentation(
+          habitName: skillName,
+          found: waiting,
           total: needed,
-          statusLine: waiting >= needed
-              ? 'почти готово · $waiting из $needed'
-              : 'в поиске · собрано $waiting из $needed',
-          regionLine: liveRegionLine,
-          medianLine: _medianLine(status),
-          anonymousSlots: status.slots,
-        ),
-        const SizedBox(height: AppSpacing.sm),
-        _SearchPrepChecklist(
-          aboutReady: aboutReady,
-          onAbout: _openProfile,
-          onTimeOfDay: () => showAppSnackBar(
-            context,
-            'Выбор времени дня скоро появится в профиле',
+          scopeLabel: status.allowOtherRegions ? 'По всей России' : regionLabel,
+          regionSearching: regionSearching,
+          skillSearching: skillSearching,
+          onlineInPool: onlineInPool,
+          scopeIsRussia: _scopeRussia,
+          canExpandSearch: status.canExpandSearch,
+          expansionAvailableAt: status.expansionAvailableAt,
+          expanding: widget.expanding,
+          status: status,
+          checklist: gateReadinessFromProfile(
+            aboutReady: aboutReady,
+            preferences: _preferences,
           ),
-          onInviteFriend: _openInviteFriends,
+          onExpandSearch: status.canExpandSearch && !widget.expanding
+              ? widget.onExpand
+              : null,
+          onStopSearch: widget.stopping ? null : widget.onStop,
+          onScopeCity: _onScopeCity,
+          onScopeRussia: _onScopeRussia,
+          onEarlyStart: status.canStartEarly && !status.earlyStartWaitingOthers
+              ? widget.onEarlyStart
+              : null,
+          startingEarlyStart: widget.startingEarlyStart,
+          onChecklistTap: (item) {
+            switch (item.title) {
+              case 'О себе':
+                unawaited(_openAboutSheet());
+              case 'Ритм и поддержка':
+                unawaited(_openRhythmSupport());
+              case 'Пригласить друга':
+                unawaited(_openInviteFriends());
+            }
+          },
+          showPageHeader: false,
         ),
         if (status.events.isNotEmpty) ...[
           const SizedBox(height: AppSpacing.sm),
           AppWaitingRoomEventTicker(events: status.events),
         ],
-        const SizedBox(height: AppSpacing.sm),
-        GlassContainer(
-          padding: const EdgeInsets.all(AppSpacing.lg),
-          borderRadius: BorderRadius.circular(AppRadius.xl),
-          fillOpacity: 0.04,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              AppSearchTimeline(status: status),
-              const SizedBox(height: AppSpacing.md),
-              Text(
-                AppCopy.waitPrepTip,
-                textAlign: TextAlign.center,
-                style: AppTypography.caption,
-              ),
-              const SizedBox(height: AppSpacing.xs),
-              Text(
-                'Поиск продолжается в фоне. Можно перейти на другие экраны и вернуться позже.',
-                textAlign: TextAlign.center,
-                style: AppTypography.caption,
-              ),
-              const SizedBox(height: AppSpacing.md),
-              // Region-only expansion — see _expandSearch doc comment above.
-              // Never label this as "search all habits/skills": the backend
-              // has no cross-skill matching, only cross-region for the same skill.
-              if (status.canExpandSearch) ...[
-                AppPrimaryButton(
-                  label: 'Искать по всей России',
-                  icon: Icons.public,
-                  loading: widget.expanding,
-                  onPressed: widget.expanding ? null : widget.onExpand,
-                ),
-                const SizedBox(height: AppSpacing.sm),
-              ] else if (status.allowOtherRegions) ...[
-                Text(
-                  'Ищем участников по всей России',
-                  textAlign: TextAlign.center,
-                  style: AppTypography.caption.copyWith(
-                    color: AppColors.primarySoft,
-                  ),
-                ),
-                const SizedBox(height: AppSpacing.sm),
-              ],
-              AppDestructiveButton(
-                label: AppCopy.stopSearch,
-                loading: widget.stopping,
-                onPressed: widget.stopping ? null : widget.onStop,
-              ),
-            ],
-          ),
-        ),
       ],
-    );
-  }
-}
-
-class _SearchPrepChecklist extends StatelessWidget {
-  const _SearchPrepChecklist({
-    required this.aboutReady,
-    required this.onAbout,
-    required this.onTimeOfDay,
-    required this.onInviteFriend,
-  });
-
-  final bool aboutReady;
-  final VoidCallback onAbout;
-  final VoidCallback onTimeOfDay;
-  final VoidCallback onInviteFriend;
-
-  @override
-  Widget build(BuildContext context) {
-    return GlassContainer(
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.md,
-        vertical: AppSpacing.sm,
-      ),
-      borderRadius: BorderRadius.circular(AppRadius.lg),
-      fillOpacity: 0.04,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            'Пока ждёте — чеклист',
-            style: AppTypography.caption.copyWith(
-              color: AppColors.primarySoft,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: AppSpacing.xs),
-          _ChecklistRow(
-            done: aboutReady,
-            label: 'О себе',
-            statusLabel: aboutReady ? 'заполнено' : 'дополнить',
-            onTap: onAbout,
-          ),
-          _ChecklistRow(
-            done: false,
-            label: 'Время дня',
-            statusLabel: 'скоро',
-            onTap: onTimeOfDay,
-          ),
-          _ChecklistRow(
-            done: false,
-            label: AppCopy.inviteFriend,
-            statusLabel: 'в пару',
-            onTap: onInviteFriend,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ChecklistRow extends StatelessWidget {
-  const _ChecklistRow({
-    required this.done,
-    required this.label,
-    required this.statusLabel,
-    required this.onTap,
-  });
-
-  final bool done;
-  final String label;
-  final String statusLabel;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(AppRadius.sm),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
-        child: Row(
-          children: [
-            Icon(
-              done ? Icons.check_circle : Icons.radio_button_unchecked,
-              size: 20,
-              color: done ? AppColors.success : AppColors.textMuted,
-            ),
-            const SizedBox(width: AppSpacing.sm),
-            Expanded(
-              child: Text(label, style: AppTypography.body),
-            ),
-            Text(
-              statusLabel,
-              style: AppTypography.caption.copyWith(
-                color: done ? AppColors.success : AppColors.textMuted,
-              ),
-            ),
-            const SizedBox(width: AppSpacing.xxs),
-            Icon(
-              Icons.chevron_right,
-              size: 18,
-              color: AppColors.textMuted,
-            ),
-          ],
-        ),
-      ),
     );
   }
 }
@@ -1075,25 +1087,14 @@ class _GroupTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const statusLabels = {
-      GroupStatus.forming: 'набор',
-      GroupStatus.introduction: 'знакомство',
-      GroupStatus.rulesPending: 'принятие правил',
-      GroupStatus.active: 'активна',
-      GroupStatus.rotating: 'добор',
-      GroupStatus.voting: 'голосование',
-      GroupStatus.completed: 'завершена',
-    };
-    return Padding(
-      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-      child: AppGroupListRow(
-        title: group.skillName ?? group.name,
-        statusLabel: statusLabels[group.status] ?? '—',
-        membersCount: group.membersCount,
-        maxMembers: group.maxMembers,
-        active: group.status == GroupStatus.active,
-        onTap: onTap,
-      ),
+    return GateGroupsListTile(
+      title: group.skillName ?? group.name,
+      statusLabel: gateGroupStatusLabel(group.status),
+      membersCount: group.membersCount,
+      maxMembers: group.maxMembers,
+      skillId: group.skillId,
+      active: group.status == GroupStatus.active,
+      onTap: onTap,
     );
   }
 }

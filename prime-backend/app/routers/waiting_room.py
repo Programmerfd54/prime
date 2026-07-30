@@ -62,6 +62,7 @@ from .group_service import (
     _chat_payloads,
     _create_friend_request_for_addressee,
     _create_group,
+    _create_group_from_early_start_entries,
     _create_group_chat_message,
     _current_group_for_user,
     _direct_chat_inbox_items,
@@ -76,6 +77,11 @@ from .group_service import (
     _group_payload,
     _mark_direct_chat_read,
     _maybe_match_waiting_room,
+    _maybe_auto_expand_waiting_room_entry,
+    _notify_waiting_room_pair_join,
+    _notify_waiting_room_skill_pool,
+    _notify_waiting_room_users,
+    _pending_match_group_for_user,
     _public_user_payload,
     _reaction_payloads,
     _report_payload,
@@ -172,6 +178,7 @@ async def waiting_room(
             )
         )
         if entry is not None:
+            await _maybe_auto_expand_waiting_room_entry(session, entry)
             group = await _maybe_match_waiting_room(session, entry.skill_id, entry.region_code)
             if group is not None:
                 await session.commit()
@@ -202,7 +209,16 @@ async def waiting_room(
     ]
     await session.commit()
     if not queues:
-        empty = await waiting_room_payload(session, None, current_user_id=user.id)
+        pending_group = await _pending_match_group_for_user(session, user.id)
+        empty = await waiting_room_payload(
+            session,
+            None,
+            matched_group_id=pending_group.id if pending_group else None,
+            current_user_id=user.id,
+        )
+        if pending_group is not None:
+            empty["skill_id"] = pending_group.skill_id
+            empty["skill_name"] = skill_name(pending_group.skill_id)
         empty["queues"] = []
         return empty
     result = dict(queues[0])
@@ -377,7 +393,10 @@ async def waiting_room_pair_join(
     if not invite_code:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Укажите invite_code")
     host_entry = await session.scalar(
-        select(WaitingRoomEntry).where(WaitingRoomEntry.pair_code == invite_code)
+        select(WaitingRoomEntry)
+        .where(WaitingRoomEntry.pair_code == invite_code)
+        .order_by(WaitingRoomEntry.created_at.asc())
+        .limit(1)
     )
     if host_entry is None or host_entry.user_id == user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Приглашение не найдено")
@@ -388,17 +407,138 @@ async def waiting_room_pair_join(
         )
     )
     if guest_entry is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Сначала встаньте в очередь по этой привычке",
+        guest_entry = WaitingRoomEntry(
+            user_id=user.id,
+            skill_id=host_entry.skill_id,
+            region_code=host_entry.region_code,
         )
+        session.add(guest_entry)
+        await session.flush()
+    else:
+        guest_entry.region_code = host_entry.region_code
     guest_entry.pair_code = invite_code
     session.add(guest_entry)
+    await session.flush()
+    await _notify_waiting_room_pair_join(
+        session,
+        pair_code=invite_code,
+        skill_id=host_entry.skill_id,
+        joiner_user_id=user.id,
+    )
     await session.commit()
     return {
         "pair_code": invite_code,
         "skill_id": host_entry.skill_id,
         "paired": True,
+    }
+
+
+@router.post("/groups/waiting-room/early-start")
+@router.post("/groups/waiting-room/pair-start")
+async def waiting_room_early_start(
+    payload: dict,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Confirm early start with minimum 3 people in the same skill queue."""
+    skill_id = str(payload.get("skill_id") or "").strip()
+    filters = [WaitingRoomEntry.user_id == user.id]
+    if skill_id:
+        filters.append(WaitingRoomEntry.skill_id == skill_id)
+    entry = await session.scalar(
+        select(WaitingRoomEntry)
+        .where(*filters)
+        .order_by(WaitingRoomEntry.created_at.asc())
+        .limit(1)
+    )
+    if entry is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Очередь не найдена")
+
+    pool_count = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(WaitingRoomEntry)
+            .where(WaitingRoomEntry.skill_id == entry.skill_id)
+        )
+        or 0
+    )
+    if pool_count < 3:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Для раннего старта нужно минимум 3 человека в очереди",
+        )
+
+    existing_group = await _group_for_user_skill(session, user.id, entry.skill_id)
+    if existing_group is not None:
+        return await waiting_room_payload(
+            session,
+            None,
+            matched_group_id=existing_group.id,
+            current_user_id=user.id,
+        )
+
+    now = utcnow()
+    newly_confirmed = entry.pair_start_confirmed_at is None
+    if newly_confirmed:
+        entry.pair_start_confirmed_at = now
+        session.add(entry)
+        await session.flush()
+
+    confirmed_entries = (
+        await session.execute(
+            select(WaitingRoomEntry)
+            .where(
+                WaitingRoomEntry.skill_id == entry.skill_id,
+                WaitingRoomEntry.pair_start_confirmed_at.is_not(None),
+            )
+            .order_by(WaitingRoomEntry.pair_start_confirmed_at.asc())
+        )
+    ).scalars().all()
+
+    if len(confirmed_entries) < 3:
+        await _notify_waiting_room_skill_pool(
+            session,
+            skill_id=entry.skill_id,
+        )
+        await session.commit()
+        payload_data = await waiting_room_payload(
+            session,
+            entry,
+            current_user_id=user.id,
+        )
+        return {
+            **payload_data,
+            "started": False,
+            "waiting_others_confirm": True,
+            "waiting_partner_confirm": True,
+            "early_start_confirmed_count": len(confirmed_entries),
+        }
+
+    formed_entries = confirmed_entries[:3]
+    group = await _create_group_from_early_start_entries(
+        session,
+        formed_entries,
+    )
+    formed_user_ids = [item.user_id for item in formed_entries]
+    await _notify_waiting_room_users(
+        session,
+        skill_id=entry.skill_id,
+        user_ids=formed_user_ids,
+    )
+    await _notify_waiting_room_skill_pool(
+        session,
+        skill_id=entry.skill_id,
+    )
+    await session.commit()
+    return {
+        **await waiting_room_payload(
+            session,
+            None,
+            matched_group_id=group.id,
+            current_user_id=user.id,
+        ),
+        "started": True,
+        "matched_group_id": group.id,
     }
 
 
@@ -411,7 +551,17 @@ async def leave_waiting_room(
     filters = [WaitingRoomEntry.user_id == user.id]
     if skill_id:
         filters.append(WaitingRoomEntry.skill_id == skill_id)
+    leaving_entries = (
+        await session.execute(select(WaitingRoomEntry).where(*filters))
+    ).scalars().all()
+    skill_ids = {entry.skill_id for entry in leaving_entries}
     await session.execute(delete(WaitingRoomEntry).where(*filters))
+    await session.flush()
+    for pool_skill_id in skill_ids:
+        await _notify_waiting_room_skill_pool(
+            session,
+            skill_id=pool_skill_id,
+        )
     await session.commit()
     return None
 

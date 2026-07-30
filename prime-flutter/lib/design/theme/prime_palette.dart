@@ -19,18 +19,18 @@ abstract final class PrimePalette {
   static const purpleGrey = Color(0xFF5C5468);
   static const premiumDarkViolet = Color(0xFF3D2A5C);
 
-  // ── Dark neutrals ────────────────────────────────────────────────────────
-  static const darkCanvas = Color(0xFF12101A);
-  static const darkCanvasSubtle = Color(0xFF181522);
-  static const darkSurface = Color(0xFF1F1B28);
-  static const darkSurfaceElevated = Color(0xFF2A2535);
-  static const darkSurfaceSoft = Color(0xFF262230);
+  // ── Dark neutrals (V4) ───────────────────────────────────────────────────
+  static const darkCanvas = Color(0xFF0F0D14);
+  static const darkCanvasSubtle = Color(0xFF12101A);
+  static const darkSurface = Color(0xFF17141F);
+  static const darkSurfaceElevated = Color(0xFF211C2B);
+  static const darkSurfaceSoft = Color(0xFF292331);
   static const darkSurfaceSelected = Color(0xFF2E2442);
   static const darkDeep = Color(0xFF16131F);
   static const darkHeroStart = Color(0xFF2A1F3D);
   static const darkHeroEnd = Color(0xFF1A1528);
-  static const darkInk = Color(0xFFF2F0F5);
-  static const darkInkSecondary = Color(0xFFB8B0C4);
+  static const darkInk = Color(0xFFF7F4FB);
+  static const darkInkSecondary = Color(0xFFAAA2B4);
   static const darkInkMuted = Color(0xFF8E8799);
   static const darkHairline = Color(0x1FFFFFFF);
   static const darkHairlineStrong = Color(0x33FFFFFF);

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
 
 import '../../../design/haptics.dart';
+import '../../../core/media/media_urls.dart';
 import '../../../design/tokens.dart';
 import '../../../design/typography.dart';
 
@@ -191,13 +192,14 @@ class _Avatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final resolvedUrl = absolutePhotoUrl(avatarUrl);
     return Stack(
       clipBehavior: Clip.none,
       children: [
         Container(
           // Keyed by avatarUrl (same pattern as AppAvatar) so a changed URL
           // always rebuilds the image instead of reusing a stale element.
-          key: ValueKey(avatarUrl ?? 'empty'),
+          key: ValueKey(resolvedUrl ?? 'empty'),
           width: 52,
           height: 52,
           decoration: BoxDecoration(
@@ -214,14 +216,14 @@ class _Avatar extends StatelessWidget {
               color: unread ? accent : AppColors.borderStrong,
               width: unread ? 2 : 1,
             ),
-            image: avatarUrl == null
+            image: resolvedUrl == null
                 ? null
                 : DecorationImage(
-                    image: NetworkImage(avatarUrl!),
+                    image: NetworkImage(resolvedUrl),
                     fit: BoxFit.cover,
                   ),
           ),
-          child: avatarUrl == null
+          child: resolvedUrl == null
               ? Center(
                   child: Text(
                     initial,

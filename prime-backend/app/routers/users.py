@@ -4,13 +4,14 @@ from uuid import uuid4
 import json
 import secrets
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_session
 from ..deps import get_current_user
+from ..media import read_upload
 from ..models import (
     Group,
     GroupDay,
@@ -44,9 +45,11 @@ from ..user_preferences import (
     serialize_onboarding_preferences,
 )
 from ..security import hash_password, verify_password
+from ..sessions import revoke_user_sessions
 
 
 router = APIRouter(prefix="/users", tags=["users"])
+legacy_router = APIRouter(tags=["users"])
 AVATAR_DIR = Path("uploads/avatars")
 MAX_AVATAR_BYTES = 5 * 1024 * 1024
 ALLOWED_AVATAR_TYPES = {
@@ -68,6 +71,65 @@ def _profile_is_complete(user: User) -> bool:
 @router.get("/me", response_model=UserResponse)
 async def me(user: User = Depends(get_current_user)) -> User:
     return user
+
+
+@router.get("/{user_id}/avatar/{filename}")
+async def get_avatar(
+    user_id: str,
+    filename: str,
+    viewer: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    target = await session.scalar(select(User).where(User.id == user_id, User.is_active.is_(True)))
+    if target is None or not target.photo_url or Path(filename).name != filename:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Аватар не найден")
+    if not target.photo_url.endswith(f"/{filename}"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Аватар не найден")
+    path = AVATAR_DIR / filename
+    if not path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Аватар не найден")
+    media_type = {".jpg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}.get(path.suffix.lower(), "application/octet-stream")
+    return Response(
+        content=path.read_bytes(),
+        media_type=media_type,
+        headers={
+            "Cache-Control": "private, max-age=300",
+            "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@legacy_router.get("/uploads/avatars/{filename}")
+async def get_legacy_avatar(
+    filename: str,
+    viewer: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    """Serve pre-private avatar URLs without re-introducing a public mount."""
+    if Path(filename).name != filename:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Аватар не найден")
+    target = await session.scalar(
+        select(User).where(
+            User.photo_url == f"/uploads/avatars/{filename}",
+            User.is_active.is_(True),
+        )
+    )
+    path = AVATAR_DIR / filename
+    if target is None or not path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Аватар не найден")
+    media_type = {".jpg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}.get(
+        path.suffix.lower(), "application/octet-stream"
+    )
+    return Response(
+        content=path.read_bytes(),
+        media_type=media_type,
+        headers={
+            "Cache-Control": "private, max-age=300",
+            "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.get("/me/stats")
@@ -196,39 +258,31 @@ async def upload_avatar(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> User:
-    extension = ALLOWED_AVATAR_TYPES.get(file.content_type or "")
-    if extension is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="  JPG, PNG  WEBP",
-        )
-
-    content = await file.read()
-    if not content:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=" ",
-        )
-    if len(content) > MAX_AVATAR_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="     5 ",
-        )
+    content, content_type, _ = await read_upload(
+        file,
+        max_bytes=MAX_AVATAR_BYTES,
+        max_image_bytes=MAX_AVATAR_BYTES,
+        allow_types=set(ALLOWED_AVATAR_TYPES),
+    )
+    extension = ALLOWED_AVATAR_TYPES[content_type]
 
     AVATAR_DIR.mkdir(parents=True, exist_ok=True)
     filename = f"{user.id}-{uuid4().hex}{extension}"
     path = AVATAR_DIR / filename
     path.write_bytes(content)
 
-    if user.photo_url and user.photo_url.startswith("/uploads/avatars/"):
-        old_path = Path(user.photo_url.lstrip("/"))
-        if old_path.exists():
-            old_path.unlink()
+    old_path = None
+    if user.photo_url and "/avatar/" in user.photo_url:
+        old_path = AVATAR_DIR / Path(user.photo_url.rsplit("/", 1)[-1]).name
+    elif user.photo_url and user.photo_url.startswith("/uploads/avatars/"):
+        old_path = AVATAR_DIR / Path(user.photo_url).name
 
-    user.photo_url = f"/uploads/avatars/{filename}"
+    user.photo_url = f"/api/v1/users/{user.id}/avatar/{filename}"
     session.add(user)
     await session.commit()
     await session.refresh(user)
+    if old_path is not None and old_path != path and old_path.exists():
+        old_path.unlink()
     return user
 
 
@@ -237,14 +291,17 @@ async def delete_avatar(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> User:
-    if user.photo_url and user.photo_url.startswith("/uploads/avatars/"):
-        old_path = Path(user.photo_url.lstrip("/"))
-        if old_path.exists():
-            old_path.unlink()
+    old_path = None
+    if user.photo_url and "/avatar/" in user.photo_url:
+        old_path = AVATAR_DIR / Path(user.photo_url.rsplit("/", 1)[-1]).name
+    elif user.photo_url and user.photo_url.startswith("/uploads/avatars/"):
+        old_path = AVATAR_DIR / Path(user.photo_url).name
     user.photo_url = None
     session.add(user)
     await session.commit()
     await session.refresh(user)
+    if old_path is not None and old_path.exists():
+        old_path.unlink()
     return user
 
 
@@ -266,6 +323,7 @@ async def change_password(
         )
 
     user.password_hash = hash_password(payload.new_password)
+    await revoke_user_sessions(session, user.id)
     session.add(user)
     await session.commit()
     return None
@@ -433,6 +491,10 @@ async def delete_me(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> None:
+    old_avatar = None
+    if user.photo_url and "/avatar/" in user.photo_url:
+        old_avatar = AVATAR_DIR / Path(user.photo_url.rsplit("/", 1)[-1]).name
+    await revoke_user_sessions(session, user.id)
     ts = int(datetime.now(timezone.utc).timestamp())
     user.email = f"deleted+{ts}+{user.id}@deleted.local"
     user.nickname = f"deleted_{user.id[:8]}"
@@ -444,4 +506,6 @@ async def delete_me(
     user.matrix_access_token = None
     session.add(user)
     await session.commit()
+    if old_avatar is not None and old_avatar.exists():
+        old_avatar.unlink()
     return None

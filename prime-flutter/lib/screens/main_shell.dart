@@ -11,7 +11,7 @@ import '../data/api_client.dart';
 import '../design/routes.dart';
 import '../design/tokens.dart';
 import '../l10n/copy.dart';
-import '../models/direct_chat.dart';
+import '../providers/chats_inbox_provider.dart';
 import '../core/pending/pending_search.dart';
 import '../models/skill.dart';
 import '../providers/auth_provider.dart';
@@ -46,11 +46,9 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   int _index = 2;
   SkillModel? _selectedGroupSkill;
   int _groupsRefreshToken = 0;
-  int _chatsRefreshToken = 0;
   String? _lastMatchedSnackGroupId;
   WaitingRoomPoller? _poller;
   RealtimeClient? _realtime;
-  int _chatsUnread = 0;
   bool _openFriendSearch = false;
 
   static const _navItems = [
@@ -96,13 +94,62 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
       if (!mounted) return;
       _poller = context.read<WaitingRoomPoller>();
       _poller!.addListener(_onPollerChanged);
-      _poller!.start();
       _realtime = context.read<RealtimeClient>();
       _realtime!.onMatch = _onRealtimeMatch;
+      _realtime!.onNotificationPush = _onNotificationPush;
+      _realtime!.onWaitingRoomUpdate = _onWaitingRoomUpdate;
+      _realtime!.onGroupUpdate = _onGroupUpdate;
+      _realtime!.addDirectMessageListener(_onDirectMessageInbox);
       _realtime!.start();
-      _refreshChatsUnread();
       _consumePendingSearch();
+      Future<void>.delayed(const Duration(milliseconds: 500), () {
+        if (!mounted) return;
+        _poller!.start();
+        unawaited(context.read<ChatsInboxProvider>().ensureLoaded());
+      });
     });
+  }
+
+  void _onDirectMessageInbox(DirectMessagePush push) {
+    if (push.friendId.isEmpty || !mounted) return;
+    final inbox = context.read<ChatsInboxProvider>();
+    inbox.invalidate();
+    unawaited(inbox.ensureLoaded(force: true));
+    final msgtype = push.message?['msgtype'] as String? ?? '';
+    if (msgtype == 'prime.pair_invite') {
+      _refreshWaitingRoom();
+    }
+  }
+
+  void _onWaitingRoomUpdate() {
+    if (!mounted) return;
+    _refreshWaitingRoom();
+  }
+
+  void _onGroupUpdate(String groupId) {
+    if (!mounted || groupId.isEmpty) return;
+    unawaited(context.read<ApiClient>().invalidateGroupsCache());
+    setState(() => _groupsRefreshToken += 1);
+  }
+
+  void _refreshWaitingRoom() {
+    final poller = _poller;
+    if (poller == null) return;
+    unawaited(poller.refresh().then((_) {
+      if (!mounted) return;
+      if (poller.inQueue) {
+        poller.start(forceRefresh: true);
+      }
+    }));
+  }
+
+  void _onNotificationPush() {
+    if (!mounted) return;
+    final api = context.read<ApiClient>();
+    unawaited(api.invalidateSocialCaches());
+    final inbox = context.read<ChatsInboxProvider>();
+    inbox.invalidate();
+    unawaited(inbox.ensureLoaded(force: true));
   }
 
   /// Restores the last selected tab so a browser refresh (web) or app
@@ -172,6 +219,7 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _poller?.removeListener(_onPollerChanged);
     _poller?.pause();
+    _realtime?.removeDirectMessageListener(_onDirectMessageInbox);
     _realtime?.stop();
     super.dispose();
   }
@@ -184,7 +232,7 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
       case AppLifecycleState.resumed:
         poller.resume();
         _realtime?.start();
-        _refreshChatsUnread();
+        unawaited(context.read<ChatsInboxProvider>().ensureLoaded(force: true));
       case AppLifecycleState.inactive:
       case AppLifecycleState.paused:
       case AppLifecycleState.hidden:
@@ -199,6 +247,8 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     if (_lastMatchedSnackGroupId == groupId) return;
     _lastMatchedSnackGroupId = groupId;
     Analytics.instance.teamReady(groupId);
+    unawaited(context.read<ApiClient>().invalidateGroupsCache());
+    _refreshWaitingRoom();
     showAppSnackBar(
       context,
       'Команда готова',
@@ -250,25 +300,10 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     });
   }
 
-  Future<void> _refreshChatsUnread() async {
-    try {
-      final rows = await context.read<ApiClient>().listDirectChats();
-      final unread = rows
-          .map((item) =>
-              DirectChatSummary.fromJson(item as Map<String, dynamic>))
-          .fold<int>(0, (sum, chat) => sum + chat.unreadCount);
-      if (!mounted) return;
-      setState(() => _chatsUnread = unread);
-    } catch (_) {
-      // Badge is best-effort; inbox errors surface on Chats tab.
-    }
-  }
-
   void _selectDestination(int i) {
     setState(() => _setIndex(i));
     if (i == 3) {
-      _chatsRefreshToken += 1;
-      _refreshChatsUnread();
+      unawaited(context.read<ChatsInboxProvider>().ensureLoaded());
     }
   }
 
@@ -276,7 +311,6 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     setState(() {
       _setIndex(3);
       _openFriendSearch = true;
-      _chatsRefreshToken += 1;
     });
   }
 
@@ -290,9 +324,10 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
       DashboardScreen(
         onOpenHabits: () => setState(() => _setIndex(0)),
         onOpenChats: () => _selectDestination(3),
+        onOpenGroups: _openGroupsTab,
+        refreshToken: _groupsRefreshToken,
       ),
       ChatsScreen(
-        refreshToken: _chatsRefreshToken,
         openFriendSearch: _openFriendSearch,
         onFriendSearchOpened: () {
           if (_openFriendSearch) {
@@ -300,7 +335,6 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
           }
         },
         onFindFriend: _openFindFriend,
-        onUnreadChanged: _refreshChatsUnread,
         onOpenGroups: _openGroupsTab,
       ),
       ProfileScreen(onOpenGroups: _openGroupsTab),
@@ -312,9 +346,10 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     final offlineMode = context.watch<AuthProvider>().offlineMode;
     final groupsMatched =
         context.watch<WaitingRoomPoller>().matchedGroupId != null;
+    final chatsUnread = context.watch<ChatsInboxProvider>().unreadCount;
     final badgeIndices = <int>{
       if (groupsMatched) 1,
-      if (_chatsUnread > 0) 3,
+      if (chatsUnread > 0) 3,
     };
     final pages = _buildPages();
 

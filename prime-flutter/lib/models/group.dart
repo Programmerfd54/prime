@@ -308,6 +308,24 @@ class MemberModel {
             ? UserPublic.fromJson(j['profile'] as Map<String, dynamic>)
             : null,
       );
+
+  MemberModel copyWith({
+    bool? confirmedParticipation,
+    bool? acceptedRules,
+  }) =>
+      MemberModel(
+        id: id,
+        userId: userId,
+        role: role,
+        confirmedParticipation:
+            confirmedParticipation ?? this.confirmedParticipation,
+        acceptedRules: acceptedRules ?? this.acceptedRules,
+        active: active,
+        streak: streak,
+        bestStreak: bestStreak,
+        reportStatus: reportStatus,
+        profile: profile,
+      );
 }
 
 class GroupModel {
@@ -390,6 +408,35 @@ class GroupModel {
                 j['team_milestones'] as Map<String, dynamic>,
               )
             : null,
+      );
+
+  GroupModel copyWith({
+    GroupStatus? status,
+    List<MemberModel>? members,
+    int? membersCount,
+    String? matrixRoomId,
+  }) =>
+      GroupModel(
+        id: id,
+        name: name,
+        skillId: skillId,
+        skillName: skillName,
+        status: status ?? this.status,
+        isPrivate: isPrivate,
+        inviteCode: inviteCode,
+        city: city,
+        regionCode: regionCode,
+        regionName: regionName,
+        isCrossRegion: isCrossRegion,
+        maxMembers: maxMembers,
+        matrixRoomId: matrixRoomId ?? this.matrixRoomId,
+        cycleStartAt: cycleStartAt,
+        membersCount: membersCount ?? this.membersCount,
+        members: members ?? this.members,
+        teamPulse: teamPulse,
+        teamDay: teamDay,
+        teamRecap: teamRecap,
+        teamMilestones: teamMilestones,
       );
 }
 
@@ -530,6 +577,12 @@ class WaitingRoomStatus {
   final int regionSearching;
   final int skillSearching;
   final double? medianMatchHours;
+  final bool canStartEarly;
+  final bool earlyStartConfirmed;
+  final int earlyStartConfirmedCount;
+  final bool earlyStartWaitingOthers;
+  final bool earlyStartPending;
+  final int earlyStartNeededConfirmations;
 
   WaitingRoomStatus({
     required this.inQueue,
@@ -552,6 +605,12 @@ class WaitingRoomStatus {
     this.regionSearching = 0,
     this.skillSearching = 0,
     this.medianMatchHours,
+    this.canStartEarly = false,
+    this.earlyStartConfirmed = false,
+    this.earlyStartConfirmedCount = 0,
+    this.earlyStartWaitingOthers = false,
+    this.earlyStartPending = false,
+    this.earlyStartNeededConfirmations = 3,
   });
 
   WaitingRoomStatus copyWith({
@@ -583,6 +642,12 @@ class WaitingRoomStatus {
         regionSearching: regionSearching ?? this.regionSearching,
         skillSearching: skillSearching ?? this.skillSearching,
         medianMatchHours: medianMatchHours ?? this.medianMatchHours,
+        canStartEarly: canStartEarly,
+        earlyStartConfirmed: earlyStartConfirmed,
+        earlyStartConfirmedCount: earlyStartConfirmedCount,
+        earlyStartWaitingOthers: earlyStartWaitingOthers,
+        earlyStartPending: earlyStartPending,
+        earlyStartNeededConfirmations: earlyStartNeededConfirmations,
       );
 
   factory WaitingRoomStatus.fromJson(Map<String, dynamic> j) =>
@@ -620,5 +685,19 @@ class WaitingRoomStatus {
         regionSearching: j['region_searching'] as int? ?? 0,
         skillSearching: j['skill_searching'] as int? ?? 0,
         medianMatchHours: (j['median_match_hours'] as num?)?.toDouble(),
+        canStartEarly: j['can_start_early'] as bool? ??
+            j['can_start_as_pair'] as bool? ??
+            false,
+        earlyStartConfirmed: j['early_start_confirmed'] as bool? ??
+            j['pair_start_confirmed'] as bool? ??
+            false,
+        earlyStartConfirmedCount:
+            j['early_start_confirmed_count'] as int? ?? 0,
+        earlyStartWaitingOthers: j['early_start_waiting_others'] as bool? ??
+            j['pair_start_waiting_partner'] as bool? ??
+            false,
+        earlyStartPending: j['early_start_pending'] as bool? ?? false,
+        earlyStartNeededConfirmations:
+            j['early_start_needed_confirmations'] as int? ?? 3,
       );
 }

@@ -4,6 +4,7 @@ import '../../design/motion.dart';
 import '../../design/shapes/prime_squircle.dart';
 import '../../design/tokens.dart';
 import '../kit/presentation/profile_editorial_widgets.dart';
+import '../kit/tokens/kit_layout.dart';
 
 /// Lightweight shimmer-style placeholder for partial loading states.
 class AppSkeleton extends StatelessWidget {
@@ -43,11 +44,11 @@ class AppSkeletonList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListView(
-      padding: const EdgeInsets.fromLTRB(
+      padding: EdgeInsets.fromLTRB(
         AppSpacing.md,
         AppSpacing.md,
         AppSpacing.md,
-        AppSpacing.bottomNavClearance,
+        KitLayout.scrollBottomFor(context),
       ),
       children: [
         GridView.builder(

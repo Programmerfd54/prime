@@ -92,9 +92,23 @@ def login_or_register(base_url: str, user: dict[str, str]) -> str:
             "nickname": user["nickname"],
         },
     )
-    token = registered.get("access_token") if isinstance(registered, dict) else None
+    # Register only creates a pending account; ENABLE_DEV_TOOLS hands the
+    # confirmation code back so seeding does not need a mailbox.
+    code = registered.get("verification_code") if isinstance(registered, dict) else None
+    if not code:
+        raise RuntimeError(
+            f"register did not return a verification code for {user['email']} — "
+            "set ENABLE_DEV_TOOLS=true or EMAIL_VERIFICATION_EXPOSE_CODE=true"
+        )
+    verified = api(
+        base_url,
+        "POST",
+        "/auth/verify-email",
+        {"email": user["email"], "code": code},
+    )
+    token = verified.get("access_token") if isinstance(verified, dict) else None
     if not token:
-        raise RuntimeError(f"register failed for {user['email']}")
+        raise RuntimeError(f"verify-email failed for {user['email']}")
     return str(token)
 
 

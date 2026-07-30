@@ -97,6 +97,26 @@ async def test_preferences_multi_goals_and_attempt_count() -> None:
 
 
 @pytest.mark.asyncio
+async def test_preferences_time_of_day_and_support_style() -> None:
+    engine, session = await make_session()
+    try:
+        user = make_user()
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+
+        payload = UpdateOnboardingPreferencesRequest(
+            preferred_time_of_day="evening",
+            support_style="gentle",
+        )
+        saved = await update_preferences(payload, user, session)
+        assert saved["preferred_time_of_day"] == "evening"
+        assert saved["support_style"] == "gentle"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_favorites_add_list_remove() -> None:
     engine, session = await make_session()
     try:

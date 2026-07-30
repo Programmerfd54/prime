@@ -3,10 +3,9 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 
 import '../../../core/media/media_validation.dart';
-import '../../../design/glass.dart';
+import '../../../design/theme/prime_theme_context.dart';
 import '../../../design/tokens.dart';
 import '../../../design/typography.dart';
-import '../app_icon_button.dart';
 
 class PendingAttachment {
   const PendingAttachment({
@@ -22,8 +21,8 @@ class PendingAttachment {
   final bool isImage;
 }
 
-/// Mature chat input bar: attach, multiline field, preview, send.
-class AppChatComposer extends StatelessWidget {
+/// Telegram-style chat input: pill field + circular send button.
+class AppChatComposer extends StatefulWidget {
   const AppChatComposer({
     super.key,
     required this.controller,
@@ -54,12 +53,54 @@ class AppChatComposer extends StatelessWidget {
   final ValueChanged<String>? onQuickReply;
 
   @override
+  State<AppChatComposer> createState() => _AppChatComposerState();
+}
+
+class _AppChatComposerState extends State<AppChatComposer> {
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_onTextChanged);
+  }
+
+  @override
+  void didUpdateWidget(covariant AppChatComposer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.removeListener(_onTextChanged);
+      widget.controller.addListener(_onTextChanged);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_onTextChanged);
+    super.dispose();
+  }
+
+  void _onTextChanged() => setState(() {});
+
+  bool get _canSend {
+    if (widget.uploading) return false;
+    if (widget.pending != null) return true;
+    return widget.controller.text.trim().isNotEmpty;
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return GlassContainer(
-      borderRadius: BorderRadius.zero,
-      padding: EdgeInsets.zero,
-      fillOpacity: 0.08,
-      sigma: 12,
+    final p = context.prime;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: p.surface.withValues(alpha: 0.98),
+        border: Border(top: BorderSide(color: p.hairline)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.12),
+            blurRadius: 12,
+            offset: const Offset(0, -2),
+          ),
+        ],
+      ),
       child: SafeArea(
         top: false,
         child: Padding(
@@ -73,71 +114,113 @@ class AppChatComposer extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              if (quickReplies.isNotEmpty && replyPreview == null && pending == null)
+              if (widget.quickReplies.isNotEmpty &&
+                  widget.replyPreview == null &&
+                  widget.pending == null)
                 _QuickReplyRow(
-                  labels: quickReplies,
-                  onTap: onQuickReply,
+                  labels: widget.quickReplies,
+                  onTap: widget.onQuickReply,
                 ),
-              if (replyPreview != null && replyPreview!.trim().isNotEmpty)
+              if (widget.replyPreview != null &&
+                  widget.replyPreview!.trim().isNotEmpty)
                 _ReplyComposerPreview(
-                  text: replyPreview!,
-                  onCancel: onCancelReply,
+                  text: widget.replyPreview!,
+                  onCancel: widget.onCancelReply,
                 ),
-              if (pending != null) _AttachmentPreview(
-                attachment: pending!,
-                uploading: uploading,
-                progress: uploadProgress,
-                onRemove: uploading ? onCancelUpload : onRemovePending,
-              ),
+              if (widget.pending != null)
+                _AttachmentPreview(
+                  attachment: widget.pending!,
+                  uploading: widget.uploading,
+                  progress: widget.uploadProgress,
+                  onRemove: widget.uploading
+                      ? widget.onCancelUpload
+                      : widget.onRemovePending,
+                ),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  AppIconButton(
-                    tooltip: 'Добавить в сообщение',
-                    icon: Icons.add_rounded,
-                    onPressed: uploading ? null : onAttach,
-                  ),
-                  const SizedBox(width: AppSpacing.xxs),
                   Expanded(
-                    child: TextField(
-                      controller: controller,
-                      minLines: 1,
-                      maxLines: 5,
-                      enabled: !uploading,
-                      textInputAction: TextInputAction.newline,
-                      style: AppTypography.body,
-                      decoration: InputDecoration(
-                        hintText: 'Сообщение',
-                        hintStyle: AppTypography.bodySecondary,
-                        filled: true,
-                        fillColor: AppColors.surfaceSoft.withValues(alpha: 0.6),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(AppRadius.lg),
-                          borderSide: BorderSide(color: AppColors.border),
-                        ),
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(AppRadius.lg),
-                          borderSide: BorderSide(color: AppColors.border),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(AppRadius.lg),
-                          borderSide: BorderSide(
-                            color: AppColors.primary.withValues(alpha: 0.5),
+                    child: Container(
+                      clipBehavior: Clip.antiAlias,
+                      decoration: BoxDecoration(
+                        color: p.surfaceSoft,
+                        borderRadius: BorderRadius.circular(AppRadius.xl),
+                        border: Border.all(color: p.hairline),
+                      ),
+                      padding: const EdgeInsets.fromLTRB(4, 4, 4, 4),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Material(
+                            color: Colors.transparent,
+                            child: InkWell(
+                              onTap: widget.uploading ? null : widget.onAttach,
+                              borderRadius: BorderRadius.circular(AppRadius.lg),
+                              child: Padding(
+                                padding: const EdgeInsets.all(8),
+                                child: Icon(
+                                  Icons.add_rounded,
+                                  size: 22,
+                                  color: widget.uploading
+                                      ? p.inkMuted
+                                      : p.inkSecondary,
+                                ),
+                              ),
+                            ),
                           ),
-                        ),
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: AppSpacing.sm,
-                          vertical: AppSpacing.sm,
-                        ),
+                          Expanded(
+                            child: TextField(
+                              controller: widget.controller,
+                              minLines: 1,
+                              maxLines: 5,
+                              enabled: !widget.uploading,
+                              textInputAction: TextInputAction.newline,
+                              style: AppTypography.body.copyWith(color: p.ink),
+                              cursorColor: p.brand,
+                              decoration: InputDecoration(
+                                hintText: 'Сообщение',
+                                hintStyle: AppTypography.bodySecondary.copyWith(
+                                  color: p.inkMuted,
+                                ),
+                                filled: true,
+                                fillColor: Colors.transparent,
+                                border: InputBorder.none,
+                                enabledBorder: InputBorder.none,
+                                focusedBorder: InputBorder.none,
+                                disabledBorder: InputBorder.none,
+                                errorBorder: InputBorder.none,
+                                focusedErrorBorder: InputBorder.none,
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 4,
+                                  vertical: 10,
+                                ),
+                                isDense: true,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
-                  const SizedBox(width: AppSpacing.xxs),
-                  AppIconButton(
-                    tooltip: 'Отправить',
-                    icon: Icons.arrow_upward_rounded,
-                    filled: true,
-                    onPressed: _canSend ? onSend : null,
+                  const SizedBox(width: AppSpacing.xs),
+                  Material(
+                    color: _canSend
+                        ? p.brand
+                        : p.surfaceSoft.withValues(alpha: 0.9),
+                    shape: const CircleBorder(),
+                    child: InkWell(
+                      onTap: _canSend ? widget.onSend : null,
+                      customBorder: const CircleBorder(),
+                      child: SizedBox(
+                        width: 40,
+                        height: 40,
+                        child: Icon(
+                          Icons.arrow_upward_rounded,
+                          size: 22,
+                          color: _canSend ? Colors.white : p.inkMuted,
+                        ),
+                      ),
+                    ),
                   ),
                 ],
               ),
@@ -146,12 +229,6 @@ class AppChatComposer extends StatelessWidget {
         ),
       ),
     );
-  }
-
-  bool get _canSend {
-    if (uploading) return false;
-    if (pending != null) return true;
-    return controller.text.trim().isNotEmpty;
   }
 }
 
@@ -163,6 +240,7 @@ class _QuickReplyRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = context.prime;
     return Padding(
       padding: const EdgeInsets.only(bottom: AppSpacing.xs),
       child: SingleChildScrollView(
@@ -171,12 +249,27 @@ class _QuickReplyRow extends StatelessWidget {
           children: [
             for (final label in labels)
               Padding(
-                padding: const EdgeInsets.only(right: AppSpacing.xxs),
-                child: ActionChip(
-                  label: Text(label, style: AppTypography.caption),
-                  backgroundColor: AppColors.surfaceSoft,
-                  side: BorderSide(color: AppColors.border),
-                  onPressed: onTap == null ? null : () => onTap!(label),
+                padding: const EdgeInsets.only(right: 8),
+                child: Material(
+                  color: p.brandContainer.withValues(alpha: 0.35),
+                  borderRadius: BorderRadius.circular(16),
+                  child: InkWell(
+                    onTap: onTap == null ? null : () => onTap!(label),
+                    borderRadius: BorderRadius.circular(16),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 7,
+                      ),
+                      child: Text(
+                        label,
+                        style: AppTypography.caption.copyWith(
+                          color: p.inkSecondary,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
               ),
           ],
@@ -194,15 +287,19 @@ class _ReplyComposerPreview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = context.prime;
     return Padding(
       padding: const EdgeInsets.only(bottom: AppSpacing.xs),
-      child: GlassContainer(
+      child: Container(
         padding: const EdgeInsets.symmetric(
           horizontal: AppSpacing.sm,
           vertical: AppSpacing.xs,
         ),
-        borderRadius: BorderRadius.circular(AppRadius.bentoInner),
-        fillOpacity: 0.04,
+        decoration: BoxDecoration(
+          color: p.surfaceSoft,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: p.hairline),
+        ),
         child: Row(
           children: [
             Icon(Icons.reply_rounded, size: 18, color: AppColors.primarySoft),
@@ -243,12 +340,16 @@ class _AttachmentPreview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = context.prime;
     return Padding(
       padding: const EdgeInsets.only(bottom: AppSpacing.xs),
-      child: GlassContainer(
+      child: Container(
         padding: const EdgeInsets.all(AppSpacing.xs),
-        borderRadius: BorderRadius.circular(AppRadius.bentoInner),
-        fillOpacity: 0.04,
+        decoration: BoxDecoration(
+          color: p.surfaceSoft,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: p.hairline),
+        ),
         child: Row(
           children: [
             if (attachment.isImage)

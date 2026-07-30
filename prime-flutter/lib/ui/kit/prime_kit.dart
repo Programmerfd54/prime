@@ -6,6 +6,7 @@ export 'components/prime_bottom_navigation.dart';
 export 'components/prime_content_card.dart';
 export 'components/prime_contextual_action_bar.dart';
 export 'components/prime_empty_state.dart';
+export '../../design/prime/prime_glass_surface.dart';
 export 'components/prime_glass_overlay.dart';
 export 'components/prime_image_card.dart';
 export 'components/prime_insight_card.dart';

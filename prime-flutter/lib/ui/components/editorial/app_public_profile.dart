@@ -31,6 +31,7 @@ class AppPublicProfileHero extends StatelessWidget {
       subtitle: location,
       photoUrl: photoUrl,
       mode: ProfileHeroMode.public,
+      showChart: false,
       onBack: () => Navigator.maybePop(context),
     );
   }

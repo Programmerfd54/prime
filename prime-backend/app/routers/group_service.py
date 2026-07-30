@@ -6,10 +6,11 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import HTTPException, UploadFile, status
-from sqlalchemy import case, delete, func, or_, select
+from sqlalchemy import and_, case, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
+from ..direct_message_events import DirectChatReadPush, direct_message_hub
 from ..notifications import create_notification
 from ..matrix import (
     create_room,
@@ -51,6 +52,7 @@ PARTIAL_GROUP_START_DELAY = timedelta(
     hours=get_settings().group_partial_start_hours,
 )
 MIN_GROUP_MEMBERS = get_settings().group_min_members
+EARLY_START_MIN_MEMBERS = 3
 MAX_MEDIA_BYTES = 100 * 1024 * 1024
 MAX_DIRECT_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_DIRECT_FILE_BYTES = 25 * 1024 * 1024
@@ -78,6 +80,7 @@ CHAT_SUPPORT_REASON = "Поддержка в чате"
 ONLINE_PRESENCE_WINDOW = timedelta(minutes=3)
 MAX_WAITING_ROOM_SLOTS = 6
 MAX_WAITING_ROOM_EVENTS = 5
+MATCH_CANDIDATE_SCAN_LIMIT = get_settings().match_candidate_scan_limit
 
 
 def _region_color_seed(region_code: str | None) -> int:
@@ -93,6 +96,184 @@ def _pool_filters(entry: WaitingRoomEntry) -> list:
     else:
         filters.append(WaitingRoomEntry.allow_other_regions.is_(True))
     return filters
+
+
+async def _waiting_room_visible_rows(
+    session: AsyncSession,
+    entry: WaitingRoomEntry,
+) -> list[tuple[WaitingRoomEntry, User]]:
+    """Pool members plus pair-invite group, deduplicated and ordered for display."""
+    pool_rows = (
+        await session.execute(
+            select(WaitingRoomEntry, User)
+            .join(User, User.id == WaitingRoomEntry.user_id)
+            .where(*_pool_filters(entry))
+            .order_by(WaitingRoomEntry.created_at.asc())
+        )
+    ).all()
+
+    pair_rows: list[tuple[WaitingRoomEntry, User]] = []
+    if entry.pair_code:
+        pair_rows = (
+            await session.execute(
+                select(WaitingRoomEntry, User)
+                .join(User, User.id == WaitingRoomEntry.user_id)
+                .where(
+                    WaitingRoomEntry.pair_code == entry.pair_code,
+                    WaitingRoomEntry.skill_id == entry.skill_id,
+                )
+                .order_by(WaitingRoomEntry.created_at.asc())
+            )
+        ).all()
+
+    seen_user_ids: set[str] = set()
+    merged: list[tuple[WaitingRoomEntry, User]] = []
+    for pool_entry, pool_user in [*pair_rows, *pool_rows]:
+        if pool_entry.user_id in seen_user_ids:
+            continue
+        merged.append((pool_entry, pool_user))
+        seen_user_ids.add(pool_entry.user_id)
+    return merged
+
+
+async def _waiting_room_people_waiting(
+    session: AsyncSession,
+    entry: WaitingRoomEntry,
+) -> int:
+    return len(await _waiting_room_visible_rows(session, entry))
+
+
+async def _notify_waiting_room_pair_join(
+    session: AsyncSession,
+    *,
+    pair_code: str,
+    skill_id: str,
+    joiner_user_id: str,
+) -> None:
+    from ..direct_message_events import WaitingRoomUpdatePush, direct_message_hub
+
+    member_ids = (
+        await session.execute(
+            select(WaitingRoomEntry.user_id).where(
+                WaitingRoomEntry.pair_code == pair_code,
+                WaitingRoomEntry.skill_id == skill_id,
+                WaitingRoomEntry.user_id != joiner_user_id,
+            )
+        )
+    ).scalars().all()
+    for user_id in member_ids:
+        direct_message_hub.publish_waiting_room_update(
+            user_id,
+            WaitingRoomUpdatePush(skill_id=skill_id),
+        )
+
+
+async def _notify_waiting_room_skill_pool(
+    session: AsyncSession,
+    *,
+    skill_id: str,
+    exclude_user_id: str | None = None,
+) -> None:
+    """Push waiting_room_update SSE to everyone in the same skill queue."""
+    from ..direct_message_events import WaitingRoomUpdatePush, direct_message_hub
+
+    filters = [WaitingRoomEntry.skill_id == skill_id]
+    if exclude_user_id:
+        filters.append(WaitingRoomEntry.user_id != exclude_user_id)
+    member_ids = (
+        await session.execute(
+            select(WaitingRoomEntry.user_id).where(*filters)
+        )
+    ).scalars().all()
+    for user_id in member_ids:
+        direct_message_hub.publish_waiting_room_update(
+            user_id,
+            WaitingRoomUpdatePush(skill_id=skill_id),
+        )
+
+
+async def _notify_waiting_room_users(
+    session: AsyncSession,
+    *,
+    skill_id: str,
+    user_ids: list[str],
+) -> None:
+    """Push waiting_room_update SSE to explicit users (e.g. after group formation)."""
+    from ..direct_message_events import WaitingRoomUpdatePush, direct_message_hub
+
+    seen: set[str] = set()
+    for user_id in user_ids:
+        if not user_id or user_id in seen:
+            continue
+        seen.add(user_id)
+        direct_message_hub.publish_waiting_room_update(
+            user_id,
+            WaitingRoomUpdatePush(skill_id=skill_id),
+        )
+
+
+async def _notify_group_members(
+    session: AsyncSession,
+    *,
+    group_id: str,
+    exclude_user_id: str | None = None,
+) -> None:
+    """Push group_update SSE so intro confirmation counts stay in sync."""
+    from ..direct_message_events import GroupUpdatePush, direct_message_hub
+
+    filters = [
+        GroupMember.group_id == group_id,
+        GroupMember.active.is_(True),
+    ]
+    if exclude_user_id:
+        filters.append(GroupMember.user_id != exclude_user_id)
+    member_ids = (
+        await session.execute(select(GroupMember.user_id).where(*filters))
+    ).scalars().all()
+    for user_id in member_ids:
+        direct_message_hub.publish_group_update(
+            user_id,
+            GroupUpdatePush(group_id=group_id),
+        )
+
+
+async def _pending_match_group_for_user(
+    session: AsyncSession,
+    user_id: str,
+) -> Group | None:
+    """Introduction/rules_pending group the user should confirm next."""
+    result = await session.execute(
+        select(Group)
+        .join(GroupMember, GroupMember.group_id == Group.id)
+        .where(
+            GroupMember.user_id == user_id,
+            GroupMember.active.is_(True),
+            Group.status.in_(("introduction", "rules_pending")),
+        )
+        .order_by(Group.created_at.desc())
+    )
+    return result.scalars().first()
+
+
+async def _maybe_auto_expand_waiting_room_entry(
+    session: AsyncSession,
+    entry: WaitingRoomEntry,
+) -> bool:
+    """After REGION_EXPANSION_DELAY, widen search to all Russia automatically."""
+    if entry.allow_other_regions:
+        return False
+    created_at = entry.created_at
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    if now < created_at + REGION_EXPANSION_DELAY:
+        return False
+    entry.allow_other_regions = True
+    if entry.expansion_offered_at is None:
+        entry.expansion_offered_at = now
+    session.add(entry)
+    await session.flush()
+    return True
 
 
 def _ago_seconds(value: datetime, now: datetime) -> int:
@@ -171,15 +352,8 @@ async def _waiting_room_live_fields(
         or 0
     )
 
-    pool_rows = (
-        await session.execute(
-            select(WaitingRoomEntry, User)
-            .join(User, User.id == WaitingRoomEntry.user_id)
-            .where(*pool_filters)
-            .order_by(WaitingRoomEntry.created_at.asc())
-            .limit(MAX_WAITING_ROOM_SLOTS)
-        )
-    ).all()
+    pool_rows = await _waiting_room_visible_rows(session, entry)
+    pool_rows = pool_rows[:MAX_WAITING_ROOM_SLOTS]
 
     slots: list[dict] = []
     events: list[dict] = []
@@ -217,6 +391,105 @@ async def _waiting_room_live_fields(
         "events": events,
         "median_match_hours": median_match_hours,
     }
+
+
+async def _waiting_room_pair_partner(
+    session: AsyncSession,
+    entry: WaitingRoomEntry,
+) -> WaitingRoomEntry | None:
+    if not entry.pair_code:
+        return None
+    return await session.scalar(
+        select(WaitingRoomEntry).where(
+            WaitingRoomEntry.pair_code == entry.pair_code,
+            WaitingRoomEntry.skill_id == entry.skill_id,
+            WaitingRoomEntry.user_id != entry.user_id,
+        )
+    )
+
+
+async def _early_start_payload_fields(
+    session: AsyncSession,
+    entry: WaitingRoomEntry,
+    *,
+    people_waiting: int,
+) -> dict:
+    my_confirmed = entry.pair_start_confirmed_at is not None
+    confirmed_count = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(WaitingRoomEntry)
+            .where(
+                WaitingRoomEntry.skill_id == entry.skill_id,
+                WaitingRoomEntry.pair_start_confirmed_at.is_not(None),
+            )
+        )
+        or 0
+    )
+    can_start = people_waiting >= EARLY_START_MIN_MEMBERS
+    waiting_others = my_confirmed and confirmed_count < EARLY_START_MIN_MEMBERS
+    return {
+        "can_start_early": can_start,
+        "can_start_as_pair": can_start,
+        "early_start_confirmed": my_confirmed,
+        "early_start_confirmed_count": confirmed_count,
+        "early_start_waiting_others": waiting_others,
+        "early_start_pending": confirmed_count > 0 and not my_confirmed,
+        "early_start_needed_confirmations": EARLY_START_MIN_MEMBERS,
+        "pair_start_confirmed": my_confirmed,
+        "pair_start_partner_confirmed": confirmed_count >= EARLY_START_MIN_MEMBERS,
+        "pair_start_waiting_partner": waiting_others,
+        "pair_partner_in_queue": people_waiting >= EARLY_START_MIN_MEMBERS,
+    }
+
+
+async def _create_group_from_early_start_entries(
+    session: AsyncSession,
+    entries: list[WaitingRoomEntry],
+) -> Group:
+    ordered = sorted(
+        entries,
+        key=lambda item: item.pair_start_confirmed_at or item.created_at,
+    )[:EARLY_START_MIN_MEMBERS]
+    if len(ordered) < EARLY_START_MIN_MEMBERS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Недостаточно подтверждений для старта",
+        )
+    users = (
+        await session.execute(
+            select(User).where(
+                User.id.in_([item.user_id for item in ordered]),
+            )
+        )
+    ).scalars().all()
+    users_by_id = {item.id: item for item in users}
+    ordered_users = [
+        users_by_id[item.user_id]
+        for item in ordered
+        if item.user_id in users_by_id
+    ]
+    if len(ordered_users) != EARLY_START_MIN_MEMBERS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Не удалось собрать команду",
+        )
+    region_codes = {item.region_code for item in ordered}
+    group = await _create_group(
+        session,
+        ordered[0].skill_id,
+        ordered_users,
+        region_code=ordered[0].region_code if len(region_codes) == 1 else None,
+        is_cross_region=len(region_codes) > 1,
+        allow_early_start=True,
+    )
+    await session.execute(
+        delete(WaitingRoomEntry).where(
+            WaitingRoomEntry.id.in_([item.id for item in ordered]),
+        )
+    )
+    await session.flush()
+    return group
 
 
 async def waiting_room_stats_payload(
@@ -334,6 +607,7 @@ def _public_user_payload(user: User) -> dict:
     if not privacy.get("show_achievements", True):
         payload["prime_points"] = 0
     payload["privacy_settings"] = privacy
+    payload["email_verified"] = user.email_verified_at is not None
     return payload
 
 
@@ -554,11 +828,13 @@ async def _create_group(
     *,
     region_code: str | None,
     is_cross_region: bool,
+    allow_early_start: bool = False,
 ) -> Group:
-    if not MIN_GROUP_MEMBERS <= len(users) <= WAITING_ROOM_SIZE:
+    min_size = EARLY_START_MIN_MEMBERS if allow_early_start else MIN_GROUP_MEMBERS
+    if not min_size <= len(users) <= WAITING_ROOM_SIZE:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Для команды нужно 6 участников",
+            detail="Недостаточно участников для команды",
         )
 
     group = Group(
@@ -594,6 +870,8 @@ async def _create_group(
             {"group_id": group.id, "skill_id": skill_id},
         )
 
+    await _ensure_group_matrix_room(session, group)
+
     return group
 
 
@@ -626,23 +904,7 @@ async def _activate_if_ready(session: AsyncSession, group: Group) -> None:
                 )
             )
         ).scalars().all()
-        users_with_matrix = [
-            member_user
-            for member_user in users
-            if member_user.matrix_user_id and member_user.matrix_access_token
-        ]
-        if not group.matrix_room_id and len(users_with_matrix) == len(users) and users:
-            try:
-                group.matrix_room_id = await asyncio.wait_for(
-                    create_room(
-                        users[0],
-                        users[1:],
-                        f"PRIME: {skill_name(group.skill_id) or group.skill_id}",
-                    ),
-                    timeout=5,
-                )
-            except Exception:
-                group.matrix_room_id = None
+        await _ensure_group_matrix_room(session, group)
         group.status = "active"
         session.add(group)
         await session.flush()
@@ -738,16 +1000,31 @@ async def _maybe_match_waiting_room(
         if len(ordered_users) != len(selected_entries):
             return None
 
-        # Recheck membership while rows are locked: the same user may have six
-        # groups, but never two groups for the same skill.
-        eligible_users: list[User] = []
-        eligible_entries: list[WaitingRoomEntry] = []
-        for entry, queued_user in zip(selected_entries, ordered_users, strict=False):
-            if await _group_for_user_skill(session, queued_user.id, skill_id) is None:
-                eligible_entries.append(entry)
-                eligible_users.append(queued_user)
-        if len(eligible_users) != len(selected_entries):
+        # Recheck membership in one indexed query while rows are locked. The
+        # old loop issued one group query per candidate and amplified latency.
+        candidate_user_ids = [queued_user.id for queued_user in ordered_users]
+        existing_user_ids = set(
+            (
+                await session.execute(
+                    select(GroupMember.user_id)
+                    .join(Group, GroupMember.group_id == Group.id)
+                    .where(
+                        GroupMember.user_id.in_(candidate_user_ids),
+                        GroupMember.active.is_(True),
+                        Group.skill_id == skill_id,
+                        Group.status.in_(
+                            ("introduction", "rules_pending", "active")
+                        ),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if existing_user_ids:
             return None
+        eligible_entries = list(selected_entries)
+        eligible_users = list(ordered_users)
 
         group = await _create_group(
             session,
@@ -773,6 +1050,7 @@ async def _maybe_match_waiting_room(
             )
             .order_by(WaitingRoomEntry.created_at.asc())
             .with_for_update(skip_locked=True)
+            .limit(MATCH_CANDIDATE_SCAN_LIMIT)
         )
     ).scalars().all()
 
@@ -821,6 +1099,7 @@ async def _maybe_match_waiting_room(
             )
             .order_by(WaitingRoomEntry.created_at.asc())
             .with_for_update(skip_locked=True)
+            .limit(MATCH_CANDIDATE_SCAN_LIMIT)
         )
     ).scalars().all()
     if len(cross_region_entries) >= WAITING_ROOM_SIZE:
@@ -873,29 +1152,38 @@ async def waiting_room_payload(
             "allow_other_regions": False,
             "expansion_available_at": None,
             "partial_start_available_at": None,
+            "can_start_early": False,
+            "can_start_as_pair": False,
+            "early_start_confirmed": False,
+            "early_start_confirmed_count": 0,
+            "early_start_waiting_others": False,
+            "early_start_pending": False,
+            "early_start_needed_confirmations": EARLY_START_MIN_MEMBERS,
+            "pair_partner_in_queue": False,
+            "pair_start_confirmed": False,
+            "pair_start_partner_confirmed": False,
+            "pair_start_waiting_partner": False,
             **_empty_waiting_room_live_fields(),
         }
 
-    count_filters = _pool_filters(entry)
-    count_result = await session.execute(
-        select(func.count()).select_from(WaitingRoomEntry).where(*count_filters)
-    )
-    people_waiting = int(count_result.scalar_one())
     now = datetime.now(timezone.utc)
     created_at = entry.created_at
     if created_at.tzinfo is None:
         created_at = created_at.replace(tzinfo=timezone.utc)
+    await _maybe_auto_expand_waiting_room_entry(session, entry)
+    people_waiting = await _waiting_room_people_waiting(session, entry)
     expansion_available_at = created_at + REGION_EXPANSION_DELAY
     partial_start_available_at = created_at + PARTIAL_GROUP_START_DELAY
     can_expand = now >= expansion_available_at and not entry.allow_other_regions
-    if can_expand and entry.expansion_offered_at is None:
-        entry.expansion_offered_at = now
-        session.add(entry)
-        await session.flush()
     live_fields = await _waiting_room_live_fields(
         session,
         entry,
         current_user_id=current_user_id,
+    )
+    early_fields = await _early_start_payload_fields(
+        session,
+        entry,
+        people_waiting=people_waiting,
     )
     return {
         "in_queue": True,
@@ -912,6 +1200,7 @@ async def waiting_room_payload(
         "expansion_available_at": expansion_available_at.isoformat(),
         "partial_start_available_at": partial_start_available_at.isoformat(),
         **live_fields,
+        **early_fields,
     }
 
 
@@ -1134,35 +1423,44 @@ async def _mark_direct_chat_read(
     friend_id: str,
 ) -> datetime:
     now = utcnow()
-    state = await session.scalar(
-        select(DirectConversationRead).where(
-            DirectConversationRead.user_id == user_id,
-            DirectConversationRead.friend_id == friend_id,
-        )
-    )
-    if state is None:
-        state = DirectConversationRead(
-            user_id=user_id,
-            friend_id=friend_id,
-            last_read_at=now,
-        )
+    values = {
+        "id": str(uuid4()),
+        "user_id": user_id,
+        "friend_id": friend_id,
+        "last_read_at": now,
+    }
+    if session.get_bind().dialect.name == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert
     else:
-        state.last_read_at = now
-    session.add(state)
+        from sqlalchemy.dialects.sqlite import insert
+    statement = insert(DirectConversationRead).values(**values)
+    statement = statement.on_conflict_do_update(
+        index_elements=[DirectConversationRead.user_id, DirectConversationRead.friend_id],
+        set_={"last_read_at": now},
+    )
+    await session.execute(statement)
     await session.commit()
+    direct_message_hub.publish_read(
+        friend_id,
+        DirectChatReadPush(friend_id=user_id, read_at=now.isoformat()),
+    )
     return now
 
 
 async def _direct_chat_inbox_items(
     session: AsyncSession,
     user: User,
+    limit: int = 100,
 ) -> list[dict]:
     friend_ids = await _friend_ids_for_user(session, user.id)
+    friend_ids = friend_ids[: max(1, min(limit, 100))]
     if not friend_ids:
         return []
 
     friends = (
-        await session.execute(select(User).where(User.id.in_(friend_ids)))
+        await session.execute(
+            select(User).where(User.id.in_(friend_ids), User.is_active.is_(True))
+        )
     ).scalars().all()
     friends_by_id = {friend.id: friend for friend in friends}
 
@@ -1176,35 +1474,75 @@ async def _direct_chat_inbox_items(
     ).scalars().all()
     read_by_friend = {row.friend_id: row.last_read_at for row in read_rows}
 
+    conversation_keys = [
+        _direct_conversation_key(user.id, friend_id) for friend_id in friend_ids
+    ]
+
+    row_num = func.row_number().over(
+        partition_by=DirectMessage.conversation_key,
+        order_by=DirectMessage.created_at.desc(),
+    ).label("rn")
+    ranked = (
+        select(DirectMessage.id.label("message_id"), row_num)
+        .where(DirectMessage.conversation_key.in_(conversation_keys))
+        .subquery()
+    )
+    last_message_rows = (
+        await session.execute(
+            select(DirectMessage).join(
+                ranked,
+                and_(DirectMessage.id == ranked.c.message_id, ranked.c.rn == 1),
+            )
+        )
+    ).scalars().all()
+    last_message_by_key = {
+        message.conversation_key: message for message in last_message_rows
+    }
+
+    unread_count_exprs = []
+    unread_labels: list[str] = []
+    for friend_id in friend_ids:
+        conversation_key = _direct_conversation_key(user.id, friend_id)
+        unread_filters = [
+            DirectMessage.conversation_key == conversation_key,
+            DirectMessage.recipient_user_id == user.id,
+        ]
+        last_read_at = read_by_friend.get(friend_id)
+        if last_read_at is not None:
+            unread_filters.append(DirectMessage.created_at > last_read_at)
+        label = f"unread_{friend_id.replace('-', '_')}"
+        unread_labels.append(label)
+        unread_count_exprs.append(
+            func.sum(case((and_(*unread_filters), 1), else_=0)).label(label)
+        )
+
+    unread_row = (
+        await session.execute(
+            select(*unread_count_exprs).where(
+                DirectMessage.conversation_key.in_(conversation_keys),
+                DirectMessage.recipient_user_id == user.id,
+            )
+        )
+    ).one()
+    unread_by_friend = {
+        friend_id: int(unread_row._mapping[label] or 0)
+        for friend_id, label in zip(friend_ids, unread_labels)
+    }
+
     items: list[dict] = []
     for friend_id in friend_ids:
         friend = friends_by_id.get(friend_id)
         if friend is None:
             continue
         conversation_key = _direct_conversation_key(user.id, friend_id)
-        last_message = await session.scalar(
-            select(DirectMessage)
-            .where(DirectMessage.conversation_key == conversation_key)
-            .order_by(DirectMessage.created_at.desc())
-            .limit(1)
-        )
-        last_read_at = read_by_friend.get(friend_id)
-        unread_filters = [
-            DirectMessage.conversation_key == conversation_key,
-            DirectMessage.recipient_user_id == user.id,
-        ]
-        if last_read_at is not None:
-            unread_filters.append(DirectMessage.created_at > last_read_at)
-        unread_count = int(
-            await session.scalar(select(func.count()).where(*unread_filters)) or 0
-        )
+        last_message = last_message_by_key.get(conversation_key)
         items.append(
             {
                 "friend": _user_payload(friend),
                 "last_message": (
                     _direct_message_payload(last_message) if last_message else None
                 ),
-                "unread_count": unread_count,
+                "unread_count": unread_by_friend.get(friend_id, 0),
             }
         )
 
@@ -1280,6 +1618,83 @@ async def _require_active_group(
     return group
 
 
+async def _require_group_member_for_chat(
+    session: AsyncSession,
+    group_id: str,
+    user: User,
+) -> Group:
+    await _user_membership(session, group_id, user.id)
+    group = await session.get(Group, group_id)
+    if group is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Группа не найдена")
+    if group.status not in {"introduction", "rules_pending", "active"}:
+        raise HTTPException(
+            status_code=status.HTTP_423_LOCKED,
+            detail="Чат недоступен для этой группы",
+        )
+    return group
+
+
+async def _ensure_group_matrix_room(session: AsyncSession, group: Group) -> None:
+    if group.matrix_room_id:
+        return
+    users = (
+        await session.execute(
+            select(User)
+            .join(GroupMember, GroupMember.user_id == User.id)
+            .where(GroupMember.group_id == group.id, GroupMember.active.is_(True))
+            .order_by(
+                case((GroupMember.role == "creator", 0), else_=1),
+                GroupMember.created_at.asc(),
+            )
+        )
+    ).scalars().all()
+    users_with_matrix = [
+        member_user
+        for member_user in users
+        if member_user.matrix_user_id and member_user.matrix_access_token
+    ]
+    if not users or len(users_with_matrix) != len(users):
+        return
+    try:
+        group.matrix_room_id = await asyncio.wait_for(
+            create_room(
+                users[0],
+                users[1:],
+                f"PRIME: {skill_name(group.skill_id) or group.skill_id}",
+            ),
+            timeout=5,
+        )
+        session.add(group)
+        await session.flush()
+    except Exception:
+        pass
+
+
+async def _notify_group_chat_update(
+    session: AsyncSession,
+    *,
+    group_id: str,
+    exclude_user_id: str | None = None,
+) -> None:
+    from ..direct_message_events import GroupChatUpdatePush, direct_message_hub
+
+    filters = [
+        GroupMember.group_id == group_id,
+        GroupMember.active.is_(True),
+    ]
+    if exclude_user_id:
+        filters.append(GroupMember.user_id != exclude_user_id)
+    member_ids = (
+        await session.execute(select(GroupMember.user_id).where(*filters))
+    ).scalars().all()
+    for user_id in member_ids:
+        direct_message_hub.publish_group_chat_update(
+            user_id,
+            GroupChatUpdatePush(group_id=group_id),
+        )
+
+
 def _reaction_payloads(
     message_id: str,
     reactions: list[ChatMessageReaction],
@@ -1325,6 +1740,7 @@ def _chat_message_payload(
         "size_bytes": message.size_bytes,
         "duration_ms": message.duration_ms,
         "thumbnail_url": mxc_to_http(message.thumbnail_url),
+        "client_id": message.client_id,
         "reactions": _reaction_payloads(
             message.id,
             reactions or [],
@@ -1377,6 +1793,7 @@ async def _create_group_chat_message(
     size_bytes: int | None = None,
     duration_ms: int | None = None,
     thumbnail_url: str | None = None,
+    client_id: str | None = None,
 ) -> ChatMessage:
     content = {"msgtype": msgtype, "body": body}
     if url:
@@ -1394,7 +1811,20 @@ async def _create_group_chat_message(
     }
     if info:
         content["info"] = info
-    event_id = await send_room_message(user, group.matrix_room_id, content)
+    await _ensure_group_matrix_room(session, group)
+    event_id: str
+    if group.matrix_room_id:
+        if client_id:
+            event_id = await send_room_message(
+                user,
+                group.matrix_room_id,
+                content,
+                txn_id=f"prime-{user.id}-{client_id}",
+            )
+        else:
+            event_id = await send_room_message(user, group.matrix_room_id, content)
+    else:
+        event_id = f"local-{uuid4()}"
     message = ChatMessage(
         group_id=group.id,
         sender_user_id=user.id,
@@ -1408,6 +1838,7 @@ async def _create_group_chat_message(
         size_bytes=size_bytes,
         duration_ms=duration_ms,
         thumbnail_url=thumbnail_url,
+        client_id=client_id,
     )
     session.add(message)
     await session.flush()
@@ -1415,50 +1846,65 @@ async def _create_group_chat_message(
 
 
 async def _report_payload(session: AsyncSession, report: HabitReport) -> dict:
+    return (await _report_payloads(session, [report]))[0]
+
+
+async def _report_payloads(session: AsyncSession, reports: list[HabitReport]) -> list[dict]:
+    """Build report payloads with two batch queries instead of 2N queries."""
     from ..models import GroupDay
 
+    if not reports:
+        return []
+    report_ids = [report.id for report in reports]
     attachments = (
         await session.execute(
             select(ReportAttachment)
-            .where(ReportAttachment.report_id == report.id)
+            .where(ReportAttachment.report_id.in_(report_ids))
             .order_by(ReportAttachment.created_at.asc())
         )
     ).scalars().all()
-    group_day = await session.scalar(
-        select(GroupDay).where(
-            GroupDay.group_id == report.group_id,
-            GroupDay.day_date == report.report_date,
-        )
-    )
-    team_complete = group_day is not None and group_day.status == "complete"
-    personal_ready = report.status == "ready"
-    return {
-        "id": report.id,
-        "group_id": report.group_id,
-        "user_id": report.user_id,
-        "date": report.report_date.isoformat(),
-        "status": report.status,
-        "completed": team_complete,
-        "reported": personal_ready,
-        "prime_awarded": team_complete and personal_ready,
-        "content_text": report.content_text,
-        "support_given": report.support_given,
-        "attachments": [
-            {
-                "id": item.id,
-                "media_type": item.media_type,
-                "storage_url": item.url,
-                "mxc_url": item.url,
-                "url": mxc_to_http(item.url),
-                "filename": item.filename,
-                "content_type": item.content_type,
-                "size_bytes": item.size_bytes,
-                "duration_ms": item.duration_ms,
-                "thumbnail_url": mxc_to_http(item.thumbnail_url),
-            }
-            for item in attachments
-        ],
-    }
+    attachments_by_report: dict[str, list[ReportAttachment]] = {}
+    for item in attachments:
+        attachments_by_report.setdefault(item.report_id, []).append(item)
+    group_day_filters = [
+        and_(GroupDay.group_id == report.group_id, GroupDay.day_date == report.report_date)
+        for report in reports
+    ]
+    group_days = (await session.execute(select(GroupDay).where(or_(*group_day_filters)))).scalars().all()
+    complete_days = {(item.group_id, item.day_date) for item in group_days if item.status == "complete"}
+    payloads = []
+    for report in reports:
+        team_complete = (report.group_id, report.report_date) in complete_days
+        report_attachments = attachments_by_report.get(report.id, [])
+        personal_ready = report.status == "ready"
+        payloads.append({
+            "id": report.id,
+            "group_id": report.group_id,
+            "user_id": report.user_id,
+            "date": report.report_date.isoformat(),
+            "status": report.status,
+            "completed": team_complete,
+            "reported": personal_ready,
+            "prime_awarded": team_complete and personal_ready,
+            "content_text": report.content_text,
+            "support_given": report.support_given,
+            "attachments": [
+                {
+                    "id": item.id,
+                    "media_type": item.media_type,
+                    "storage_url": item.url,
+                    "mxc_url": item.url,
+                    "url": mxc_to_http(item.url),
+                    "filename": item.filename,
+                    "content_type": item.content_type,
+                    "size_bytes": item.size_bytes,
+                    "duration_ms": item.duration_ms,
+                    "thumbnail_url": mxc_to_http(item.thumbnail_url),
+                }
+                for item in report_attachments
+            ],
+        })
+    return payloads
 
 
 async def _sync_user_daily_progress(session: AsyncSession, user: User) -> None:
@@ -1470,5 +1916,3 @@ async def _sync_user_daily_progress(session: AsyncSession, user: User) -> None:
     user.successful_days = successful_days
     user.can_create_custom_skills = prime_total >= 10
     session.add(user)
-
-

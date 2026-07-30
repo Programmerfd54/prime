@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 
-import '../../design/glass.dart';
+import '../../design/theme/prime_theme_context.dart';
 import '../../design/tokens.dart';
 import '../../design/typography.dart';
 import '../../models/report.dart';
 import '../../design/visuals/habit_art.dart';
+import '../../ui/kit/components/prime_content_card.dart';
 import 'dashboard_helpers.dart';
 
 class ActiveChallengeCard extends StatelessWidget {
@@ -23,6 +24,7 @@ class ActiveChallengeCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = context.prime;
     final completed = (calendar?.days.where((day) => day.completed).length ?? 0)
         .clamp(0, dashboardChallengeDays);
     const total = dashboardChallengeDays;
@@ -30,11 +32,8 @@ class ActiveChallengeCard extends StatelessWidget {
     final accentKey = skillId.isNotEmpty ? skillId : skillName;
     final kind = habitArtKindFor(accentKey);
     final accent = habitArtAccent(kind);
-    return GlassContainer(
+    return PrimeContentCard(
       onTap: onOpen,
-      padding: const EdgeInsets.all(AppSpacing.md),
-      borderRadius: BorderRadius.circular(AppRadius.bentoOuter),
-      fillOpacity: 0.05,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -49,25 +48,23 @@ class ActiveChallengeCard extends StatelessWidget {
           const SizedBox(height: AppSpacing.sm),
           Row(
             children: [
-              HabitArtObject(kind: kind, size: 48),
-              const SizedBox(width: AppSpacing.sm),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(skillName, style: AppTypography.title2),
+                    Text(
+                      skillName,
+                      style: AppTypography.title2.copyWith(color: p.ink),
+                    ),
                     const SizedBox(height: AppSpacing.xxs),
                     Text(
                       'День $completed из $total',
-                      style: AppTypography.caption,
+                      style: AppTypography.caption.copyWith(color: p.inkMuted),
                     ),
                   ],
                 ),
               ),
-              Icon(
-                Icons.chevron_right,
-                color: AppColors.textMuted,
-              ),
+              Icon(Icons.chevron_right, color: p.inkMuted),
             ],
           ),
           const SizedBox(height: AppSpacing.md),
@@ -76,7 +73,7 @@ class ActiveChallengeCard extends StatelessWidget {
             child: LinearProgressIndicator(
               value: progress,
               minHeight: 6,
-              backgroundColor: AppColors.elevatedSurface,
+              backgroundColor: p.surfaceSoft,
               color: accent,
             ),
           ),
@@ -85,7 +82,7 @@ class ActiveChallengeCard extends StatelessWidget {
             alignment: Alignment.centerRight,
             child: Text(
               '${(progress * 100).round()}%',
-              style: AppTypography.caption,
+              style: AppTypography.caption.copyWith(color: p.inkMuted),
             ),
           ),
         ],

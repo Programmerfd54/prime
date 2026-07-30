@@ -87,8 +87,8 @@ class ChatMessageModel {
     String? currentUserId,
     DateTime? peerLastReadAt,
   }) {
-    final created = _parseDate(json['created_at']) ??
-        _fromTimestamp(json['timestamp']);
+    final created =
+        _parseDate(json['created_at']) ?? _fromTimestamp(json['timestamp']);
     final senderId = json['sender_user_id'] as String?;
     final localStatus = json['_status'] as String?;
     ChatDeliveryStatus? status;
@@ -100,16 +100,21 @@ class ChatMessageModel {
         (peerLastReadAt != null &&
             created != null &&
             senderId == currentUserId &&
+            currentUserId != null &&
             !created.isAfter(peerLastReadAt))) {
       status = ChatDeliveryStatus.read;
-    } else if (localStatus == 'sent' || json['id'] != null) {
+    } else if ((senderId == currentUserId &&
+            currentUserId != null &&
+            (localStatus == 'sent' || json['id'] != null)) ||
+        (currentUserId == null && json['id'] != null)) {
       status = ChatDeliveryStatus.sent;
     }
 
     final reactionsRaw = json['reactions'] as List<dynamic>? ?? const [];
     final reactions = reactionsRaw
         .whereType<Map>()
-        .map((item) => ChatReactionModel.fromJson(Map<String, dynamic>.from(item)))
+        .map((item) =>
+            ChatReactionModel.fromJson(Map<String, dynamic>.from(item)))
         .where((r) => r.emoji.isNotEmpty && r.count > 0)
         .toList();
 
@@ -143,7 +148,8 @@ class ChatMessageModel {
       editedAt: _parseDate(json['edited_at']),
       deleted: json['deleted'] as bool? ?? false,
       reactions: reactions,
-      readByPeer: json['read_by_peer'] as bool? ?? status == ChatDeliveryStatus.read,
+      readByPeer:
+          json['read_by_peer'] as bool? ?? status == ChatDeliveryStatus.read,
       deliveryStatus: status,
       senderMatrixId: json['sender'] as String?,
       senderProfile: senderProfile,

@@ -7,6 +7,8 @@ import '../../design/typography.dart';
 
 /// High-contrast pill CTA for editorial hero cards on colored backgrounds.
 class AppHeroButton extends StatelessWidget {
+  /// Fixed ink on white — must not follow [AppColors.textPrimary] (light in dark theme).
+  static const _onWhite = Color(0xFF1A1622);
   const AppHeroButton({
     super.key,
     required this.label,
@@ -54,9 +56,9 @@ class AppHeroButton extends StatelessWidget {
           child: loading
               ? SizedBox.square(
                   dimension: 20,
-                  child: CircularProgressIndicator(
+                  child: const CircularProgressIndicator(
                     strokeWidth: 2,
-                    color: AppColors.textPrimary,
+                    color: _onWhite,
                   ),
                 )
               : Row(
@@ -64,7 +66,7 @@ class AppHeroButton extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     if (icon != null) ...[
-                      Icon(icon, size: AppIconSizes.sm, color: AppColors.textPrimary),
+                      Icon(icon, size: AppIconSizes.sm, color: _onWhite),
                       const SizedBox(width: AppSpacing.xs),
                     ],
                     Flexible(
@@ -72,8 +74,7 @@ class AppHeroButton extends StatelessWidget {
                         label,
                         overflow: TextOverflow.ellipsis,
                         style: AppTypography.button.copyWith(
-                          color: AppColors.textPrimary,
-                          fontFamily: 'PlayfairDisplay',
+                          color: _onWhite,
                           fontWeight: FontWeight.w600,
                         ),
                       ),

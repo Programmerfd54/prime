@@ -109,7 +109,23 @@ def run_user_flow(base_url: str, users: int, concurrency: int) -> list[Result]:
             ),
         )
         results.append(result)
-        token = (register_body or {}).get("access_token")
+        # Register only creates a pending account; the token comes from
+        # verify-email, and ENABLE_DEV_TOOLS exposes the code to get there.
+        code = (register_body or {}).get("verification_code")
+        if not code:
+            return results
+
+        result, verify_body = timed(
+            "verify_email",
+            lambda: request_json(
+                base_url,
+                "POST",
+                "/auth/verify-email",
+                {"email": email, "code": code},
+            ),
+        )
+        results.append(result)
+        token = (verify_body or {}).get("access_token")
         if not token:
             return results
 
@@ -178,8 +194,24 @@ def run_friend_flow(base_url: str) -> list[Result]:
     )
     results.append(result)
 
-    a_token = (a or {}).get("access_token")
-    b_token = (b or {}).get("access_token")
+    def verify(label: str, nickname: str, register_body: Any) -> str | None:
+        code = (register_body or {}).get("verification_code")
+        if not code:
+            return None
+        result, body = timed(
+            label,
+            lambda: request_json(
+                base_url,
+                "POST",
+                "/auth/verify-email",
+                {"email": f"{nickname}@example.com", "code": code},
+            ),
+        )
+        results.append(result)
+        return (body or {}).get("access_token")
+
+    a_token = verify("friend_verify_a", a_nick, a)
+    b_token = verify("friend_verify_b", b_nick, b)
     if not a_token or not b_token:
         return results
 

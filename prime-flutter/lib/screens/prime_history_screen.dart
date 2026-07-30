@@ -3,14 +3,17 @@ import 'package:provider/provider.dart';
 
 import '../core/errors/failure_mapper.dart';
 import '../data/api_client.dart';
-import '../design/glass.dart';
 import '../design/motion.dart';
+import '../design/theme/prime_theme_context.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
+import '../l10n/copy.dart';
 import '../design/visuals/ambient_and_progress.dart';
 import '../design/visuals/charts/charts.dart';
 import '../providers/auth_provider.dart';
 import '../ui/components/app_header.dart';
+import '../ui/kit/components/prime_content_card.dart';
+import '../ui/kit/presentation/profile_surfaces.dart';
 import '../ui/states/app_loading_state.dart';
 import '../widgets/async_error_view.dart';
 
@@ -111,8 +114,9 @@ class _PrimeHistoryScreenState extends State<PrimeHistoryScreen> {
     final sparkline = _cumulativeSparkline();
     final breakdown = _reasonBreakdown();
 
+    final p = context.prime;
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: ProfileSurfaces.canvas,
       appBar: buildAppBackBar(context, title: 'История Праймов'),
       body: AmbientCanvas(
         child: Column(
@@ -128,33 +132,45 @@ class _PrimeHistoryScreenState extends State<PrimeHistoryScreen> {
               child: Wrap(
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
-                  Text('Баланс: ', style: AppTypography.bodySecondary),
+                  Text('Баланс: ', style: AppTypography.bodySecondary.copyWith(color: p.inkSecondary)),
                   PrimeAnimatedNumber(
                     value: balance,
                     style: AppTypography.bodySecondary.copyWith(
-                      color: AppColors.primarySoft,
+                      color: p.brandSoft,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
                   Text(
-                    ' · начисляются за засчитанные отчёты',
-                    style: AppTypography.bodySecondary,
+                    ' · начисляются за командные дни',
+                    style: AppTypography.bodySecondary.copyWith(color: p.inkSecondary),
                   ),
                 ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpacing.lg,
+                AppSpacing.sm,
+                AppSpacing.lg,
+                0,
+              ),
+              child: Text(
+                AppCopy.primesExplainer,
+                style: AppTypography.caption.copyWith(
+                  color: p.inkMuted,
+                  height: 1.35,
+                ),
               ),
             ),
             if (sparkline.length >= 2) ...[
               const SizedBox(height: AppSpacing.md),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
-                child: GlassContainer(
-                  padding: const EdgeInsets.all(AppSpacing.md),
-                  borderRadius: BorderRadius.circular(AppRadius.bentoOuter),
-                  fillOpacity: 0.05,
+                child: PrimeContentCard(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Накопление', style: AppTypography.titleSerif),
+                      Text('Накопление', style: AppTypography.titleSerif.copyWith(color: p.ink)),
                       const SizedBox(height: AppSpacing.xs),
                       PrimeNeonLineChart(
                         values: sparkline
@@ -172,14 +188,11 @@ class _PrimeHistoryScreenState extends State<PrimeHistoryScreen> {
               const SizedBox(height: AppSpacing.md),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
-                child: GlassContainer(
-                  padding: const EdgeInsets.all(AppSpacing.md),
-                  borderRadius: BorderRadius.circular(AppRadius.lg),
-                  fillOpacity: 0.04,
+                child: PrimeContentCard(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('За что чаще', style: AppTypography.titleSerif),
+                      Text('За что чаще', style: AppTypography.titleSerif.copyWith(color: p.ink)),
                       const SizedBox(height: AppSpacing.xs),
                       for (final entry in breakdown)
                         Padding(
@@ -190,13 +203,13 @@ class _PrimeHistoryScreenState extends State<PrimeHistoryScreen> {
                               Expanded(
                                 child: Text(
                                   entry.key,
-                                  style: AppTypography.bodySecondary,
+                                  style: AppTypography.bodySecondary.copyWith(color: p.inkSecondary),
                                 ),
                               ),
                               Text(
                                 '+${entry.value}',
                                 style: AppTypography.caption.copyWith(
-                                  color: AppColors.primarySoft,
+                                  color: p.brandSoft,
                                 ),
                               ),
                             ],
@@ -217,34 +230,28 @@ class _PrimeHistoryScreenState extends State<PrimeHistoryScreen> {
                           ? Center(
                               child: Padding(
                                 padding: const EdgeInsets.all(AppSpacing.lg),
-                                child: GlassContainer(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: AppSpacing.xl,
-                                    vertical: AppSpacing.lg,
-                                  ),
-                                  borderRadius: BorderRadius.circular(
-                                    AppRadius.bentoOuter,
-                                  ),
-                                  fillOpacity: 0.05,
+                                child: PrimeContentCard(
                                   child: Column(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
                                       Icon(
                                         Icons.auto_awesome_outlined,
                                         size: 48,
-                                        color: AppColors.primarySoft,
+                                        color: p.brandSoft,
                                       ),
                                       const SizedBox(height: AppSpacing.md),
                                       Text(
                                         'Пока нет начислений',
                                         textAlign: TextAlign.center,
-                                        style: AppTypography.titleSerif,
+                                        style: AppTypography.titleSerif.copyWith(color: p.ink),
                                       ),
                                       const SizedBox(height: AppSpacing.xs),
                                       Text(
                                         'Отправьте первый отчёт в группе.',
                                         textAlign: TextAlign.center,
-                                        style: AppTypography.bodySecondary,
+                                        style: AppTypography.bodySecondary.copyWith(
+                                          color: p.inkSecondary,
+                                        ),
                                       ),
                                     ],
                                   ),
@@ -307,18 +314,14 @@ class _EventTile extends StatelessWidget {
     final date = DateTime.tryParse(created);
     final prefix = amount >= 0 ? '+' : '';
 
-    return GlassContainer(
-      padding: const EdgeInsets.all(AppSpacing.md),
-      borderRadius: BorderRadius.circular(AppRadius.lg),
-      fillOpacity: 0.04,
+    final p = context.prime;
+    return PrimeContentCard(
       child: Row(
         children: [
           Text(
             '$prefix$amount',
             style: AppTypography.title2.copyWith(
-              color: amount >= 0
-                  ? AppColors.primarySoft
-                  : AppColors.coral,
+              color: amount >= 0 ? p.brandSoft : p.coral,
             ),
           ),
           const SizedBox(width: AppSpacing.md),
@@ -326,11 +329,11 @@ class _EventTile extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(reason, style: AppTypography.body),
+                Text(reason, style: AppTypography.body.copyWith(color: p.ink)),
                 if (date != null)
                   Text(
                     formatDate(date),
-                    style: AppTypography.caption,
+                    style: AppTypography.caption.copyWith(color: p.inkMuted),
                   ),
               ],
             ),

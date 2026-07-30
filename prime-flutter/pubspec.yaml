@@ -31,6 +31,7 @@ dependencies:
   shadcn_ui: ^0.56.0
   cupertino_icons: ^1.0.9
   flutter_animate: ^4.5.2
+  lucide_icons_flutter: ^3.0.9
 
 dev_dependencies:
   flutter_lints: ^6.0.0
@@ -53,24 +54,6 @@ flutter:
     - assets/avatars/demo/
     - assets/lottie/
   fonts:
-    - family: Poppins
-      fonts:
-        - asset: assets/fonts/Poppins-Light.ttf
-          weight: 300
-        - asset: assets/fonts/Poppins-Regular.ttf
-          weight: 400
-        - asset: assets/fonts/Poppins-Medium.ttf
-          weight: 500
-        - asset: assets/fonts/Poppins-SemiBold.ttf
-          weight: 600
     - family: Manrope
       fonts:
         - asset: assets/fonts/Manrope-Variable.ttf
-    - family: Unbounded
-      fonts:
-        - asset: assets/fonts/Unbounded-Variable.ttf
-    - family: PlayfairDisplay
-      fonts:
-        - asset: assets/fonts/PlayfairDisplay-Variable.ttf
-        - asset: assets/fonts/PlayfairDisplay-Italic-Variable.ttf
-          style: italic

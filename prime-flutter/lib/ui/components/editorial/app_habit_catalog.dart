@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
 
 import '../../../core/habits/habit_program_metadata.dart';
-import '../../../design/glass.dart';
 import '../../../design/haptics.dart';
 import '../../../design/pressable.dart';
+import '../../../design/theme/prime_theme_context.dart';
 import '../../../design/tokens.dart';
 import '../../../design/typography.dart';
 import '../../../design/visuals/charts/charts.dart';
@@ -501,12 +501,15 @@ class AppHabitBentoTile extends StatelessWidget {
     return PrimePressable(
       onTap: onTap,
       borderRadius: BorderRadius.circular(AppRadius.bentoOuter),
-      child: GlassContainer(
+      child: Container(
         height: height,
-        padding: EdgeInsets.zero,
-        borderRadius: BorderRadius.circular(AppRadius.bentoOuter),
-        fillOpacity: 0.04,
-        child: Stack(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(AppRadius.bentoOuter),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(AppRadius.bentoOuter),
+          child: Stack(
           fit: StackFit.expand,
           children: [
             ClipRRect(
@@ -570,6 +573,7 @@ class AppHabitBentoTile extends StatelessWidget {
               ),
             ),
           ],
+          ),
         ),
       ),
     );

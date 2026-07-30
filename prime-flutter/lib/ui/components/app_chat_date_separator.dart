@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../../design/glass.dart';
+import '../../design/theme/prime_theme_context.dart';
 import '../../design/tokens.dart';
 import '../../design/typography.dart';
 
@@ -46,17 +46,21 @@ class _DateChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GlassContainer(
+    final p = context.prime;
+    return Container(
       padding: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.md,
+        horizontal: AppSpacing.sm,
         vertical: AppSpacing.xxs,
       ),
-      borderRadius: BorderRadius.circular(AppRadius.pill),
-      fillOpacity: 0.06,
+      decoration: BoxDecoration(
+        color: p.surfaceSoft,
+        borderRadius: BorderRadius.circular(AppRadius.pill),
+        border: Border.all(color: p.hairline, width: 0.5),
+      ),
       child: Text(
         label,
         style: AppTypography.caption.copyWith(
-          color: AppColors.textSecondary,
+          color: p.inkMuted,
           fontWeight: FontWeight.w600,
         ),
       ),

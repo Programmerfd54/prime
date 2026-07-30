@@ -199,9 +199,13 @@ async def _upsert_user(
             age=age,
             profile_completed=profile_completed,
             onboarding_preferences=prefs,
+            # Seeded accounts skip the email confirmation step so they can log in.
+            email_verified_at=datetime.now(timezone.utc),
         )
         session.add(user)
     else:
+        if user.email_verified_at is None:
+            user.email_verified_at = datetime.now(timezone.utc)
         user.nickname = nickname
         user.name = name
         user.about = about

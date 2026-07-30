@@ -1,0 +1,10 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "The user explicitly keeps the local development .env in this handoff; production secrets must never use it."
+paths = [
+  '''(^|/)prime-backend/\.env$''',
+  '''(^|/)prime-backend/logs/''',
+  '''(^|/)prime-backend/uploads/'''
+]

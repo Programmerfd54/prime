@@ -19,25 +19,61 @@ abstract final class MessageDedupe {
   }) {
     var added = false;
     final indexById = <String, int>{};
+    final indexByClientId = <String, int>{};
     for (var i = 0; i < existing.length; i++) {
       final id = idOf(existing[i]);
       if (id != null) indexById[id] = i;
+      final clientId = existing[i]['client_id']?.toString();
+      if (clientId != null && clientId.isNotEmpty) {
+        indexByClientId[clientId] = i;
+      }
     }
 
     for (final msg in incoming) {
       final id = idOf(msg);
-      if (id != null && indexById.containsKey(id)) {
-        existing[indexById[id]!] = msg;
+      final clientId = msg['client_id']?.toString();
+      final existingIndex = (id != null && indexById.containsKey(id))
+          ? indexById[id]
+          : (clientId != null && indexByClientId.containsKey(clientId))
+              ? indexByClientId[clientId]
+              : null;
+      if (existingIndex != null) {
+        existing[existingIndex] = _mergePreferLocalStatus(
+          existing[existingIndex],
+          msg,
+        );
         continue;
       }
       existing.add(msg);
       if (id != null) indexById[id] = existing.length - 1;
+      if (clientId != null && clientId.isNotEmpty) {
+        indexByClientId[clientId] = existing.length - 1;
+      }
       added = true;
     }
 
     final key = sortKey ?? _defaultSortKey;
     existing.sort((a, b) => key(a).compareTo(key(b)));
     return added;
+  }
+
+  static Map<String, dynamic> _mergePreferLocalStatus(
+    Map<String, dynamic> local,
+    Map<String, dynamic> incoming,
+  ) {
+    final localStatus = local['_status'] as String?;
+    if (localStatus == OutboundMessageStatus.failed.name) {
+      return {
+        ...incoming,
+        '_status': localStatus,
+        if (local['_error'] != null) '_error': local['_error'],
+      };
+    }
+    if (localStatus == OutboundMessageStatus.sending.name &&
+        incoming['id'] == null) {
+      return local;
+    }
+    return incoming;
   }
 
   static Comparable _defaultSortKey(Map<String, dynamic> m) {
@@ -84,7 +120,6 @@ class OutboundMessage {
 
   Map<String, dynamic> asLocalBubble({required String senderUserId}) {
     return {
-      'id': clientId,
       'client_id': clientId,
       'body': body,
       'msgtype': msgtype,

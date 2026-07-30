@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/habits/habit_program_metadata.dart';
 import '../../../core/onboarding/onboarding_preferences.dart';
-import '../../../design/glass.dart';
+import '../../../design/theme/prime_theme_context.dart';
 import '../../../design/haptics.dart';
 import '../../../design/lottie_registry.dart';
 import '../../../design/motion.dart';
@@ -11,10 +11,17 @@ import '../../../design/typography.dart';
 import '../../../design/visuals/charts/charts.dart';
 import '../../../design/visuals/gauges/gauges.dart';
 import '../../../design/visuals/habit_art.dart';
+import '../../../l10n/copy.dart';
 import '../../../models/skill.dart';
 import '../app_chip.dart';
+import '../../kit/components/prime_content_card.dart';
 
 export 'onboarding_rhythm_chart.dart';
+
+/// V6 onboarding copy — re-exports [AppCopy.cycleContinuationFootnote].
+abstract final class OnboardingCopy {
+  static const cycleContinuationFootnote = AppCopy.cycleContinuationFootnote;
+}
 
 /// Interactive widgets for the 8-step onboarding flow.
 
@@ -101,14 +108,13 @@ class OnboardingInsightCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GlassContainer(
-      padding: const EdgeInsets.all(AppSpacing.md),
-      borderRadius: BorderRadius.circular(AppRadius.lg),
+    final p = context.prime;
+    return PrimeContentCard(
       child: Text(
         'Вы начинали $_attemptLabel и бросали $_quitLabel. '
         'Обычно ритм ломается на 5–7 день — там и нужна команда.',
         style: AppTypography.bodySecondary.copyWith(
-          color: AppColors.textPrimary,
+          color: p.inkSecondary,
           height: 1.4,
         ),
       ),
@@ -156,24 +162,27 @@ class OnboardingProgramPicker extends StatelessWidget {
                 popularity: 0,
               ),
             );
-            return GlassContainer(
-              padding: EdgeInsets.zero,
-              borderRadius: BorderRadius.circular(AppRadius.lg),
-              fillOpacity: selected ? 0.06 : 0.03,
-              glow: selected
-                  ? [
-                      BoxShadow(
-                        color: accent.withValues(alpha: 0.28),
-                        blurRadius: 14,
-                        offset: const Offset(0, 4),
-                      ),
-                    ]
-                  : null,
-              onTap: () {
-                AppHaptics.selection();
-                onSelected(item.skillId);
-              },
-              child: AnimatedOpacity(
+            return AnimatedContainer(
+              duration: AppDurations.fast,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(AppRadius.lg),
+                boxShadow: selected
+                    ? [
+                        BoxShadow(
+                          color: accent.withValues(alpha: 0.28),
+                          blurRadius: 14,
+                          offset: const Offset(0, 4),
+                        ),
+                      ]
+                    : null,
+              ),
+              child: PrimeContentCard(
+                padding: EdgeInsets.zero,
+                onTap: () {
+                  AppHaptics.selection();
+                  onSelected(item.skillId);
+                },
+                child: AnimatedOpacity(
                 duration: AppDurations.fast,
                 opacity: selectedSkillId == null || selected ? 1 : 0.72,
                 child: ClipRRect(
@@ -249,7 +258,8 @@ class OnboardingProgramPicker extends StatelessWidget {
                   ),
                 ),
               ),
-            );
+            ),
+          );
           },
         ),
         const SizedBox(height: AppSpacing.md),
@@ -399,12 +409,11 @@ class _OnboardingDayFlowState extends State<OnboardingDayFlow>
           ),
         ),
         const SizedBox(height: AppSpacing.sm),
-        GlassContainer(
-      padding: const EdgeInsets.all(AppSpacing.md),
-      borderRadius: BorderRadius.circular(AppRadius.xl),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
+        PrimeContentCard(
+          padding: const EdgeInsets.all(AppSpacing.md),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
           Row(
             children: [
               ClipRRect(
@@ -469,7 +478,7 @@ class _OnboardingDayFlowState extends State<OnboardingDayFlow>
             style: AppTypography.caption.copyWith(color: AppColors.textMuted),
           ),
         ],
-      ),
+          ),
         ),
       ],
     );
@@ -495,10 +504,9 @@ class _DayStep extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GlassContainer(
+    final p = context.prime;
+    return PrimeContentCard(
       padding: const EdgeInsets.all(AppSpacing.sm),
-      borderRadius: BorderRadius.circular(AppRadius.md),
-      fillOpacity: active ? 0.06 : 0.03,
       child: Row(
         children: [
           Transform.scale(
@@ -509,13 +517,13 @@ class _DayStep extends StatelessWidget {
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 color: active
-                    ? AppColors.primary.withValues(alpha: 0.25)
-                    : AppColors.elevatedSurface,
+                    ? p.brand.withValues(alpha: 0.25)
+                    : p.surfaceSoft,
               ),
               child: Icon(
                 active ? Icons.check_rounded : icon,
                 size: 18,
-                color: active ? AppColors.mint : AppColors.textMuted,
+                color: active ? p.mint : p.inkMuted,
               ),
             ),
           ),
@@ -527,7 +535,7 @@ class _DayStep extends StatelessWidget {
                 Text(
                   '$index. $title',
                   style: AppTypography.caption.copyWith(
-                    color: AppColors.textPrimary,
+                    color: p.ink,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
@@ -535,7 +543,7 @@ class _DayStep extends StatelessWidget {
                   subtitle,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: AppTypography.caption,
+                  style: AppTypography.caption.copyWith(color: p.inkMuted),
                 ),
               ],
             ),
@@ -780,16 +788,14 @@ class _OnboardingMetricsPreviewState extends State<OnboardingMetricsPreview> {
           ],
         ),
         const SizedBox(height: AppSpacing.md),
-        GlassContainer(
-          padding: const EdgeInsets.all(AppSpacing.md),
-          borderRadius: BorderRadius.circular(AppRadius.lg),
+        PrimeContentCard(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
                 'К 30 дню',
                 style: AppTypography.caption.copyWith(
-                  color: AppColors.primarySoft,
+                  color: context.prime.brandSoft,
                   fontWeight: FontWeight.w700,
                 ),
               ),
@@ -797,7 +803,7 @@ class _OnboardingMetricsPreviewState extends State<OnboardingMetricsPreview> {
               Text(
                 _outcome,
                 style: AppTypography.bodySecondary.copyWith(
-                  color: AppColors.textPrimary,
+                  color: context.prime.ink,
                 ),
               ),
             ],
@@ -920,20 +926,24 @@ class OnboardingGoalPicker extends StatelessWidget {
             final isSelected = selected.contains(goal);
             final atMax = !isSelected && selected.length >= maxSelections;
 
-            return GlassContainer(
-              padding: const EdgeInsets.all(AppSpacing.sm),
-              borderRadius: BorderRadius.circular(AppRadius.lg),
-              fillOpacity: isSelected ? 0.12 : 0.04,
-              glow: isSelected ? AppGlow.violet(opacity: 0.22) : null,
-              onTap: atMax
-                  ? null
-                  : () {
-                      if (!isSelected && selected.length >= maxSelections) {
-                        return;
-                      }
-                      onToggle(goal);
-                    },
-              child: AnimatedOpacity(
+            return AnimatedContainer(
+              duration: AppDurations.fast,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(AppRadius.lg),
+                boxShadow:
+                    isSelected ? AppGlow.violet(opacity: 0.22) : null,
+              ),
+              child: PrimeContentCard(
+                padding: const EdgeInsets.all(AppSpacing.sm),
+                onTap: atMax
+                    ? null
+                    : () {
+                        if (!isSelected && selected.length >= maxSelections) {
+                          return;
+                        }
+                        onToggle(goal);
+                      },
+                child: AnimatedOpacity(
                 duration: AppDurations.fast,
                 opacity: atMax ? 0.45 : 1,
                 child: Column(
@@ -981,7 +991,8 @@ class OnboardingGoalPicker extends StatelessWidget {
                   ],
                 ),
               ),
-            );
+            ),
+          );
           },
         ),
         const SizedBox(height: AppSpacing.md),
@@ -994,9 +1005,8 @@ class OnboardingGoalPicker extends StatelessWidget {
         ),
         if (selected.isNotEmpty) ...[
           const SizedBox(height: AppSpacing.sm),
-          GlassContainer(
+          PrimeContentCard(
             padding: const EdgeInsets.all(AppSpacing.sm),
-            borderRadius: BorderRadius.circular(AppRadius.md),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -1032,10 +1042,8 @@ class OnboardingSummaryCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final kind = habitArtKindFor(skillId);
-    return GlassContainer(
+    return PrimeContentCard(
       padding: const EdgeInsets.all(AppSpacing.lg),
-      borderRadius: BorderRadius.circular(AppRadius.xl),
-      width: double.infinity,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1071,6 +1079,14 @@ class OnboardingSummaryCard extends StatelessWidget {
           Text(
             '30 дней · команда из 6 · ежедневный отчёт',
             style: AppTypography.caption,
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          Text(
+            OnboardingCopy.cycleContinuationFootnote,
+            style: AppTypography.caption.copyWith(
+              color: AppColors.textSecondary,
+              height: 1.45,
+            ),
           ),
           const SizedBox(height: AppSpacing.md),
           Text(

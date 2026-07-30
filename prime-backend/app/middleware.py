@@ -59,4 +59,10 @@ async def security_headers_middleware(
         "Strict-Transport-Security",
         "max-age=31536000; includeSubDomains",
     )
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+    )
+    response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+    response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
     return response

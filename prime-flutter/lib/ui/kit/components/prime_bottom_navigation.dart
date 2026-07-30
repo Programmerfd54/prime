@@ -4,6 +4,7 @@ import 'package:flutter/physics.dart';
 import '../../../design/haptics.dart';
 import '../../../design/liquid/liquid_glass.dart';
 import '../../../design/motion.dart';
+import '../../../design/prime/prime_glass_v5.dart';
 import '../../../design/theme/prime_theme_context.dart';
 import '../../../design/tokens.dart';
 import '../../components/app_bottom_navigation.dart';
@@ -209,12 +210,10 @@ class _SelectionPill extends StatelessWidget {
     return IgnorePointer(
       child: DecoratedBox(
         decoration: BoxDecoration(
-          color: p.isDark
-              ? Colors.white.withValues(alpha: 0.88)
-              : Colors.white.withValues(alpha: 0.92),
+          color: PrimeGlassV5.dockSelectionFill(p.brand, isDark: p.isDark),
           borderRadius: BorderRadius.circular(radius),
           border: Border.all(
-            color: Colors.white.withValues(alpha: p.isDark ? 0.95 : 1.0),
+            color: PrimeGlassV5.dockSelectionBorder(p.brand, isDark: p.isDark),
             width: 1,
           ),
           boxShadow: [

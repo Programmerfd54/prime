@@ -31,19 +31,6 @@ class AppAvatar extends StatelessWidget {
     final hasAsset = assetPath != null && assetPath!.isNotEmpty;
     final hasNetwork = url != null;
 
-    DecorationImage? image;
-    if (hasAsset) {
-      image = DecorationImage(
-        image: AssetImage(assetPath!),
-        fit: BoxFit.cover,
-      );
-    } else if (hasNetwork) {
-      image = DecorationImage(
-        image: NetworkImage(url),
-        fit: BoxFit.cover,
-      );
-    }
-
     Widget avatar = Container(
       key: ValueKey(assetPath ?? photoUrl ?? 'empty'),
       width: radius * 2,
@@ -52,20 +39,35 @@ class AppAvatar extends StatelessWidget {
         shape: BoxShape.circle,
         color: AppColors.surfaceSoft,
         border: Border.all(color: AppColors.borderStrong),
-        image: image,
       ),
-      child: image == null
-          ? Center(
-              child: Text(
-                initial,
-                style: AppTypography.title2.copyWith(
-                  fontSize: radius * 0.72,
-                  color: AppColors.textSecondary,
-                  fontWeight: FontWeight.w600,
+      clipBehavior: Clip.antiAlias,
+      child: hasAsset
+          ? Image.asset(assetPath!, fit: BoxFit.cover)
+          : hasNetwork
+              ? Image.network(
+                  url!,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => Center(
+                    child: Text(
+                      initial,
+                      style: AppTypography.title2.copyWith(
+                        fontSize: radius * 0.72,
+                        color: AppColors.textSecondary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                )
+              : Center(
+                  child: Text(
+                    initial,
+                    style: AppTypography.title2.copyWith(
+                      fontSize: radius * 0.72,
+                      color: AppColors.textSecondary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                 ),
-              ),
-            )
-          : null,
     );
 
     if (showEditBadge) {

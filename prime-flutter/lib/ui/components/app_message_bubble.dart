@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 
+import '../../design/theme/prime_theme_context.dart';
 import '../../design/tokens.dart';
 import '../../design/typography.dart';
 import '../../models/chat_message.dart';
 import 'app_text_button.dart';
 
-/// Chat bubble for direct / group messages.
-/// Outbound uses soft purple [AppColors.bubbleOutbound], not bright primary fill.
+/// Chat bubble for direct / group messages — Telegram-inspired tails.
 class AppMessageBubble extends StatelessWidget {
   const AppMessageBubble({
     super.key,
@@ -35,25 +35,28 @@ class AppMessageBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = context.prime;
     final radius = BorderRadius.only(
-      topLeft: const Radius.circular(AppRadius.md),
-      topRight: const Radius.circular(AppRadius.md),
-      bottomLeft: Radius.circular(isMine ? AppRadius.md : (isLastInGroup ? AppRadius.sm : AppRadius.md)),
-      bottomRight: Radius.circular(isMine ? (isLastInGroup ? AppRadius.sm : AppRadius.md) : AppRadius.md),
+      topLeft: const Radius.circular(18),
+      topRight: const Radius.circular(18),
+      bottomLeft: Radius.circular(isMine ? 18 : (isLastInGroup ? 6 : 18)),
+      bottomRight: Radius.circular(isMine ? (isLastInGroup ? 6 : 18) : 18),
     );
 
     return Align(
       alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.75),
+        padding: const EdgeInsets.fromLTRB(14, 10, 12, 8),
+        constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.76),
         decoration: BoxDecoration(
-          color: isMine ? AppColors.bubbleOutbound : AppColors.bubbleInbound,
+          color: isMine
+              ? p.bubbleOutbound.withValues(alpha: 0.95)
+              : p.bubbleInbound,
           borderRadius: radius,
           border: Border.all(
             color: isMine
-                ? AppColors.primary.withValues(alpha: 0.18)
-                : AppColors.border,
+                ? p.brand.withValues(alpha: 0.22)
+                : p.hairline,
           ),
         ),
         child: Column(
@@ -92,25 +95,38 @@ class AppMessageBubble extends StatelessWidget {
                   style: AppTypography.caption.copyWith(color: AppColors.textSecondary),
                 ),
               ),
-            Text(text, style: AppTypography.body.copyWith(color: AppColors.textPrimary)),
-            if (isLastInGroup && !failed && (timeLabel != null || status != null || statusLabel != null))
+            Text(
+              text,
+              style: AppTypography.body.copyWith(
+                color: p.ink,
+                height: 1.35,
+              ),
+            ),
+            if (!failed && (timeLabel != null || status != null || statusLabel != null))
               Padding(
-                padding: const EdgeInsets.only(top: AppSpacing.xxs),
+                padding: const EdgeInsets.only(top: 4),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     if (timeLabel != null && timeLabel!.isNotEmpty)
                       Text(
                         timeLabel!,
-                        style: AppTypography.caption.copyWith(fontSize: 11, color: AppColors.textMuted),
+                        style: AppTypography.caption.copyWith(
+                          fontSize: 11,
+                          color: p.inkMuted,
+                        ),
                       ),
-                    if (status != null) ...[
-                      if (timeLabel != null && timeLabel!.isNotEmpty) const SizedBox(width: 4),
-                      _InlineStatusIcon(status: status!),
+                    if (isMine && status != null) ...[
+                      if (timeLabel != null && timeLabel!.isNotEmpty)
+                        const SizedBox(width: 4),
+                      _StatusTicks(status: status!),
                     ] else if (statusLabel != null && statusLabel!.isNotEmpty) ...[
                       if (timeLabel != null && timeLabel!.isNotEmpty)
                         Text(' · ', style: AppTypography.caption.copyWith(fontSize: 11)),
-                      Text(statusLabel!, style: AppTypography.caption.copyWith(fontSize: 11)),
+                      Text(
+                        statusLabel!,
+                        style: AppTypography.caption.copyWith(fontSize: 11),
+                      ),
                     ],
                   ],
                 ),
@@ -124,19 +140,22 @@ class AppMessageBubble extends StatelessWidget {
   }
 }
 
-class _InlineStatusIcon extends StatelessWidget {
-  const _InlineStatusIcon({required this.status});
+class _StatusTicks extends StatelessWidget {
+  const _StatusTicks({required this.status});
 
   final ChatDeliveryStatus status;
 
   @override
   Widget build(BuildContext context) {
+    final color = status == ChatDeliveryStatus.read
+        ? AppColors.primarySoft
+        : AppColors.textMuted;
     if (status == ChatDeliveryStatus.sending) {
-      return Icon(Icons.schedule, size: 13, color: AppColors.textMuted);
+      return Icon(Icons.schedule, size: 13, color: color);
     }
     if (status == ChatDeliveryStatus.read) {
-      return Icon(Icons.done_all_rounded, size: 14, color: AppColors.primarySoft);
+      return Icon(Icons.done_all_rounded, size: 14, color: color);
     }
-    return Icon(Icons.check_rounded, size: 14, color: AppColors.textMuted);
+    return Icon(Icons.check_rounded, size: 14, color: color);
   }
 }

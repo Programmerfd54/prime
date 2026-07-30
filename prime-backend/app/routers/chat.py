@@ -5,13 +5,16 @@ import mimetypes
 from pathlib import Path as FsPath
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from sqlalchemy import case, delete, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
 from ..db import get_session
 from ..deps import get_current_user
+from ..media import read_upload
+from ..pagination import decode_cursor, encode_cursor
 from ..matrix import (
     create_room,
     download_media,
@@ -77,6 +80,8 @@ from .group_service import (
     _reaction_payloads,
     _report_payload,
     _require_active_group,
+    _require_group_member_for_chat,
+    _notify_group_chat_update,
     _sync_user_daily_progress,
     _team_pulse,
     _user_membership,
@@ -89,20 +94,34 @@ router = APIRouter(tags=["chat"])
 @router.get("/chat/{group_id}/messages")
 async def chat_messages(
     group_id: str,
-    before: datetime | None = None,
+    before: str | None = None,
     limit: int = Query(default=50, ge=1, le=100),
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _require_active_group(session, group_id, user)
+    await _require_group_member_for_chat(session, group_id, user)
     filters = [ChatMessage.group_id == group_id]
-    if before is not None:
-        filters.append(ChatMessage.created_at < before)
+    before_created_at = None
+    before_id = None
+    if before:
+        try:
+            before_created_at, before_id = decode_cursor(before)
+        except ValueError:
+            try:
+                before_created_at = datetime.fromisoformat(before)
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail="Некорректный курсор") from error
+        filters.append(
+            or_(
+                ChatMessage.created_at < before_created_at,
+                (ChatMessage.created_at == before_created_at) & (ChatMessage.id < (before_id or "")),
+            )
+        )
     messages = (
         await session.execute(
             select(ChatMessage)
             .where(*filters)
-            .order_by(ChatMessage.created_at.desc())
+            .order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc())
             .limit(limit + 1)
         )
     ).scalars().all()
@@ -111,7 +130,7 @@ async def chat_messages(
     return {
         "messages": await _chat_payloads(session, page, user.id),
         "has_more": has_more,
-        "next_before": page[0].created_at.isoformat() if has_more and page else None,
+        "next_before": encode_cursor(page[0].created_at, page[0].id) if has_more and page else None,
     }
 
 
@@ -137,15 +156,34 @@ async def chat_send_message_new(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    group = await _require_active_group(session, group_id, user)
+    group = await _require_group_member_for_chat(session, group_id, user)
     body = str(payload.get("body") or "").strip()
     msgtype = str(payload.get("msgtype") or "m.text")
     url = payload.get("url")
     allowed_types = {"m.text", "m.image", "m.video", "m.audio", "m.file", "prime.video_note"}
     if msgtype not in allowed_types:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неподдерживаемый тип сообщения")
+    if group.status in {"introduction", "rules_pending"}:
+        if msgtype != "m.text" or url:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="На этапе подтверждения доступны только текстовые сообщения",
+            )
     if not body and not url:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Сообщение пустое")
+    client_id = str(payload.get("client_id") or "").strip() or None
+    if client_id is not None and len(client_id) > 64:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="client_id слишком длинный")
+
+    if client_id is not None:
+        existing = await session.scalar(
+            select(ChatMessage).where(
+                ChatMessage.sender_user_id == user.id,
+                ChatMessage.client_id == client_id,
+            )
+        )
+        if existing is not None:
+            return _chat_message_payload(existing, user)
 
     message = await _create_group_chat_message(
         session,
@@ -159,9 +197,25 @@ async def chat_send_message_new(
         size_bytes=int(payload["size_bytes"]) if payload.get("size_bytes") is not None else None,
         duration_ms=int(payload["duration_ms"]) if payload.get("duration_ms") is not None else None,
         thumbnail_url=str(payload.get("thumbnail_url") or "") or None,
+        client_id=client_id,
     )
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        if client_id is None:
+            raise
+        existing = await session.scalar(
+            select(ChatMessage).where(
+                ChatMessage.sender_user_id == user.id,
+                ChatMessage.client_id == client_id,
+            )
+        )
+        if existing is None:
+            raise
+        return _chat_message_payload(existing, user)
     await session.refresh(message)
+    await _notify_group_chat_update(session, group_id=group.id, exclude_user_id=user.id)
     return _chat_message_payload(message, user)
 
 
@@ -239,6 +293,7 @@ async def chat_send_image(
         "body": "зображение",
         "msgtype": "m.image",
         "url": payload.get("mxc_url"),
+        "client_id": payload.get("client_id"),
     }
     return await chat_send_message_new(str(payload.get("group_id") or ""), data, user, session)
 
@@ -247,20 +302,40 @@ async def chat_send_image(
 async def chat_upload_media(
     file: UploadFile = File(...),
     group_id: str = Form(...),
+    request: Request = None,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     await _require_active_group(session, group_id, user)
+    if request is not None:
+        from ..rate_limit import enforce as enforce_rate_limit
+        from ..rate_limit import record_failure as record_rate_limit_failure
+        settings = get_settings()
+        keys = (
+            f"upload:group:user:{user.id}",
+            f"upload:group:ip:{request.client.host if request.client else 'unknown'}",
+        )
+        for key in keys:
+            await enforce_rate_limit(session, key, limit=settings.upload_rate_limit_attempts, window_seconds=settings.upload_rate_limit_window_seconds, detail="Слишком много загрузок. Попробуйте позже.")
+        for key in keys:
+            await record_rate_limit_failure(session, key, window_seconds=settings.upload_rate_limit_window_seconds)
     user = await ensure_matrix_user(user, session)
-    content = await file.read(MAX_MEDIA_BYTES + 1)
+    declared_type = (file.content_type or "").lower()
+    read_limit = (
+        MAX_GROUP_IMAGE_BYTES
+        if declared_type.startswith("image/")
+        else MAX_GROUP_FILE_BYTES if declared_type in ALLOWED_DOCUMENT_TYPES else MAX_MEDIA_BYTES
+    )
+    content, content_type, filename = await read_upload(
+        file,
+        max_bytes=read_limit,
+        max_image_bytes=MAX_GROUP_IMAGE_BYTES,
+        allow_types=ALLOWED_DOCUMENT_TYPES,
+    )
     if not content:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Файл пустой")
     if len(content) > MAX_MEDIA_BYTES:
         raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Файл больше 100 МБ")
-    filename = file.filename or f"{uuid4().hex}.bin"
-    content_type = file.content_type or "application/octet-stream"
-    if content_type == "application/octet-stream":
-        content_type = mimetypes.guess_type(filename)[0] or content_type
     is_image = content_type.startswith("image/")
     is_document = content_type in ALLOWED_DOCUMENT_TYPES
     if not content_type.startswith(ALLOWED_MEDIA_PREFIXES) and not is_document:
@@ -275,7 +350,7 @@ async def chat_upload_media(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail="Файл слишком большой. Максимальный размер — 25 МБ",
         )
-    mxc_url = await upload_media(user, filename, content_type, content)
+    mxc_url = await upload_media(user, session, filename, content_type, content, "group", group_id)
     await session.commit()
     return {
         "mxc_url": mxc_url,
@@ -284,5 +359,3 @@ async def chat_upload_media(
         "content_type": content_type,
         "size_bytes": len(content),
     }
-
-

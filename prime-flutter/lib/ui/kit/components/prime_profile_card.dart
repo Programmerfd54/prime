@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/media/media_urls.dart';
 import '../../../design/tokens.dart';
 import '../../../design/theme/prime_theme_context.dart';
 import '../tokens/kit_typography.dart';
@@ -70,9 +71,10 @@ class _PrimeProfileCardState extends State<PrimeProfileCard> {
                       child: CircleAvatar(
                         radius: 36,
                         backgroundColor: p.surfaceElevated,
-                        backgroundImage: widget.photoUrl != null
-                            ? NetworkImage(widget.photoUrl!)
-                            : null,
+                        backgroundImage: () {
+                          final url = absolutePhotoUrl(widget.photoUrl);
+                          return url != null ? NetworkImage(url) : null;
+                        }(),
                         child: widget.photoUrl == null
                             ? Text(
                                 widget.name.isNotEmpty

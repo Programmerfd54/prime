@@ -8,15 +8,18 @@ from uuid import uuid4
 from urllib.parse import quote
 
 import httpx
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import get_settings
-from .models import User
+from .models import LocalMediaAsset, User
+from .secret_box import decrypt_secret, encrypt_secret
 
 
 logger = logging.getLogger("prime.matrix")
 _matrix_semaphore = asyncio.Semaphore(1)
 _matrix_retry_attempts = 3
+MAX_MATRIX_DOWNLOAD_BYTES = 100 * 1024 * 1024
 
 
 def _settings():
@@ -25,7 +28,12 @@ def _settings():
 
 def matrix_available() -> bool:
     settings = _settings()
-    return bool(settings.matrix_enabled and settings.matrix_shared_secret)
+    return bool(
+        settings.matrix_enabled
+        and settings.matrix_shared_secret
+        and settings.matrix_token_encryption_key
+        and settings.matrix_password_secret
+    )
 
 
 def _matrix_retry_delay(response: httpx.Response, attempt: int) -> float:
@@ -50,8 +58,36 @@ def _localpart(user: User) -> str:
 
 def _password(user: User) -> str:
     settings = _settings()
-    raw = f"{settings.jwt_secret_key}:{user.id}:matrix".encode()
+    raw = f"{settings.matrix_password_secret}:{user.id}:matrix".encode()
     return hashlib.sha256(raw).hexdigest()
+
+
+def _access_token(user: User) -> str | None:
+    return decrypt_secret(user.matrix_access_token)
+
+
+def _set_access_token(user: User, token: str | None) -> None:
+    user.matrix_access_token = encrypt_secret(token) if token else None
+
+
+async def migrate_legacy_tokens(session: AsyncSession) -> int:
+    """Encrypt pre-existing plaintext Matrix tokens once a key is configured."""
+    if not _settings().matrix_token_encryption_key:
+        return 0
+    rows = (
+        await session.execute(
+            select(User).where(
+                User.matrix_access_token.is_not(None),
+                ~User.matrix_access_token.startswith("v1:"),
+            )
+        )
+    ).scalars().all()
+    for user in rows:
+        _set_access_token(user, user.matrix_access_token)
+        session.add(user)
+    if rows:
+        await session.commit()
+    return len(rows)
 
 
 def _public_base_url() -> str:
@@ -59,17 +95,37 @@ def _public_base_url() -> str:
     return settings.matrix_public_base_url or settings.matrix_base_url
 
 
-def _store_local_media(filename: str, data: bytes) -> str:
-    extension = Path(filename).suffix[:12]
-    stored_name = f"{uuid4().hex}{extension}"
-    directory = Path("uploads/media")
+async def _store_local_media(
+    user: User,
+    session: AsyncSession,
+    filename: str,
+    content_type: str,
+    data: bytes,
+    scope_type: str = "owner",
+    scope_id: str | None = None,
+) -> str:
+    storage_key = uuid4().hex
+    directory = Path("uploads/private-media")
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / stored_name).write_bytes(data)
-    return f"/uploads/media/{stored_name}"
+    (directory / storage_key).write_bytes(data)
+    asset = LocalMediaAsset(
+        owner_user_id=user.id,
+        storage_key=storage_key,
+        content_type=content_type,
+        filename=Path(filename).name[:500],
+        size_bytes=len(data),
+        scope_type=scope_type,
+        scope_id=scope_id,
+    )
+    session.add(asset)
+    await session.flush()
+    return f"local://{asset.id}"
 
 
 def mxc_to_http(mxc_url: str | None) -> str | None:
     if not mxc_url or not mxc_url.startswith("mxc://"):
+        if mxc_url and mxc_url.startswith("local://"):
+            return f"/api/v1/local-media/{quote(mxc_url.removeprefix('local://'), safe='')}"
         return mxc_url
     server_media = mxc_url.removeprefix("mxc://")
     if "/" not in server_media:
@@ -79,16 +135,25 @@ def mxc_to_http(mxc_url: str | None) -> str | None:
 
 
 async def download_media(user: User, server: str, media_id: str) -> tuple[bytes, str]:
-    if not matrix_available() or not user.matrix_access_token:
+    access_token = _access_token(user)
+    if not matrix_available() or not access_token:
         raise RuntimeError("Matrix media is unavailable")
     settings = _settings()
     async with httpx.AsyncClient(base_url=settings.matrix_base_url, timeout=30) as client:
-        response = await client.get(
+        async with client.stream(
+            "GET",
             f"/_matrix/client/v1/media/download/{quote(server, safe='')}/{quote(media_id, safe='')}",
-            headers={"Authorization": f"Bearer {user.matrix_access_token}"},
-        )
-        response.raise_for_status()
-        return response.content, response.headers.get("content-type", "application/octet-stream")
+            headers={"Authorization": f"Bearer {access_token}"},
+        ) as response:
+            response.raise_for_status()
+            chunks: list[bytes] = []
+            total = 0
+            async for chunk in response.aiter_bytes(1024 * 1024):
+                total += len(chunk)
+                if total > MAX_MATRIX_DOWNLOAD_BYTES:
+                    raise ValueError("Matrix media response is too large")
+                chunks.append(chunk)
+            return b"".join(chunks), response.headers.get("content-type", "application/octet-stream")
 
 
 async def _register_user(localpart: str, password: str) -> dict | None:
@@ -161,7 +226,11 @@ async def ensure_matrix_user(user: User, session: AsyncSession, *, strict: bool 
     if not matrix_available():
         return user
 
-    if user.matrix_access_token and user.matrix_user_id:
+    if _access_token(user) and user.matrix_user_id:
+        if user.matrix_access_token and not user.matrix_access_token.startswith("v1:"):
+            _set_access_token(user, _access_token(user))
+            session.add(user)
+            await session.flush()
         return user
 
     localpart = _localpart(user)
@@ -177,7 +246,7 @@ async def ensure_matrix_user(user: User, session: AsyncSession, *, strict: bool 
         return user
 
     user.matrix_user_id = login.get("user_id")
-    user.matrix_access_token = login.get("access_token")
+    _set_access_token(user, login.get("access_token"))
     session.add(user)
     await session.flush()
     return user
@@ -188,7 +257,8 @@ async def create_room(
     invitees: list[User],
     name: str,
 ) -> str | None:
-    if not matrix_available() or not creator.matrix_access_token:
+    creator_token = _access_token(creator)
+    if not matrix_available() or not creator_token:
         return None
 
     settings = _settings()
@@ -207,7 +277,7 @@ async def create_room(
                 for attempt in range(_matrix_retry_attempts):
                     response = await client.post(
                         "/_matrix/client/v3/createRoom",
-                        headers={"Authorization": f"Bearer {creator.matrix_access_token}"},
+                        headers={"Authorization": f"Bearer {creator_token}"},
                         json={
                             "preset": "private_chat",
                             "name": name,
@@ -237,7 +307,7 @@ async def create_room(
         return None
     if room_id:
         for invitee in invitees:
-            if not invitee.matrix_access_token:
+            if not _access_token(invitee):
                 continue
             try:
                 await join_room(invitee, room_id)
@@ -250,14 +320,15 @@ async def create_room(
 
 
 async def join_room(user: User, room_id: str) -> None:
-    if not matrix_available() or not user.matrix_access_token:
+    user_token = _access_token(user)
+    if not matrix_available() or not user_token:
         return
     settings = _settings()
     encoded_room_id = quote(room_id, safe="")
     async with httpx.AsyncClient(base_url=settings.matrix_base_url, timeout=10) as client:
         response = await client.post(
             f"/_matrix/client/v3/join/{encoded_room_id}",
-            headers={"Authorization": f"Bearer {user.matrix_access_token}"},
+            headers={"Authorization": f"Bearer {user_token}"},
             json={},
         )
         response.raise_for_status()
@@ -267,12 +338,15 @@ async def send_room_message(
     sender: User,
     room_id: str | None,
     content: dict,
+    *,
+    txn_id: str | None = None,
 ) -> str:
-    if not matrix_available() or not room_id or not sender.matrix_access_token:
-        return f"local-{uuid4()}"
+    sender_token = _access_token(sender)
+    if not matrix_available() or not room_id or not sender_token:
+        return f"local-{txn_id or uuid4().hex}"
 
     settings = _settings()
-    txn_id = uuid4().hex
+    txn_id = txn_id or uuid4().hex
     encoded_room_id = quote(room_id, safe="")
     try:
         async with httpx.AsyncClient(
@@ -281,14 +355,14 @@ async def send_room_message(
         ) as client:
             response = await client.put(
                 f"/_matrix/client/v3/rooms/{encoded_room_id}/send/m.room.message/{txn_id}",
-                headers={"Authorization": f"Bearer {sender.matrix_access_token}"},
+                headers={"Authorization": f"Bearer {sender_token}"},
                 json=content,
             )
             if response.status_code == 403:
                 await join_room(sender, room_id)
                 response = await client.put(
                     f"/_matrix/client/v3/rooms/{encoded_room_id}/send/m.room.message/{txn_id}",
-                    headers={"Authorization": f"Bearer {sender.matrix_access_token}"},
+                    headers={"Authorization": f"Bearer {sender_token}"},
                     json=content,
                 )
             response.raise_for_status()
@@ -301,9 +375,26 @@ async def send_room_message(
         return f"local-{uuid4()}"
 
 
-async def upload_media(user: User, filename: str, content_type: str, data: bytes) -> str:
-    if not matrix_available() or not user.matrix_access_token:
-        return _store_local_media(filename, data)
+async def upload_media(
+    user: User,
+    session: AsyncSession,
+    filename: str,
+    content_type: str,
+    data: bytes,
+    scope_type: str = "owner",
+    scope_id: str | None = None,
+) -> str:
+    user_token = _access_token(user)
+    if not matrix_available() or not user_token:
+        return await _store_local_media(
+            user,
+            session,
+            filename,
+            content_type,
+            data,
+            scope_type,
+            scope_id,
+        )
 
     settings = _settings()
     try:
@@ -315,7 +406,7 @@ async def upload_media(user: User, filename: str, content_type: str, data: bytes
                 "/_matrix/media/v3/upload",
                 params={"filename": filename},
                 headers={
-                    "Authorization": f"Bearer {user.matrix_access_token}",
+                    "Authorization": f"Bearer {user_token}",
                     "Content-Type": content_type,
                 },
                 content=data,
@@ -327,4 +418,12 @@ async def upload_media(user: User, filename: str, content_type: str, data: bytes
             "matrix_media_upload_failed_using_local_storage",
             extra={"user_id": user.id},
         )
-        return _store_local_media(filename, data)
+        return await _store_local_media(
+            user,
+            session,
+            filename,
+            content_type,
+            data,
+            scope_type,
+            scope_id,
+        )

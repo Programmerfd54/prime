@@ -67,6 +67,55 @@ void main() {
     expect(status.medianMatchHours, 4.5);
   });
 
+  test('WaitingRoomStatus разбирает early-start поля', () {
+    final status = WaitingRoomStatus.fromJson({
+      'in_queue': true,
+      'people_waiting': 3,
+      'can_start_early': true,
+      'early_start_confirmed': true,
+      'early_start_confirmed_count': 2,
+      'early_start_waiting_others': true,
+      'early_start_pending': false,
+      'early_start_needed_confirmations': 3,
+    });
+
+    expect(status.canStartEarly, isTrue);
+    expect(status.earlyStartConfirmed, isTrue);
+    expect(status.earlyStartConfirmedCount, 2);
+    expect(status.earlyStartWaitingOthers, isTrue);
+    expect(status.earlyStartPending, isFalse);
+    expect(status.earlyStartNeededConfirmations, 3);
+  });
+
+  test('WaitingRoomStatus разбирает pending early-start для наблюдателя', () {
+    final status = WaitingRoomStatus.fromJson({
+      'in_queue': true,
+      'people_waiting': 3,
+      'can_start_early': true,
+      'early_start_confirmed': false,
+      'early_start_confirmed_count': 1,
+      'early_start_waiting_others': false,
+      'early_start_pending': true,
+    });
+
+    expect(status.earlyStartPending, isTrue);
+    expect(status.earlyStartConfirmed, isFalse);
+    expect(status.earlyStartConfirmedCount, 1);
+  });
+
+  test('WaitingRoomStatus поддерживает legacy pair-start ключи', () {
+    final status = WaitingRoomStatus.fromJson({
+      'in_queue': true,
+      'can_start_as_pair': true,
+      'pair_start_confirmed': false,
+      'pair_start_waiting_partner': false,
+    });
+
+    expect(status.canStartEarly, isTrue);
+    expect(status.earlyStartConfirmed, isFalse);
+    expect(status.earlyStartWaitingOthers, isFalse);
+  });
+
   test('CalendarOut разбирает календарь и статистику', () {
     final calendar = CalendarOut.fromJson({
       'days': [

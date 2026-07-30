@@ -5,18 +5,16 @@ import '../core/errors/app_failure.dart';
 import '../core/errors/failure_mapper.dart';
 import '../core/security/password_strength.dart';
 import '../data/api_client.dart';
-import '../design/glass.dart';
 import '../design/haptics.dart';
 import '../design/tokens.dart';
 import '../l10n/copy.dart';
-import '../design/visuals/ambient_and_progress.dart';
 import '../ui/components/app_header.dart';
 import '../ui/components/app_inline_error.dart';
 import '../ui/components/app_password_field.dart';
 import '../ui/components/app_primary_button.dart';
 import '../ui/components/app_snackbar.dart';
-import '../ui/components/editorial/app_auth_hero.dart';
 import '../ui/components/app_text_field.dart';
+import '../ui/components/auth/auth_presentation.dart';
 
 class ResetPasswordScreen extends StatefulWidget {
   const ResetPasswordScreen({super.key, this.initialToken = ''});
@@ -84,61 +82,55 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.background,
+    return AuthPageShell(
       appBar: buildAppBackBar(context, title: 'Новый пароль'),
-      body: SafeArea(
-        child: AmbientCanvas(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(AppSpacing.lg),
-            child: Form(
-              key: _formKey,
+      child: Form(
+        key: _formKey,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const AuthHeroBanner(
+              compact: true,
+              badge: 'Безопасность',
+              title: 'Новый пароль',
+              subtitle:
+                  'Введите код восстановления и надёжный новый пароль.',
+            ),
+            const SizedBox(height: AppSpacing.lg),
+            AuthFormCard(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const AppAuthHero(
-                    compact: true,
-                    title: 'Новый пароль',
-                    subtitle:
-                        'Введите код восстановления и надёжный новый пароль.',
+                  AppTextField(
+                    controller: _token,
+                    label: 'Код восстановления',
+                    validator: (value) {
+                      if ((value ?? '').trim().length < 16) {
+                        return 'Введите код из письма или ответа сервера';
+                      }
+                      return null;
+                    },
                   ),
-                  const SizedBox(height: AppSpacing.lg),
-                  GlassContainer(
-                    borderRadius: BorderRadius.circular(AppRadius.xl),
-                    glow: AppGlow.violet(opacity: 0.12),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                AppTextField(
-                  controller: _token,
-                  label: 'Код восстановления',
-                  validator: (value) {
-                    if ((value ?? '').trim().length < 16) {
-                      return 'Введите код из письма или ответа сервера';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: AppSpacing.md),
-                AppPasswordField(
-                  controller: _password,
-                  showRequirements: true,
-                  validator: _validatePassword,
-                ),
-                if (_error != null) AppInlineError(message: _error!),
-                const SizedBox(height: AppSpacing.md),
-                AppPrimaryButton(
-                  label: 'Сохранить пароль',
-                  loading: _loading,
-                  onPressed: _loading ? null : _submit,
-                ),
-                      ],
-                    ),
+                  const SizedBox(height: AppSpacing.md),
+                  AppPasswordField(
+                    controller: _password,
+                    showRequirements: true,
+                    validator: _validatePassword,
                   ),
-              ],
+                  if (_error != null) ...[
+                    const SizedBox(height: AppSpacing.sm),
+                    AppInlineError(message: _error!),
+                  ],
+                  const SizedBox(height: AppSpacing.md),
+                  AppPrimaryButton(
+                    label: 'Сохранить пароль',
+                    loading: _loading,
+                    onPressed: _loading ? null : _submit,
+                  ),
+                ],
+              ),
             ),
-          ),
-        ),
+          ],
         ),
       ),
     );

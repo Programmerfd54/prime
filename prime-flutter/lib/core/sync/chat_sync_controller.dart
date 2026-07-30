@@ -41,23 +41,78 @@ class ChatSyncController extends ChangeNotifier {
   Timer? _timer;
   bool _disposed = false;
   int _consecutiveNetworkFailures = 0;
-  Duration pollInterval = const Duration(seconds: 5);
+  bool _needsFreshSync = true;
+  bool _syncQueued = false;
+  bool _queuedForceRefresh = false;
+  Duration pollInterval = const Duration(seconds: 1);
 
   void start({
     required ChatChannelKind kind,
     required String channelId,
     Duration? interval,
+    Map<String, dynamic>? cachedPayload,
   }) {
     _kind = kind;
     _channelId = channelId;
     if (interval != null) pollInterval = interval;
     messages.clear();
-    loading = true;
     error = null;
     errorCorrelationId = null;
     offline = false;
     _consecutiveNetworkFailures = 0;
+    _needsFreshSync = true;
+
+    if (cachedPayload != null) {
+      _applyPayload(cachedPayload);
+    }
+    loading = false;
+
     _restartTimer(immediate: true);
+  }
+
+  /// Apply disk cache after first paint when memory had nothing.
+  void warmCache(Map<String, dynamic> payload) {
+    if (_disposed || messages.isNotEmpty) return;
+    _applyPayload(payload);
+    loading = false;
+    notifyListeners();
+  }
+
+  void _applyPayload(Map<String, dynamic> result) {
+    final incoming = (result['messages'] as List<dynamic>? ?? [])
+        .map((item) => Map<String, dynamic>.from(item as Map))
+        .toList();
+    hasMore = result['has_more'] as bool? ?? false;
+    nextBefore = result['next_before'] as String?;
+    final peerReadRaw = result['peer_last_read_at'] as String?;
+    if (peerReadRaw != null) {
+      final parsed = DateTime.tryParse(peerReadRaw)?.toLocal();
+      if (parsed != null &&
+          (peerLastReadAt == null || parsed.isAfter(peerLastReadAt!))) {
+        peerLastReadAt = parsed;
+      }
+    }
+    MessageDedupe.mergeInto(messages, incoming);
+  }
+
+  /// Apply a live push payload without waiting for HTTP sync.
+  void applyIncomingMessage(Map<String, dynamic> message) {
+    if (_disposed) return;
+    MessageDedupe.mergeInto(messages, [message]);
+    loading = false;
+    error = null;
+    errorCorrelationId = null;
+    offline = false;
+    notifyListeners();
+  }
+
+  /// Apply live read receipt without waiting for HTTP sync.
+  void applyPeerReadAt(DateTime readAt) {
+    if (_disposed) return;
+    final local = readAt.toLocal();
+    if (peerLastReadAt != null && !local.isAfter(peerLastReadAt!)) return;
+    peerLastReadAt = local;
+    notifyListeners();
   }
 
   void pause() => _timer?.cancel();
@@ -75,26 +130,31 @@ class ChatSyncController extends ChangeNotifier {
     _timer = Timer.periodic(pollInterval, (_) => unawaited(sync()));
   }
 
-  Future<void> sync() async {
+  Future<void> sync({bool forceRefresh = false}) async {
     final kind = _kind;
     final channelId = _channelId;
-    if (kind == null || channelId == null || syncing || _disposed) return;
+    if (kind == null || channelId == null || _disposed) return;
+    if (syncing) {
+      _syncQueued = true;
+      _queuedForceRefresh = _queuedForceRefresh || forceRefresh;
+      return;
+    }
+    // Open direct threads poll every second — always bypass SWR cache so live
+    // delivery works even when SSE carries only message_id (no payload).
+    final refresh = forceRefresh ||
+        _needsFreshSync ||
+        _queuedForceRefresh ||
+        kind == ChatChannelKind.direct;
+    if (_needsFreshSync) _needsFreshSync = false;
+    _queuedForceRefresh = false;
     syncing = true;
     try {
       final result = switch (kind) {
-        ChatChannelKind.direct => await _api.directMessages(channelId),
+        ChatChannelKind.direct =>
+          await _api.directMessages(channelId, forceRefresh: refresh),
         ChatChannelKind.group => await _api.chatSync(channelId),
       };
-      final incoming = (result['messages'] as List<dynamic>? ?? [])
-          .map((item) => Map<String, dynamic>.from(item as Map))
-          .toList();
-      hasMore = result['has_more'] as bool? ?? false;
-      nextBefore = result['next_before'] as String?;
-      final peerReadRaw = result['peer_last_read_at'] as String?;
-      if (peerReadRaw != null) {
-        peerLastReadAt = DateTime.tryParse(peerReadRaw)?.toLocal();
-      }
-      MessageDedupe.mergeInto(messages, incoming);
+      _applyPayload(result);
       error = null;
       errorCorrelationId = null;
       _consecutiveNetworkFailures = 0;
@@ -120,6 +180,12 @@ class ChatSyncController extends ChangeNotifier {
       syncing = false;
       loading = false;
       if (!_disposed) notifyListeners();
+      if (_syncQueued && !_disposed) {
+        _syncQueued = false;
+        final queuedForce = _queuedForceRefresh;
+        _queuedForceRefresh = false;
+        unawaited(sync(forceRefresh: queuedForce));
+      }
     }
   }
 
@@ -162,12 +228,31 @@ class ChatSyncController extends ChangeNotifier {
     final local = OutboundMessage(
       clientId: clientId,
       body: body,
-      status: OutboundMessageStatus.sending,
+      status: OutboundMessageStatus.sent,
       replyToId: replyToId,
       replyPreview: replyPreview,
     ).asLocalBubble(senderUserId: senderUserId);
     messages.add(local);
     notifyListeners();
+
+    unawaited(
+      _deliverText(
+        clientId: clientId,
+        body: body,
+        replyToId: replyToId,
+      ),
+    );
+    return local;
+  }
+
+  Future<void> _deliverText({
+    required String clientId,
+    required String body,
+    String? replyToId,
+  }) async {
+    final kind = _kind;
+    final channelId = _channelId;
+    if (kind == null || channelId == null || _disposed) return;
 
     try {
       final server = switch (kind) {
@@ -177,7 +262,11 @@ class ChatSyncController extends ChangeNotifier {
             replyToId: replyToId,
             clientId: clientId,
           ),
-        ChatChannelKind.group => await _api.chatSendMessage(channelId, body),
+        ChatChannelKind.group => await _api.chatSendMessage(
+            channelId,
+            body,
+            clientId: clientId,
+          ),
       };
       final idx = messages.indexWhere((m) => m['client_id'] == clientId);
       if (idx != -1) {
@@ -191,8 +280,7 @@ class ChatSyncController extends ChangeNotifier {
       offline = false;
       _consecutiveNetworkFailures = 0;
       notifyListeners();
-      await sync();
-      return server;
+      unawaited(sync(forceRefresh: true));
     } catch (e) {
       final idx = messages.indexWhere((m) => m['client_id'] == clientId);
       if (idx != -1) {
@@ -212,7 +300,6 @@ class ChatSyncController extends ChangeNotifier {
         hasMessages: messages.isNotEmpty,
       );
       notifyListeners();
-      rethrow;
     }
   }
 
@@ -307,7 +394,7 @@ class ChatSyncController extends ChangeNotifier {
       offline = false;
       _consecutiveNetworkFailures = 0;
       notifyListeners();
-      await sync();
+      unawaited(sync());
       return server;
     } catch (e) {
       final idx = messages.indexWhere((m) => m['client_id'] == clientId);
@@ -331,6 +418,9 @@ class ChatSyncController extends ChangeNotifier {
       rethrow;
     }
   }
+
+  /// Pull latest messages immediately (e.g. SSE push).
+  Future<void> bumpSync() => sync(forceRefresh: true);
 
   /// Uploads bytes then sends the resulting media message. Works for both
   /// direct and group channels. Cancellation is a real Dio abort via

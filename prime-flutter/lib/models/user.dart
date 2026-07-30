@@ -19,6 +19,7 @@ class UserModel {
   final bool shieldPending;
   final String? matrixUserId;
   final bool isModerator;
+  final bool emailVerified;
   final DateTime createdAt;
   final Map<String, bool> privacySettings;
 
@@ -41,6 +42,7 @@ class UserModel {
     this.shieldPending = false,
     this.matrixUserId,
     required this.isModerator,
+    this.emailVerified = true,
     required this.createdAt,
     Map<String, bool>? privacySettings,
   }) : privacySettings = privacySettings ?? Map.from(defaultPrivacySettings);
@@ -64,6 +66,8 @@ class UserModel {
         shieldPending: j['shield_pending'] as bool? ?? false,
         matrixUserId: j['matrix_user_id'] as String?,
         isModerator: j['is_moderator'] as bool? ?? false,
+        // Older API builds omit the flag; assume verified so they keep working.
+        emailVerified: j['email_verified'] as bool? ?? true,
         createdAt: DateTime.parse(j['created_at'] as String),
         privacySettings: parsePrivacySettings(j['privacy_settings']),
       );
@@ -87,9 +91,34 @@ class UserModel {
         'shield_pending': shieldPending,
         'matrix_user_id': matrixUserId,
         'is_moderator': isModerator,
+        'email_verified': emailVerified,
         'created_at': createdAt.toIso8601String(),
         'privacy_settings': privacySettings,
       };
+
+  UserModel copyWith({String? about}) => UserModel(
+        id: id,
+        nickname: nickname,
+        email: email,
+        name: name,
+        about: about ?? this.about,
+        photoUrl: photoUrl,
+        city: city,
+        regionCode: regionCode,
+        regionName: regionName,
+        age: age,
+        profileCompleted: profileCompleted,
+        primePoints: primePoints,
+        successfulDays: successfulDays,
+        canCreateCustomSkills: canCreateCustomSkills,
+        streakShields: streakShields,
+        shieldPending: shieldPending,
+        matrixUserId: matrixUserId,
+        isModerator: isModerator,
+        emailVerified: emailVerified,
+        createdAt: createdAt,
+        privacySettings: privacySettings,
+      );
 }
 
 class UserPublic {
@@ -104,6 +133,7 @@ class UserPublic {
   final int? age;
   final int primePoints;
   final int successfulDays;
+  final bool emailVerified;
   final Map<String, bool> privacySettings;
 
   UserPublic({
@@ -118,6 +148,7 @@ class UserPublic {
     this.age,
     this.primePoints = 0,
     this.successfulDays = 0,
+    this.emailVerified = true,
     Map<String, bool>? privacySettings,
   }) : privacySettings = privacySettings ?? Map.from(defaultPrivacySettings);
 
@@ -133,6 +164,7 @@ class UserPublic {
         age: j['age'] as int?,
         primePoints: j['prime_points'] as int? ?? 0,
         successfulDays: j['successful_days'] as int? ?? 0,
+        emailVerified: j['email_verified'] as bool? ?? true,
         privacySettings: parsePrivacySettings(j['privacy_settings']),
       );
 }

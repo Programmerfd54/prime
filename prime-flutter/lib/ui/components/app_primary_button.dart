@@ -32,10 +32,10 @@ class AppPrimaryButton extends StatelessWidget {
     final fg = enabled || success
         ? AppColors.textOnPrimary
         : AppColors.textMuted;
-    final glow = enabled && !success
-        ? AppGlow.violet()
+    final shadow = enabled && !success
+        ? AppElevation.lifted
         : success
-            ? AppGlow.mint(opacity: 0.28)
+            ? AppGlow.mint(opacity: 0.22)
             : AppElevation.none;
 
     return PrimePressable(
@@ -47,15 +47,15 @@ class AppPrimaryButton extends StatelessWidget {
               onPressed!();
             }
           : null,
-      borderRadius: BorderRadius.circular(AppRadius.md),
+      borderRadius: BorderRadius.circular(AppRadius.button),
       child: AnimatedContainer(
         duration: AppDurations.fast,
         width: double.infinity,
         height: AppControlHeights.button,
         decoration: BoxDecoration(
           color: bg,
-          borderRadius: BorderRadius.circular(AppRadius.md),
-          boxShadow: glow,
+          borderRadius: BorderRadius.circular(AppRadius.button),
+          boxShadow: shadow,
         ),
         child: Center(
           child: loading

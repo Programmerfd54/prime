@@ -137,6 +137,8 @@ abstract final class AppSpacing {
 
 abstract final class AppRadius {
   static const sm = 12.0;
+  /// V6 default button / field corner (§7.1, §7.3).
+  static const button = 14.0;
   static const md = 16.0;
   static const lg = 20.0;
   static const xl = 24.0;
@@ -152,7 +154,7 @@ abstract final class AppControlHeights {
   static const buttonCompact = 40.0;
   static const field = 52.0;
   static const iconButton = 48.0;
-  static const bottomNav = 64.0;
+  static const bottomNav = 68.0;
 }
 
 abstract final class AppDurations {

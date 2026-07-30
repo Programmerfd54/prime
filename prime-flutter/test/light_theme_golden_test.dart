@@ -1,22 +1,26 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:prime/config/theme.dart';
+import 'package:prime/design/theme/prime_theme.dart';
+import 'package:prime/design/theme/prime_colors.dart';
 import 'package:prime/design/tokens.dart';
 import 'package:prime/design/visuals/habit_art.dart';
 import 'package:prime/ui/components/editorial/app_hero_module.dart';
 import 'package:prime/ui/components/app_primary_button.dart';
+import 'package:prime/ui/kit/components/prime_content_card.dart';
+import 'package:prime/ui/kit/tokens/kit_typography.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   Widget wrapLight(Widget child) {
     ThemeBinding.bind(Brightness.light);
+    final theme = PrimeTheme.light();
     return MediaQuery(
       data: const MediaQueryData(size: Size(390, 520), disableAnimations: true),
       child: MaterialApp(
-        theme: AppTheme.light,
+        theme: theme,
         home: Scaffold(
-          backgroundColor: AppColors.background,
+          backgroundColor: theme.extension<PrimeColors>()!.canvas,
           body: Center(
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(16),
@@ -46,6 +50,33 @@ void main() {
     await expectLater(
       find.byType(MaterialApp),
       matchesGoldenFile('goldens/light_hero_module.png'),
+    );
+  });
+
+  testWidgets('light theme: content card golden', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(390, 180));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      wrapLight(
+        PrimeContentCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Настройки', style: KitTypography.cardTitle),
+              const SizedBox(height: 8),
+              Text(
+                'Секции и переключатели на светлой поверхности.',
+                style: KitTypography.bodySecondary,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await expectLater(
+      find.byType(PrimeContentCard),
+      matchesGoldenFile('goldens/light_content_card.png'),
     );
   });
 

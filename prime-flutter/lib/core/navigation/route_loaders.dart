@@ -139,12 +139,7 @@ class DirectChatRouteLoader extends _ByIdRouteLoader<UserPublic?> {
 
   @override
   Future<UserPublic?> load(BuildContext context) async {
-    final rows = await context.read<ApiClient>().listFriends();
-    for (final row in rows.whereType<Map>()) {
-      final friend = UserPublic.fromJson(Map<String, dynamic>.from(row));
-      if (friend.id == friendId) return friend;
-    }
-    return null;
+    return _resolveFriend(context.read<ApiClient>(), friendId);
   }
 
   @override
@@ -156,6 +151,25 @@ class DirectChatRouteLoader extends _ByIdRouteLoader<UserPublic?> {
     }
     return DirectChatScreen(friend: friend);
   }
+}
+
+Future<UserPublic?> _resolveFriend(ApiClient api, String friendId) async {
+  UserPublic? fromRows(List<dynamic> rows) {
+    for (final row in rows.whereType<Map>()) {
+      final friend = UserPublic.fromJson(Map<String, dynamic>.from(row));
+      if (friend.id == friendId) return friend;
+    }
+    return null;
+  }
+
+  final cached = await api.peekCache('/friends');
+  if (cached is Map<String, dynamic>) {
+    final hit = fromRows(cached['friends'] as List<dynamic>? ?? []);
+    if (hit != null) return hit;
+  }
+
+  final rows = await api.listFriends();
+  return fromRows(rows);
 }
 
 /// Resolves `/profile/:userId` into a [PublicProfileScreen]. Best-effort via
@@ -170,12 +184,7 @@ class PublicProfileRouteLoader extends _ByIdRouteLoader<UserPublic?> {
 
   @override
   Future<UserPublic?> load(BuildContext context) async {
-    final rows = await context.read<ApiClient>().listFriends();
-    for (final row in rows.whereType<Map>()) {
-      final profile = UserPublic.fromJson(Map<String, dynamic>.from(row));
-      if (profile.id == userId) return profile;
-    }
-    return null;
+    return _resolveFriend(context.read<ApiClient>(), userId);
   }
 
   @override

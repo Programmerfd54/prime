@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../kit/components/prime_content_card.dart';
+import '../../../design/theme/prime_theme_context.dart';
 import '../../../design/tokens.dart';
 import '../../../design/typography.dart';
 import '../../../models/group.dart';
@@ -29,13 +31,7 @@ class AppGroupPulsePanel extends StatelessWidget {
       _ => AppColors.textSecondary,
     };
 
-    return Container(
-      padding: const EdgeInsets.all(AppSpacing.lg),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(AppRadius.xl),
-        color: AppColors.surfaceSoft.withValues(alpha: 0.55),
-        border: Border.all(color: AppColors.border),
-      ),
+    return PrimeContentCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -44,7 +40,10 @@ class AppGroupPulsePanel extends StatelessWidget {
               Icon(Icons.monitor_heart_outlined, color: accent, size: 22),
               const SizedBox(width: AppSpacing.sm),
               Expanded(
-                child: Text('Командный ритм', style: AppTypography.title2),
+                child: Text(
+                  'Командный ритм',
+                  style: AppTypography.title2.copyWith(color: context.prime.ink),
+                ),
               ),
               if (pulse.totalActive > 0)
                 Text(

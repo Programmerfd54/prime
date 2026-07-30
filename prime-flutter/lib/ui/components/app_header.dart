@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../design/routes.dart';
-import '../../design/glass.dart';
+import '../../design/theme/prime_theme_context.dart';
 import '../../design/tokens.dart';
 import '../../design/typography.dart';
 import '../kit/tokens/kit_typography.dart';
@@ -131,20 +131,16 @@ class AppChatAppBar extends StatelessWidget implements PreferredSizeWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = context.prime;
     return AppBar(
-      backgroundColor: Colors.transparent,
+      backgroundColor: p.surface.withValues(alpha: 0.96),
       elevation: 0,
       scrolledUnderElevation: 0,
-      flexibleSpace: GlassContainer(
-        borderRadius: BorderRadius.zero,
-        padding: EdgeInsets.zero,
-        fillOpacity: 0.06,
-        sigma: 12,
-        child: const SizedBox.expand(),
-      ),
+      surfaceTintColor: Colors.transparent,
+      shape: Border(bottom: BorderSide(color: p.hairline)),
       leading: IconButton(
         tooltip: 'Назад',
-        icon: const Icon(Icons.arrow_back_ios_new_rounded, size: AppIconSizes.sm),
+        icon: Icon(Icons.arrow_back_ios_new_rounded, size: AppIconSizes.sm, color: p.ink),
         onPressed: () => Navigator.of(context).maybePop(),
       ),
       titleSpacing: 0,
@@ -166,14 +162,14 @@ class AppChatAppBar extends StatelessWidget implements PreferredSizeWidget {
                     title,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: KitTypography.title2.copyWith(fontSize: 18),
+                    style: KitTypography.title2.copyWith(fontSize: 18, color: p.ink),
                   ),
                   if (subtitle != null)
                     Text(
                       subtitle!,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: AppTypography.caption,
+                      style: AppTypography.caption.copyWith(color: p.inkMuted),
                     ),
                 ],
               ),

@@ -1,6 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../../config/constants.dart';
+import '../../data/api_client.dart';
 import '../../design/routes.dart';
 import '../../design/tokens.dart';
 import '../../design/typography.dart';
@@ -96,6 +100,9 @@ class DirectChatsSection extends StatelessWidget {
               time: _formatChatTime(chat.lastMessageAt),
               unread: chat.unreadCount,
               onTap: () async {
+                unawaited(
+                  context.read<ApiClient>().warmDirectMessagesCache(chat.friend.id),
+                );
                 await Navigator.of(context).push(
                   PrimeRoute.sharedAxis(
                     builder: (_) => DirectChatScreen(friend: chat.friend),

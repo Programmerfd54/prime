@@ -41,20 +41,18 @@ class AppCompactButton extends StatelessWidget {
               onPressed!();
             }
           : null,
-      borderRadius: BorderRadius.circular(AppRadius.sm),
+      borderRadius: BorderRadius.circular(AppRadius.button),
       child: AnimatedContainer(
         duration: AppDurations.fast,
         height: AppControlHeights.buttonCompact,
         padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
         decoration: BoxDecoration(
           color: bg,
-          borderRadius: BorderRadius.circular(AppRadius.sm),
+          borderRadius: BorderRadius.circular(AppRadius.button),
           border: primary
               ? null
               : Border.all(color: AppColors.borderStrong),
-          boxShadow: primary && enabled
-              ? AppGlow.violet(opacity: 0.18)
-              : AppElevation.none,
+          boxShadow: primary && enabled ? AppElevation.lifted : AppElevation.none,
         ),
         child: Center(
           child: loading

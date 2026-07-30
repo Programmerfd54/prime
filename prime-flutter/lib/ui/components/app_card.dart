@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
 
-import '../../design/glass.dart';
 import '../../design/haptics.dart';
 import '../../design/pressable.dart';
+import '../../design/theme/prime_theme_context.dart';
 import '../../design/tokens.dart';
+import '../kit/tokens/kit_surfaces.dart';
 
-/// Generic surface container for grouped content — glass by default.
+/// Generic surface container for grouped content — solid V4 surface by default.
 class AppCard extends StatelessWidget {
   const AppCard({
     super.key,
@@ -25,36 +26,26 @@ class AppCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final radius = BorderRadius.circular(AppRadius.md);
+    final p = context.prime;
 
-    // Custom solid color path keeps legacy call-site overrides working.
-    if (color != null || borderColor != null) {
-      final decoration = BoxDecoration(
-        color: color ?? AppColors.surface,
-        borderRadius: radius,
-        border: Border.all(color: borderColor ?? AppColors.border),
-      );
-      final body = Padding(padding: padding, child: child);
-      if (onTap == null) {
-        return DecoratedBox(decoration: decoration, child: body);
-      }
-      return PrimePressable(
-        onTap: () {
-          AppHaptics.selection();
-          onTap!();
-        },
-        haptic: false,
-        borderRadius: radius,
-        child: DecoratedBox(decoration: decoration, child: body),
-      );
+    final decoration = color != null || borderColor != null
+        ? BoxDecoration(
+            color: color ?? p.surfaceElevated,
+            borderRadius: radius,
+            border: Border.all(color: borderColor ?? p.hairline),
+          )
+        : kitSurfaceDecoration(
+            context,
+            PrimeSurfaceLevel.solid,
+            radius: AppRadius.md,
+            borderRadius: radius,
+          );
+
+    final body = Padding(padding: padding, child: child);
+
+    if (onTap == null) {
+      return DecoratedBox(decoration: decoration, child: body);
     }
-
-    final glass = GlassContainer(
-      padding: padding,
-      borderRadius: radius,
-      child: child,
-    );
-
-    if (onTap == null) return glass;
 
     return PrimePressable(
       onTap: () {
@@ -63,7 +54,7 @@ class AppCard extends StatelessWidget {
       },
       haptic: false,
       borderRadius: radius,
-      child: glass,
+      child: DecoratedBox(decoration: decoration, child: body),
     );
   }
 }

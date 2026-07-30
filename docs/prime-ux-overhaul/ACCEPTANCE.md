@@ -31,7 +31,7 @@
 - [x] Password reset (`/auth/forgot-password`, `/auth/reset-password`)
 - [x] Cancel outgoing friend request
 - [x] Chats tab as primary inbox surface
-- [!] Delete account / email verify / block-report — backend gap
+- [!] Delete account / block-report — backend gap
 - [x] Correlation ID (`X-Request-ID`) + copy в error UI
 
 ## Design system

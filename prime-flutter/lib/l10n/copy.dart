@@ -11,6 +11,8 @@ abstract final class AppCopy {
   static const report = 'отчёт';
   static const streak = 'Дней подряд';
   static const successfulDays = 'Успешных дней';
+  static const profileProgressLabel = 'Прогресс';
+  static const profileProgressEmpty = 'Ещё не начали';
   static const findTeam = 'Найти команду';
   static const searchingTeam = 'Ищем команду…';
   static const stopSearch = 'Остановить поиск';
@@ -18,10 +20,18 @@ abstract final class AppCopy {
   static const confirmParticipation = 'Подтвердить участие';
   static const teamReadyConfirm =
       'Команда готова. Подтвердите участие';
+  static const allConfirmedParticipation =
+      'Все подтвердили участие';
+  static const acceptPactToStartHabit =
+      'Примите командный договор — и можно начинать привычку';
+  static const continueYourHabit = 'Продолжайте привычку';
   static const customHabitLocked = 'Нужно 10 Праймов · скоро';
   static const deleteAccountUnavailable = 'Пока недоступно';
   static const emailAlreadyRegistered =
       'Этот email уже зарегистрирован. Войдите в аккаунт.';
+  static const emailPendingVerification =
+      'На этот email уже отправлен код. Подтвердите почту или войдите.';
+  static const continueEmailVerification = 'Продолжить подтверждение';
   static const switchToLogin = 'Войти с этим email';
   static const aboutJunk =
       'О себе выглядит как набор символов или повтор. Напишите своими словами — минимум 3 разных слова.';
@@ -41,6 +51,19 @@ abstract final class AppCopy {
   static const inviteFriend = 'Пригласить друга';
   static const howDayCounts =
       'День засчитывается всей команде, только когда отчитались все. Если кто-то не сдал отчёт — день не закрыт никому, но ваша серия не обнуляется.';
+
+  /// V6 §4 — mandatory cycle positioning for habits and onboarding.
+  static const cycleContinuationFootnote =
+      '30 дней — первый цикл, а не финальная точка. Если привычка приносит пользу, '
+      'продолжай её 90, 180 или 365 дней — столько, сколько нужно, '
+      'чтобы действие стало естественной частью твоего распорядка.';
+
+  static const teamPactTitle = 'Командный договор';
+  static const teamPactLead =
+      'Шесть человек берут на себя одинаково ясное обязательство: ежедневное действие, '
+      'честный отчёт и поддержка без давления. Пропуск — не провал, возвращение — часть практики.';
+  static const teamPactChatGate =
+      'Пока идёт подтверждение, можно написать команде внизу. Полный чат откроется после принятия договора всеми.';
 
   static String waitingReports(int n) {
     if (n <= 0) return 'Ждём команду';
@@ -105,6 +128,23 @@ abstract final class AppCopy {
       'Нет соединения с интернетом. Проверьте сеть — введённые данные сохранятся.';
   static const unknown =
       'Не удалось выполнить действие. Повторите попытку.';
+
+  // Email confirmation (register step 4)
+  static const emailNotVerified =
+      'Почта ещё не подтверждена. Введите код из письма, чтобы войти.';
+  static const emailVerificationCodeInvalid =
+      'Код подтверждения недействителен или истёк. Запросите новый.';
+  static const emailVerificationCodeLength = 'Код состоит из 6 цифр.';
+  static const emailAlreadyVerified =
+      'Почта уже подтверждена. Войдите с вашим паролем.';
+  static const emailVerificationResent =
+      'Отправили новый код. Проверьте почту, включая папку «Спам».';
+  static const emailVerificationResumePending =
+      'Регистрация уже начата — отправили код повторно. Введите его ниже.';
+  static const continueVerification = 'Продолжить подтверждение';
+
+  static String emailVerificationResendIn(int seconds) =>
+      'Отправить код повторно можно через $seconds с';
 
   static const copyCode = 'Скопировать код';
   static const codeCopied = 'Код скопирован';

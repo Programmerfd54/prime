@@ -12,14 +12,18 @@ class PrimeContextualActionBar extends StatelessWidget {
     super.key,
     required this.primaryLabel,
     required this.onPrimary,
+    this.hint,
     this.caption,
+    this.primaryIcon,
     this.secondaryLabel,
     this.onSecondary,
   });
 
   final String primaryLabel;
   final VoidCallback onPrimary;
+  final String? hint;
   final String? caption;
+  final IconData? primaryIcon;
   final String? secondaryLabel;
   final VoidCallback? onSecondary;
 
@@ -48,6 +52,14 @@ class PrimeContextualActionBar extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              if (hint != null) ...[
+                Text(
+                  hint!,
+                  textAlign: TextAlign.center,
+                  style: KitTypography.caption.copyWith(color: p.inkSecondary),
+                ),
+                const SizedBox(height: AppSpacing.xs),
+              ],
               Row(
                 children: [
                   if (secondaryLabel != null && onSecondary != null) ...[
@@ -58,15 +70,38 @@ class PrimeContextualActionBar extends StatelessWidget {
                     const SizedBox(width: AppSpacing.sm),
                   ],
                   Expanded(
-                    child: FilledButton(
-                      onPressed: onPrimary,
-                      style: FilledButton.styleFrom(
-                        backgroundColor: p.brand,
-                        foregroundColor: p.inkOnBrand,
-                        minimumSize: const Size.fromHeight(AppControlHeights.buttonCompact),
-                      ),
-                      child: Text(primaryLabel, style: KitTypography.chip),
-                    ),
+                    child: primaryIcon != null
+                        ? FilledButton.icon(
+                            onPressed: onPrimary,
+                            icon: Icon(primaryIcon, size: 20),
+                            label: Text(primaryLabel, style: KitTypography.chip),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: p.brand,
+                              foregroundColor: p.inkOnBrand,
+                              minimumSize: const Size.fromHeight(
+                                AppControlHeights.buttonCompact,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius:
+                                    BorderRadius.circular(AppRadius.button),
+                              ),
+                            ),
+                          )
+                        : FilledButton(
+                            onPressed: onPrimary,
+                            style: FilledButton.styleFrom(
+                              backgroundColor: p.brand,
+                              foregroundColor: p.inkOnBrand,
+                              minimumSize: const Size.fromHeight(
+                                AppControlHeights.buttonCompact,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius:
+                                    BorderRadius.circular(AppRadius.button),
+                              ),
+                            ),
+                            child: Text(primaryLabel, style: KitTypography.chip),
+                          ),
                   ),
                 ],
               ),

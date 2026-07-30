@@ -6,6 +6,7 @@ import '../../typography.dart';
 
 const _magenta = Color(0xFFD946EF);
 const _editorialGold = Color(0xFFF0C14B);
+const _editorialMuted = Color(0xFF9CA3AF);
 
 enum PrimeLineChartStyle { neon, editorial }
 
@@ -14,12 +15,16 @@ class PrimeNeonLineChart extends StatelessWidget {
   const PrimeNeonLineChart({
     super.key,
     required this.values,
+    this.secondaryValues,
+    this.secondaryLabel = 'Среднее',
     this.labels = const [],
     this.height = 100,
     this.style = PrimeLineChartStyle.neon,
   });
 
   final List<double> values;
+  final List<double>? secondaryValues;
+  final String secondaryLabel;
   final List<String> labels;
   final double height;
   final PrimeLineChartStyle style;
@@ -30,13 +35,24 @@ class PrimeNeonLineChart extends StatelessWidget {
       return SizedBox(height: height);
     }
 
-    final maxV = values.reduce((a, b) => a > b ? a : b);
-    final minV = values.reduce((a, b) => a < b ? a : b);
+    final allValues = [
+      ...values,
+      if (secondaryValues != null) ...secondaryValues!,
+    ];
+    final maxV = allValues.reduce((a, b) => a > b ? a : b);
+    final minV = allValues.reduce((a, b) => a < b ? a : b);
     final span = (maxV - minV).abs() < 0.01 ? 1.0 : (maxV - minV);
     final spots = [
       for (var i = 0; i < values.length; i++)
         FlSpot(i.toDouble(), values[i]),
     ];
+    final secondarySpots = secondaryValues != null &&
+            secondaryValues!.length == values.length
+        ? [
+            for (var i = 0; i < secondaryValues!.length; i++)
+              FlSpot(i.toDouble(), secondaryValues![i]),
+          ]
+        : const <FlSpot>[];
 
     final editorial = style == PrimeLineChartStyle.editorial;
 
@@ -70,7 +86,9 @@ class PrimeNeonLineChart extends StatelessWidget {
                   final value = values[i];
                   if (editorial) {
                     return LineTooltipItem(
-                      '• ${value.toStringAsFixed(0)}',
+                      label.isEmpty
+                          ? '${value.toStringAsFixed(0)}'
+                          : '$label · ${value.toStringAsFixed(0)}',
                       AppTypography.caption.copyWith(
                         color: const Color(0xFF1A1A1F),
                         fontWeight: FontWeight.w600,
@@ -118,6 +136,19 @@ class PrimeNeonLineChart extends StatelessWidget {
             },
           ),
           lineBarsData: [
+            if (secondarySpots.isNotEmpty)
+              LineChartBarData(
+                spots: secondarySpots,
+                isCurved: true,
+                barWidth: 2,
+                isStrokeCapRound: true,
+                color: editorial
+                    ? _editorialMuted.withValues(alpha: 0.85)
+                    : AppColors.textMuted.withValues(alpha: 0.75),
+                dashArray: const [6, 5],
+                dotData: const FlDotData(show: false),
+                belowBarData: BarAreaData(show: false),
+              ),
             LineChartBarData(
               spots: spots,
               isCurved: true,

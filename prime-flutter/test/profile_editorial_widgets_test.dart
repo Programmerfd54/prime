@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:prime/config/theme.dart';
+import 'package:prime/l10n/copy.dart';
 import 'package:prime/ui/kit/presentation/profile_editorial_widgets.dart';
 import 'package:prime/ui/kit/presentation/profile_utils.dart';
 import 'package:prime/ui/kit/presentation/profile_view_model.dart';
@@ -78,7 +79,7 @@ void main() {
                 variant: ProfileMetricPillVariant.charcoal,
               ),
               ProfileMetricPill(
-                label: 'Циклы',
+                label: AppCopy.profileProgressLabel,
                 value: '5/30',
                 variant: ProfileMetricPillVariant.hatched,
               ),
@@ -95,7 +96,7 @@ void main() {
 
     expect(find.text('Дней подряд'), findsOneWidget);
     expect(find.text('Праймы'), findsOneWidget);
-    expect(find.text('Циклы'), findsOneWidget);
+    expect(find.text(AppCopy.profileProgressLabel), findsOneWidget);
     expect(find.text('Стаб. 7д'), findsOneWidget);
     expect(find.text('3 дн.'), findsOneWidget);
   });

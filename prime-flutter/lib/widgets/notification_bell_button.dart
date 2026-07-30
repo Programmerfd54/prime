@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -7,9 +8,10 @@ import '../core/sync/realtime_client.dart';
 import '../data/api_client.dart';
 import '../design/motion.dart';
 import '../design/tokens.dart';
-import '../design/typography.dart';
 import '../models/notification.dart';
-import '../ui/components/app_compact_button.dart';
+import '../providers/chats_inbox_provider.dart';
+import '../ui/components/app_dialog.dart';
+import 'notification_center_sheet.dart';
 
 class NotificationBellButton extends StatefulWidget {
   final bool hasUnread;
@@ -104,10 +106,14 @@ class _NotificationBellButtonState extends State<NotificationBellButton>
     final api = context.read<ApiClient>();
     final realtime = context.read<RealtimeClient>();
     await api.respondFriendRequest(requestId, accept);
-    await realtime.markRead(notification.id);
-    if (mounted) {
+    if (accept) {
+      final inbox = context.read<ChatsInboxProvider>();
+      inbox.invalidate();
+      unawaited(inbox.ensureLoaded(force: true));
+    }
+    unawaited(realtime.markRead(notification.id));
+    if (mounted && accept && Navigator.of(context).canPop()) {
       Navigator.of(context).pop();
-      await _showNotifications();
     }
   }
 
@@ -132,95 +138,11 @@ class _NotificationBellButtonState extends State<NotificationBellButton>
   }
 
   Future<void> _showNotifications() async {
-    final realtime = context.read<RealtimeClient>();
-    await realtime.refresh();
-    if (!mounted) return;
-
-    final items = realtime.items;
-    await showModalBottomSheet<void>(
+    await showNotificationCenterSheet(
       context: context,
-      backgroundColor: AppColors.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.xl)),
-      ),
-      builder: (sheetContext) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(
-              AppSpacing.lg,
-              AppSpacing.md,
-              AppSpacing.lg,
-              AppSpacing.lg,
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text('Уведомления', style: AppTypography.title1),
-                    ),
-                    if (realtime.unreadCount > 0)
-                      TextButton(
-                        onPressed: () async {
-                          await realtime.markAllRead();
-                          if (sheetContext.mounted) {
-                            Navigator.of(sheetContext).pop();
-                          }
-                        },
-                        child: Text(
-                          'Прочитать все',
-                          style: AppTypography.button.copyWith(
-                            color: AppColors.gold,
-                            fontSize: 14,
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: AppSpacing.sm),
-                if (items.isEmpty)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: AppSpacing.lg),
-                    child: Text(
-                      'Новых уведомлений нет',
-                      style: AppTypography.bodySecondary,
-                      textAlign: TextAlign.center,
-                    ),
-                  )
-                else
-                  Flexible(
-                    child: ListView.separated(
-                      shrinkWrap: true,
-                      itemCount: items.length,
-                      separatorBuilder: (_, __) => Divider(
-                        height: 1,
-                        color: AppColors.border,
-                      ),
-                      itemBuilder: (context, index) {
-                        final notification = items[index];
-                        if (notification.type == PrimeNotificationType.friendRequest) {
-                          return _FriendRequestNotificationTile(
-                            notification: notification,
-                            onAccept: () =>
-                                _respondFriendRequest(notification, true),
-                            onDecline: () =>
-                                _respondFriendRequest(notification, false),
-                          );
-                        }
-                        return _NotificationTile(
-                          notification: notification,
-                          onTap: () => _onNotificationTap(notification),
-                        );
-                      },
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        );
-      },
+      onOpenGroups: widget.onOpenGroups,
+      onItemTap: _onNotificationTap,
+      onRespondFriend: _respondFriendRequest,
     );
   }
 
@@ -280,121 +202,6 @@ class _NotificationBellButtonState extends State<NotificationBellButton>
               ),
             ),
           ],
-        ],
-      ),
-    );
-  }
-}
-
-class _NotificationTile extends StatelessWidget {
-  const _NotificationTile({
-    required this.notification,
-    required this.onTap,
-  });
-
-  final PrimeNotification notification;
-  final VoidCallback onTap;
-
-  IconData _iconForType() {
-    return switch (notification.type) {
-      PrimeNotificationType.match => Icons.groups_2_outlined,
-      PrimeNotificationType.mention => Icons.alternate_email,
-      PrimeNotificationType.support => Icons.favorite_outline,
-      PrimeNotificationType.system => Icons.info_outline,
-      PrimeNotificationType.friendRequest => Icons.person_add_alt_1_outlined,
-    };
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: ListTile(
-        contentPadding: EdgeInsets.zero,
-        leading: Icon(
-          _iconForType(),
-          color: notification.read ? AppColors.textSecondary : AppColors.gold,
-        ),
-        title: Text(
-          notification.title,
-          style: AppTypography.title2.copyWith(
-            fontSize: 15,
-            color: notification.read
-                ? AppColors.textSecondary
-                : AppColors.textPrimary,
-          ),
-        ),
-        subtitle: Text(
-          notification.body,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: AppTypography.bodySecondary,
-        ),
-        trailing: notification.read
-            ? null
-            : Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  color: AppColors.goldHighlight,
-                  shape: BoxShape.circle,
-                ),
-              ),
-        onTap: onTap,
-      ),
-    );
-  }
-}
-
-class _FriendRequestNotificationTile extends StatelessWidget {
-  const _FriendRequestNotificationTile({
-    required this.notification,
-    required this.onAccept,
-    required this.onDecline,
-  });
-
-  final PrimeNotification notification;
-  final VoidCallback onAccept;
-  final VoidCallback onDecline;
-
-  String? _avatarUrl() {
-    final nickname = notification.payload['requester_nickname'] as String?;
-    if (nickname == null || nickname.isEmpty) return null;
-    return null;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final name = notification.title.isEmpty ? 'Пользователь' : notification.title;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
-      child: Row(
-        children: [
-          CircleAvatar(
-            radius: 22,
-            backgroundColor: AppColors.elevatedSurface,
-            foregroundColor: AppColors.textPrimary,
-            backgroundImage: _avatarUrl() == null
-                ? null
-                : NetworkImage(_avatarUrl()!),
-            child: Text(name.isEmpty ? '?' : name[0].toUpperCase()),
-          ),
-          const SizedBox(width: AppSpacing.sm),
-          Expanded(
-            child: Text(
-              '$name добавляется в друзья',
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: AppTypography.title2.copyWith(fontSize: 15),
-            ),
-          ),
-          AppCompactButton(label: 'Принять', onPressed: onAccept),
-          const SizedBox(width: AppSpacing.xs),
-          AppCompactButton(
-            label: 'Отклонить',
-            primary: false,
-            onPressed: onDecline,
-          ),
         ],
       ),
     );

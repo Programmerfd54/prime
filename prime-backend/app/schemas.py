@@ -82,7 +82,64 @@ class LoginRequest(BaseModel):
 
 class TokenResponse(BaseModel):
     access_token: str
+    refresh_token: str | None = None
     token_type: str = "bearer"
+
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str = Field(min_length=32, max_length=256)
+
+    @field_validator("refresh_token")
+    @classmethod
+    def strip_refresh_token(cls, value: str) -> str:
+        return value.strip()
+
+
+class RegistrationPendingResponse(BaseModel):
+    """Register no longer authenticates: the token is issued by verify-email."""
+
+    status: str = "verification_required"
+    email: EmailStr
+    expires_at: datetime
+    resend_available_in_seconds: int = 0
+    # Dev only, gated by EMAIL_VERIFICATION_EXPOSE_CODE / ENABLE_DEV_TOOLS.
+    verification_code: str | None = None
+
+
+class NicknameAvailabilityResponse(BaseModel):
+    available: bool
+
+
+class EmailAvailabilityResponse(BaseModel):
+    available: bool
+    pending_verification: bool = False
+
+
+class VerifyEmailRequest(BaseModel):
+    email: EmailStr
+    code: str = Field(min_length=1, max_length=32)
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @field_validator("code")
+    @classmethod
+    def normalize_code(cls, value: str) -> str:
+        digits = "".join(ch for ch in value if ch.isdigit())
+        if len(digits) != 6:
+            raise ValueError("Код подтверждения состоит из 6 цифр")
+        return digits
+
+
+class ResendVerificationRequest(BaseModel):
+    email: EmailStr
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        return value.strip().lower()
 
 
 class UserResponse(BaseModel):
@@ -105,6 +162,7 @@ class UserResponse(BaseModel):
     privacy_settings: dict = Field(default_factory=dict)
     matrix_user_id: str | None
     is_moderator: bool
+    email_verified: bool = True
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -121,8 +179,13 @@ class UserResponse(BaseModel):
             payload["privacy_settings"] = parse_privacy_settings(
                 getattr(data, "privacy_settings")
             )
-            return payload
-        return data
+        elif isinstance(data, dict):
+            payload = dict(data)
+        else:
+            return data
+        if "email_verified" not in payload:
+            payload["email_verified"] = payload.get("email_verified_at") is not None
+        return payload
 
 
 class GroupCheckInRequest(BaseModel):
@@ -189,6 +252,8 @@ class UpdateOnboardingPreferencesRequest(BaseModel):
     selected_skill_id: str | None = None
     completed_at: str | None = None
     preferred_action_window: str | None = None
+    preferred_time_of_day: str | None = None
+    support_style: str | None = None
     habit_quit_count: str | None = None
     habit_attempt_count: str | None = None
 
@@ -203,6 +268,28 @@ class UpdateOnboardingPreferencesRequest(BaseModel):
         if not re.fullmatch(r"\d{2}:\d{2}-\d{2}:\d{2}", normalized):
             raise ValueError("Формат окна: HH:MM-HH:MM")
         return normalized
+
+    @field_validator("preferred_time_of_day")
+    @classmethod
+    def validate_preferred_time_of_day(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        from .user_preferences import PREFERRED_TIME_OF_DAY_VALUES
+
+        if value not in PREFERRED_TIME_OF_DAY_VALUES:
+            raise ValueError("Недопустимое время суток")
+        return value
+
+    @field_validator("support_style")
+    @classmethod
+    def validate_support_style(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        from .user_preferences import SUPPORT_STYLE_VALUES
+
+        if value not in SUPPORT_STYLE_VALUES:
+            raise ValueError("Недопустимый стиль поддержки")
+        return value
 
     @field_validator("habit_quit_count")
     @classmethod

@@ -4,10 +4,12 @@ import 'package:provider/provider.dart';
 
 import '../core/errors/failure_mapper.dart';
 import '../data/api_client.dart';
-import '../design/glass.dart';
 import '../design/haptics.dart';
+import '../design/routes.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
+import '../ui/kit/components/prime_content_card.dart';
+import '../ui/kit/presentation/profile_surfaces.dart';
 import '../l10n/copy.dart';
 import '../providers/auth_provider.dart';
 import '../design/visuals/ambient_and_progress.dart';
@@ -134,8 +136,8 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
         'city': selectedRegion?['name'],
         'age': int.tryParse(_age.text),
       };
-      await auth.api.updateMe(payload);
-      await auth.refreshUser();
+      final updated = await auth.api.updateMe(payload);
+      await auth.applyUserUpdate(updated);
     } catch (e) {
       if (mounted) {
         setState(() => _error = FailureMapper.from(e).message);
@@ -173,7 +175,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
     final wordProgress = (words / 50).clamp(0.0, 1.0);
 
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: ProfileSurfaces.canvas,
       appBar: AppBar(
         automaticallyImplyLeading: false,
         title: Text('Создание профиля', style: AppTypography.titleSerif),
@@ -223,10 +225,7 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
                             ),
                           ],
                           const SizedBox(height: AppSpacing.lg),
-                          GlassContainer(
-                            borderRadius:
-                                BorderRadius.circular(AppRadius.xl),
-                            glow: AppGlow.violet(opacity: 0.12),
+                          PrimeContentCard(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [

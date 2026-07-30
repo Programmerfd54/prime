@@ -1,0 +1,9 @@
+.env
+.env.*
+!.env.example
+!.env.local.example
+logs/*.log
+logs/*.log.*
+uploads/private-media/
+__pycache__/
+*.py[cod]

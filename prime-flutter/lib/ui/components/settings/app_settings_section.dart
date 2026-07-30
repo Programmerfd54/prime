@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 
-import '../../../design/glass.dart';
+import '../../../design/theme/prime_theme_context.dart';
 import '../../../design/haptics.dart';
 import '../../../design/pressable.dart';
 import '../../../design/tokens.dart';
-import '../../../design/typography.dart';
+import '../../kit/tokens/kit_typography.dart';
+import '../../kit/components/prime_content_card.dart';
 
 /// Editorial settings group — glass surface, press feedback on tiles.
 class AppSettingsSection extends StatelessWidget {
@@ -21,30 +22,32 @@ class AppSettingsSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = context.prime;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
           padding: const EdgeInsets.only(left: AppSpacing.xxs),
-          child: Text(title, style: AppTypography.titleSerif),
+          child: Text(
+            title,
+            style: KitTypography.sectionTitle.copyWith(
+              color: p.ink,
+              fontSize: 20,
+            ),
+          ),
         ),
         const SizedBox(height: AppSpacing.sm),
-        GlassContainer(
+        PrimeContentCard(
           padding: EdgeInsets.zero,
-          borderRadius: BorderRadius.circular(AppRadius.xl),
           child: Material(
             color: Colors.transparent,
-            borderRadius: BorderRadius.circular(AppRadius.xl),
+            borderRadius: BorderRadius.circular(AppRadius.lg),
             clipBehavior: Clip.antiAlias,
             child: Column(
               children: [
                 for (var i = 0; i < children.length; i++) ...[
                   if (i > 0)
-                    Divider(
-                      height: 1,
-                      indent: 56,
-                      color: AppColors.border,
-                    ),
+                    Divider(height: 1, indent: 56, color: p.hairline),
                   children[i],
                 ],
               ],
@@ -83,11 +86,12 @@ class AppSettingsTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = context.prime;
     final color = destructive
-        ? AppColors.error
+        ? p.coral
         : enabled
-            ? AppColors.primarySoft
-            : AppColors.textMuted;
+            ? p.brandSoft
+            : p.inkMuted;
 
     final tile = ListTile(
       enabled: enabled,
@@ -99,26 +103,31 @@ class AppSettingsTile extends StatelessWidget {
         width: 40,
         height: 40,
         decoration: BoxDecoration(
-          color: AppColors.primaryContainer.withValues(alpha: 0.45),
+          color: p.surfaceSoft,
           borderRadius: BorderRadius.circular(AppRadius.sm),
+          border: Border.all(color: p.hairline),
         ),
         child: Icon(icon, color: color, size: AppIconSizes.sm),
       ),
       title: Text(
         title,
-        style: AppTypography.title2.copyWith(
-          color: destructive ? AppColors.error : AppColors.textPrimary,
-          fontSize: 16,
+        style: KitTypography.cardTitle.copyWith(
+          color: destructive ? p.coral : p.ink,
         ),
         overflow: TextOverflow.ellipsis,
         maxLines: 2,
       ),
       subtitle: subtitle == null
           ? null
-          : Text(subtitle!, style: AppTypography.caption),
+          : Text(
+              subtitle!,
+              style: KitTypography.caption.copyWith(color: p.inkMuted),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
       trailing: trailing ??
           (onTap != null && enabled
-              ? Icon(Icons.chevron_right, color: AppColors.textMuted)
+              ? Icon(Icons.chevron_right_rounded, color: p.inkMuted, size: 22)
               : null),
     );
 
@@ -156,6 +165,7 @@ class AppSettingsSwitchTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = context.prime;
     return Material(
       color: Colors.transparent,
       child: ListTile(
@@ -167,18 +177,19 @@ class AppSettingsSwitchTile extends StatelessWidget {
           width: 40,
           height: 40,
           decoration: BoxDecoration(
-            color: AppColors.primaryContainer.withValues(alpha: 0.45),
+            color: p.surfaceSoft,
             borderRadius: BorderRadius.circular(AppRadius.sm),
+            border: Border.all(color: p.hairline),
           ),
           child: Icon(
             icon,
-            color: AppColors.primarySoft,
+            color: p.brandSoft,
             size: AppIconSizes.sm,
           ),
         ),
         title: Text(
           title,
-          style: AppTypography.title2.copyWith(fontSize: 16),
+          style: KitTypography.cardTitle.copyWith(color: p.ink),
           overflow: TextOverflow.ellipsis,
           maxLines: 2,
         ),
@@ -186,7 +197,7 @@ class AppSettingsSwitchTile extends StatelessWidget {
             ? null
             : Text(
                 subtitle!,
-                style: AppTypography.caption,
+                style: KitTypography.caption.copyWith(color: p.inkMuted),
                 overflow: TextOverflow.ellipsis,
                 maxLines: 2,
               ),
@@ -196,8 +207,8 @@ class AppSettingsSwitchTile extends StatelessWidget {
             AppHaptics.selection();
             onChanged(v);
           },
-          activeThumbColor: AppColors.primary,
-          activeTrackColor: AppColors.primary.withValues(alpha: 0.28),
+          activeThumbColor: p.brand,
+          activeTrackColor: p.brand.withValues(alpha: 0.28),
         ),
       ),
     );

@@ -17,6 +17,7 @@ import '../l10n/copy.dart';
 import '../data/api_client.dart';
 import '../providers/auth_provider.dart';
 import '../design/visuals/ambient_and_progress.dart';
+import '../ui/kit/presentation/profile_surfaces.dart';
 import '../ui/components/app_primary_button.dart';
 import '../ui/components/app_text_button.dart';
 import '../core/pending/pending_search.dart';
@@ -174,7 +175,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     final dotMotion = AppMotion.duration(context, AppDurations.normal);
     final bottomInset = MediaQuery.paddingOf(context).bottom;
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: ProfileSurfaces.canvas,
       body: AnimatedContainer(
         duration: AppDurations.slow,
         decoration: BoxDecoration(
@@ -370,7 +371,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                         child: _StepContent(
                           title: 'Ваш *прогресс* — наглядно',
                           body:
-                              'Серия, темп цикла и Праймы — без токсичных рейтингов. К 30 дню вы видите результат.',
+                              '30 дней — первый цикл, а не финал. Серия, темп и Праймы показывают результат без токсичных рейтингов.',
                           extra: OnboardingMetricsPreview(
                             skillId: _effectiveSkillId,
                             programTitle: _programTitle,
@@ -434,9 +435,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                     ? AppColors.primary
                                     : AppColors.textMuted
                                         .withValues(alpha: 0.35),
-                                boxShadow: active
-                                    ? AppGlow.violet(opacity: 0.55)
-                                    : null,
                               ),
                             );
                           },

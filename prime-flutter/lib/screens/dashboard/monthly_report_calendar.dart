@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 
-import '../../design/glass.dart';
 import '../../design/motion.dart';
 import '../../design/tokens.dart';
 import '../../design/typography.dart';
 import '../../models/report.dart';
+import '../../ui/kit/components/prime_content_card.dart';
 import 'dashboard_helpers.dart';
 
 class MonthlyReportCalendar extends StatelessWidget {
@@ -34,15 +34,13 @@ class MonthlyReportCalendar extends StatelessWidget {
         dashboardDateKey(day.date): day,
     };
 
-    return GlassContainer(
+    return PrimeContentCard(
       padding: const EdgeInsets.fromLTRB(
         AppSpacing.md,
         AppSpacing.sm,
         AppSpacing.md,
         AppSpacing.md,
       ),
-      borderRadius: BorderRadius.circular(AppRadius.bentoOuter),
-      fillOpacity: 0.05,
       child: Column(
         children: [
           Row(
@@ -222,17 +220,13 @@ class _CalendarDayCell extends StatelessWidget {
       builder: (context) {
         return SafeArea(
           top: false,
-          child: GlassContainer(
-            borderRadius: const BorderRadius.vertical(
-              top: Radius.circular(AppRadius.bentoOuter),
-            ),
+          child: PrimeContentCard(
             padding: const EdgeInsets.fromLTRB(
               AppSpacing.md,
               AppSpacing.sm,
               AppSpacing.md,
               AppSpacing.lg,
             ),
-            fillOpacity: 0.08,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -295,10 +289,8 @@ class _CalendarDayInfoCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GlassContainer(
+    return PrimeContentCard(
       padding: const EdgeInsets.all(AppSpacing.sm),
-      borderRadius: BorderRadius.circular(AppRadius.bentoInner),
-      fillOpacity: 0.04,
       child: Row(
         children: [
           Icon(icon, color: color),
@@ -328,11 +320,9 @@ class _CalendarReportTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final skillName = (report['skill_name'] ?? '').toString();
     final content = (report['content_text'] ?? '').toString().trim();
-    return GlassContainer(
+    return PrimeContentCard(
       margin: const EdgeInsets.only(bottom: AppSpacing.xs),
       padding: const EdgeInsets.all(AppSpacing.sm),
-      borderRadius: BorderRadius.circular(AppRadius.bentoInner),
-      fillOpacity: 0.04,
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

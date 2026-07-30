@@ -96,7 +96,7 @@ class AppTextField extends StatelessWidget {
             ? AppColors.elevatedSurface
             : AppColors.elevatedSurface.withValues(alpha: 0.45),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(AppRadius.sm),
+          borderRadius: BorderRadius.circular(AppRadius.button),
         ),
       ),
     );

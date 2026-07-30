@@ -93,6 +93,7 @@ class HomeStateSnapshot {
     this.showCalendar = false,
     this.showReportComposer = false,
     this.showNoGroupEmpty = false,
+    this.showWaitingCompanion = false,
   });
 
   final HomePhase phase;
@@ -104,6 +105,7 @@ class HomeStateSnapshot {
   final bool showCalendar;
   final bool showReportComposer;
   final bool showNoGroupEmpty;
+  final bool showWaitingCompanion;
 }
 
 class HomeStateResolver {
@@ -114,6 +116,39 @@ class HomeStateResolver {
         input.queueSkillName ??
         input.pendingGroup?.skillName;
     final artKind = habitArtKindFor(skillName ?? 'generic');
+
+    final pending = input.pendingGroup;
+    if (pending?.status == GroupStatus.introduction) {
+      return HomeStateSnapshot(
+        phase: HomePhase.groupIntroduction,
+        greetingSubtitle: 'Познакомьтесь с командой перед стартом цикла',
+        focusGroupId: pending!.groupId,
+        hero: HomeHeroConfig(
+          badge: 'Знакомство',
+          title: 'Познакомьтесь с командой',
+          body:
+              '${pending.skillName}: откройте группу, посмотрите профили и подтвердите участие.',
+          actionLabel: 'Открыть группу',
+          artKind: HabitArtKind.social,
+        ),
+      );
+    }
+
+    if (pending?.status == GroupStatus.rulesPending) {
+      return HomeStateSnapshot(
+        phase: HomePhase.groupRulesPending,
+        greetingSubtitle: 'Все подтвердили — осталось принять договор',
+        focusGroupId: pending!.groupId,
+        hero: HomeHeroConfig(
+          badge: 'Командный договор',
+          title: AppCopy.continueYourHabit,
+          body:
+              '${pending.skillName}: ${AppCopy.acceptPactToStartHabit}',
+          actionLabel: AppCopy.teamPactTitle,
+          artKind: artKind,
+        ),
+      );
+    }
 
     if (input.matchedGroupId != null && input.matchedGroupId!.isNotEmpty) {
       return HomeStateSnapshot(
@@ -136,47 +171,15 @@ class HomeStateResolver {
           input.needed > 0 ? input.peopleWaiting / input.needed : 0.0;
       return HomeStateSnapshot(
         phase: HomePhase.searchingTeam,
-        greetingSubtitle: 'Ищем вашу шестёрку — можно закрыть экран',
+        greetingSubtitle: 'Ищем сокомандников — можно закрыть экран',
         hero: HomeHeroConfig(
           badge: 'Поиск команды',
-          title: 'Ищем вашу *шестёрку*',
+          title: 'Ищем ваших *сокомандников*',
           body:
               '${input.queueSkillName ?? 'Привычка'}: ${input.peopleWaiting} из ${input.needed} участников. Можно закрыть экран — поиск продолжится.',
           progress: progress,
           progressLabel: '${input.peopleWaiting}/${input.needed}',
-          artKind: artKind,
-        ),
-      );
-    }
-
-    final pending = input.pendingGroup;
-    if (pending?.status == GroupStatus.introduction) {
-      return HomeStateSnapshot(
-        phase: HomePhase.groupIntroduction,
-        greetingSubtitle: 'Познакомьтесь с командой перед стартом цикла',
-        focusGroupId: pending!.groupId,
-        hero: HomeHeroConfig(
-          badge: 'Знакомство',
-          title: 'Познакомьтесь с командой',
-          body:
-              '${pending.skillName}: откройте группу, посмотрите профили и подтвердите участие.',
-          actionLabel: 'Открыть группу',
-          artKind: HabitArtKind.social,
-        ),
-      );
-    }
-
-    if (pending?.status == GroupStatus.rulesPending) {
-      return HomeStateSnapshot(
-        phase: HomePhase.groupRulesPending,
-        greetingSubtitle: 'Осталось принять правила — и можно начинать',
-        focusGroupId: pending!.groupId,
-        hero: HomeHeroConfig(
-          badge: 'Правила',
-          title: 'Примите правила цикла',
-          body:
-              '${pending.skillName}: прочитайте правила команды и подтвердите готовность.',
-          actionLabel: 'Открыть группу',
+          actionLabel: 'Открыть группы',
           artKind: artKind,
         ),
       );

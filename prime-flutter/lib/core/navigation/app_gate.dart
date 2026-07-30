@@ -7,6 +7,7 @@ import '../../screens/auth_screen.dart';
 import '../../screens/main_shell.dart';
 import '../../screens/onboarding_screen.dart';
 import '../../screens/profile_setup_screen.dart';
+import '../../ui/kit/presentation/profile_surfaces.dart';
 import '../../ui/states/app_loading_state.dart';
 import '../../widgets/async_error_view.dart';
 
@@ -26,7 +27,13 @@ class AppGate extends StatelessWidget {
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
     if (auth.initializing) {
-      return const Scaffold(body: AppLoadingState());
+      return Scaffold(
+        backgroundColor: ProfileSurfaces.canvas,
+        body: const AppLoadingState(
+          showBrand: true,
+          label: 'Собираем ваш день…',
+        ),
+      );
     }
     if (auth.initializationError != null) {
       return Scaffold(

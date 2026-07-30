@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../../core/errors/failure_mapper.dart';
+import '../../../core/sync/waiting_room_poller.dart';
 import '../../../data/api_client.dart';
 import '../../../design/tokens.dart';
 import '../../../design/typography.dart';
@@ -14,7 +17,24 @@ import '../app_primary_button.dart';
 import '../app_search_field.dart';
 import '../app_secondary_button.dart';
 import '../app_snackbar.dart';
+import '../editorial/app_friend_search.dart';
 import '../profile/app_avatar.dart';
+
+/// Session cache of pair invites already sent per skill (survives sheet reopen).
+class PairInviteSentCache {
+  PairInviteSentCache._();
+
+  static final instance = PairInviteSentCache._();
+
+  final _bySkill = <String, Set<String>>{};
+
+  Set<String> forSkill(String skillId) =>
+      _bySkill.putIfAbsent(skillId, () => <String>{});
+
+  void markSent(String skillId, Iterable<String> userIds) {
+    forSkill(skillId).addAll(userIds);
+  }
+}
 
 /// Opens a bottom sheet to invite friends into a waiting-room pair.
 Future<void> showInviteFriendsSheet(
@@ -48,6 +68,9 @@ class _InviteFriendsSheetState extends State<_InviteFriendsSheet> {
   final _nicknameCtrl = TextEditingController();
   final _selectedIds = <String>{};
   final _invitingIds = <String>{};
+  final _invitedIds = <String>{};
+  Timer? _searchDebounce;
+  int _searchToken = 0;
 
   List<UserPublic> _friends = [];
   bool _loading = true;
@@ -60,16 +83,42 @@ class _InviteFriendsSheetState extends State<_InviteFriendsSheet> {
   String? _searchError;
   Map<String, dynamic>? _foundUser;
 
+  static final _nicknamePattern = RegExp(r'^[a-z0-9_][a-z0-9_.-]{2,31}$');
+
   @override
   void initState() {
     super.initState();
+    _nicknameCtrl.addListener(_onNicknameChanged);
+    _invitedIds.addAll(
+      PairInviteSentCache.instance.forSkill(widget.skillId),
+    );
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadFriends());
   }
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
+    _nicknameCtrl.removeListener(_onNicknameChanged);
     _nicknameCtrl.dispose();
     super.dispose();
+  }
+
+  String _normalizedNickname(String raw) =>
+      raw.trim().toLowerCase().replaceFirst(RegExp(r'^@'), '');
+
+  void _onNicknameChanged() {
+    _searchDebounce?.cancel();
+    final nickname = _normalizedNickname(_nicknameCtrl.text);
+    if (nickname.length < 3 || !_nicknamePattern.hasMatch(nickname)) {
+      setState(() {
+        _foundUser = null;
+        _notFound = false;
+        _searchError = null;
+        _searching = false;
+      });
+      return;
+    }
+    _searchDebounce = Timer(const Duration(milliseconds: 350), _searchFriend);
   }
 
   Future<void> _loadFriends() async {
@@ -78,7 +127,8 @@ class _InviteFriendsSheetState extends State<_InviteFriendsSheet> {
       _error = null;
     });
     try {
-      final rows = await context.read<ApiClient>().listFriends();
+      final rows =
+          await context.read<ApiClient>().listFriends(forceRefresh: true);
       if (!mounted) return;
       setState(() {
         _friends = rows
@@ -114,15 +164,23 @@ class _InviteFriendsSheetState extends State<_InviteFriendsSheet> {
       final sent = (result['sent'] as List<dynamic>? ?? []).length;
       final skipped = (result['skipped'] as List<dynamic>? ?? []).length;
       if (sent > 0) {
+        setState(() {
+          _selectedIds.removeAll(ids);
+          _invitedIds.addAll(ids);
+        });
+        PairInviteSentCache.instance.markSent(widget.skillId, ids);
         showAppSnackBar(
           context,
           sent == 1
               ? 'Приглашение отправлено'
               : 'Приглашения отправлены: $sent',
         );
-        setState(() {
-          _selectedIds.removeAll(ids);
-        });
+        if (context.mounted) {
+          final poller = context.read<WaitingRoomPoller>();
+          if (poller.inQueue) {
+            unawaited(poller.refresh());
+          }
+        }
       } else if (skipped > 0) {
         showAppSnackBar(context, 'Не удалось отправить приглашение');
       }
@@ -164,40 +222,55 @@ class _InviteFriendsSheetState extends State<_InviteFriendsSheet> {
     }
   }
 
-  Future<void> _searchFriend() async {
-    final nickname = _nicknameCtrl.text.trim();
-    if (nickname.isEmpty) return;
+  Future<void> _searchFriend({bool forceRefresh = false}) async {
+    final nickname = _normalizedNickname(_nicknameCtrl.text);
+    if (nickname.length < 3 || !_nicknamePattern.hasMatch(nickname)) return;
+    final token = ++_searchToken;
     setState(() {
       _searching = true;
       _notFound = false;
       _searchError = null;
-      _foundUser = null;
+      if (forceRefresh) _foundUser = null;
     });
     try {
-      final result =
-          await context.read<ApiClient>().findUserByNickname(nickname);
-      if (!mounted) return;
+      final result = await context.read<ApiClient>().findUserByNickname(
+            nickname,
+            forceRefresh: forceRefresh,
+          );
+      if (!mounted || token != _searchToken) return;
       setState(() {
         _foundUser = result;
         _notFound = result['user'] == null;
       });
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || token != _searchToken) return;
       setState(() => _searchError = FailureMapper.from(e).message);
     } finally {
-      if (mounted) setState(() => _searching = false);
+      if (mounted && token == _searchToken) {
+        setState(() => _searching = false);
+      }
     }
   }
 
   Future<void> _sendFriendRequest() async {
-    final nickname = _nicknameCtrl.text.trim();
-    if (nickname.isEmpty || _sendingRequest) return;
+    final nickname = _normalizedNickname(_nicknameCtrl.text);
+    if (nickname.isEmpty || _sendingRequest || _foundUser == null) return;
     setState(() => _sendingRequest = true);
     try {
-      await context.read<ApiClient>().sendFriendRequestByNickname(nickname);
+      final result =
+          await context.read<ApiClient>().sendFriendRequestByNickname(nickname);
       if (!mounted) return;
-      showAppSnackBar(context, 'Заявка отправлена');
-      await _searchFriend();
+      final status = result['status'] as String? ?? 'pending';
+      setState(() {
+        _foundUser = applyFriendRequestToLookup(_foundUser!, result);
+      });
+      if (status == 'accepted') {
+        unawaited(_loadFriends());
+      }
+      showAppSnackBar(
+        context,
+        status == 'accepted' ? 'Вы теперь в друзьях' : 'Заявка отправлена',
+      );
     } catch (e) {
       if (!mounted) return;
       showAppSnackBar(context, FailureMapper.from(e).message);
@@ -271,7 +344,7 @@ class _InviteFriendsSheetState extends State<_InviteFriendsSheet> {
                 notFound: _notFound,
                 error: _searchError,
                 copyingLink: _copyingLink,
-                onSearch: _searchFriend,
+                onSearch: () => _searchFriend(forceRefresh: true),
                 onAddFriend: _sendFriendRequest,
                 onCopyLink: _copyInviteLink,
               )
@@ -284,11 +357,12 @@ class _InviteFriendsSheetState extends State<_InviteFriendsSheet> {
                   shrinkWrap: true,
                   itemCount: _friends.length,
                   separatorBuilder: (_, __) =>
-                      const SizedBox(height: AppSpacing.xs),
+                      const SizedBox(height: AppSpacing.sm),
                   itemBuilder: (context, index) {
                     final friend = _friends[index];
                     final selected = _selectedIds.contains(friend.id);
                     final inviting = _invitingIds.contains(friend.id);
+                    final invited = _invitedIds.contains(friend.id);
                     final display = friend.name.trim().isNotEmpty
                         ? friend.name
                         : '@${friend.nickname}';
@@ -298,8 +372,9 @@ class _InviteFriendsSheetState extends State<_InviteFriendsSheet> {
                       photoUrl: friend.photoUrl,
                       selected: selected,
                       inviting: inviting,
+                      invited: invited,
                       onToggle: () => _toggleSelected(friend.id),
-                      onInvite: inviting
+                      onInvite: inviting || invited
                           ? null
                           : () => _inviteUsers([friend.id]),
                     );
@@ -339,6 +414,7 @@ class _FriendInviteRow extends StatelessWidget {
     required this.photoUrl,
     required this.selected,
     required this.inviting,
+    required this.invited,
     required this.onToggle,
     required this.onInvite,
   });
@@ -348,6 +424,7 @@ class _FriendInviteRow extends StatelessWidget {
   final String? photoUrl;
   final bool selected;
   final bool inviting;
+  final bool invited;
   final VoidCallback onToggle;
   final VoidCallback? onInvite;
 
@@ -401,11 +478,20 @@ class _FriendInviteRow extends StatelessWidget {
                   ],
                 ),
               ),
-              AppCompactButton(
-                label: inviting ? '…' : 'Пригласить',
-                loading: inviting,
-                onPressed: onInvite,
-              ),
+              if (invited)
+                Text(
+                  'Приглашение отправлено',
+                  style: AppTypography.caption.copyWith(
+                    color: AppColors.textMuted,
+                    fontWeight: FontWeight.w600,
+                  ),
+                )
+              else
+                AppCompactButton(
+                  label: inviting ? '…' : 'Пригласить',
+                  loading: inviting,
+                  onPressed: onInvite,
+                ),
             ],
           ),
         ),

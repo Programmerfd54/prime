@@ -17,22 +17,23 @@ import '../design/haptics.dart';
 import '../design/routes.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
-import '../design/visuals/ambient_and_progress.dart';
 import '../models/chat_message.dart';
 import '../models/user.dart';
 import '../providers/auth_provider.dart';
+import '../providers/chats_inbox_provider.dart';
+import '../core/sync/realtime_client.dart';
+import '../core/sync/waiting_room_poller.dart';
 import '../ui/components/app_chat_date_separator.dart';
 import '../ui/components/app_dialog.dart';
 import '../ui/components/app_header.dart';
-import '../ui/components/app_scaffold.dart';
 import '../ui/components/app_snackbar.dart';
+import '../ui/components/chat/app_chat_shell.dart';
 import '../ui/components/chat/app_chat_composer.dart';
 import '../ui/components/chat/app_chat_message.dart';
 import '../ui/components/profile/app_avatar.dart';
 import '../ui/states/app_connection_banner.dart';
 import '../ui/states/app_empty_state.dart';
 import '../ui/states/app_error_state.dart';
-import '../ui/states/app_loading_state.dart';
 import 'public_profile_screen.dart';
 
 class DirectChatScreen extends StatefulWidget {
@@ -56,10 +57,12 @@ class _DirectChatScreenState extends State<DirectChatScreen>
   final _messageCtrl = TextEditingController();
   final _scrollController = ScrollController();
   final _imagePicker = ImagePicker();
-  ChatSyncController? _sync;
+  late ChatSyncController _sync;
   var _started = false;
+  var _initialized = false;
   var _loadingOlder = false;
   var _showScrollToBottom = false;
+  RealtimeClient? _realtime;
   PendingAttachment? _pending;
   var _uploading = false;
   var _uploadProgress = 0.0;
@@ -79,41 +82,106 @@ class _DirectChatScreenState extends State<DirectChatScreen>
     super.didChangeDependencies();
     if (_started) return;
     _started = true;
+    unawaited(_initChat());
+  }
+
+  Future<void> _initChat() async {
     final api = context.read<ApiClient>();
+    final cached = api.peekDirectMessagesCacheSync(widget.friend.id);
+
     _sync = ChatSyncController(api)
       ..addListener(_onSync)
       ..start(
         kind: ChatChannelKind.direct,
         channelId: widget.friend.id,
+        cachedPayload: cached,
       );
-    unawaited(() async {
-      try {
-        await api.markDirectChatRead(widget.friend.id);
-      } catch (_) {}
-    }());
+    _realtime = context.read<RealtimeClient>()
+      ..addDirectMessageListener(_onDirectMessage)
+      ..addDirectChatReadListener(_onDirectChatRead);
+    if (mounted) setState(() => _initialized = true);
+
+    unawaited(
+      api.peekDirectMessagesCache(widget.friend.id).then((diskCache) {
+        if (!mounted || diskCache == null) return;
+        _sync.warmCache(diskCache);
+      }),
+    );
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _markReadLocally();
+      unawaited(_markConversationReadOnServer());
+    });
+  }
+
+  void _markReadLocally() {
+    if (!mounted) return;
+    context.read<ChatsInboxProvider>().patchUnread(widget.friend.id, unread: 0);
+  }
+
+  Future<void> _markConversationReadOnServer() async {
+    try {
+      await context.read<ApiClient>().markDirectChatRead(widget.friend.id);
+    } catch (_) {
+      // Inbox badge is cleared locally; server catches up on next open or sync.
+    }
+  }
+
+  void _onDirectChatRead(DirectChatReadPush push) {
+    if (push.friendId != widget.friend.id) return;
+    _sync.applyPeerReadAt(push.readAt);
+    if (mounted) setState(() {});
+  }
+
+  void _onDirectMessage(DirectMessagePush push) {
+    if (push.friendId != widget.friend.id) return;
+    if (push.message != null) {
+      _sync.applyIncomingMessage(push.message!);
+      if (mounted) setState(() {});
+      _scrollToBottom();
+      _markReadLocally();
+      unawaited(_markConversationReadOnServer());
+      return;
+    }
+    unawaited(_refreshThreadFromServer());
+  }
+
+  Future<void> _refreshThreadFromServer() async {
+    await context.read<ApiClient>().invalidateDirectMessagesCache(widget.friend.id);
+    await _sync.bumpSync();
+    if (!mounted) return;
+    setState(() {});
+    if (_sync.messages.isEmpty) return;
+    final last = _sync.messages.last;
+    if (last['sender_user_id'] == widget.friend.id) {
+      _scrollToBottom();
+      _markReadLocally();
+      unawaited(_markConversationReadOnServer());
+    }
   }
 
   void _onSync() {
     if (!mounted) return;
     setState(() {});
-    final sync = _sync;
-    if (sync == null || sync.messages.isEmpty) return;
-    final last = sync.messages.last;
+    if (_sync.messages.isEmpty) return;
+    final last = _sync.messages.last;
     if (last['sender_user_id'] == widget.friend.id) {
       _scrollToBottom();
+      _markReadLocally();
+      unawaited(_markConversationReadOnServer());
     }
   }
 
   void _onScroll() {
-    final sync = _sync;
-    if (sync == null || !_scrollController.hasClients) return;
+    if (!_scrollController.hasClients) return;
     final pos = _scrollController.position;
     final nearBottom = pos.maxScrollExtent - pos.pixels < 120;
     if (nearBottom != !_showScrollToBottom) {
       setState(() => _showScrollToBottom = !nearBottom);
     }
-    _updateStickyDay(sync.messages);
-    if (pos.pixels < 80 && sync.hasMore && !_loadingOlder) {
+    _updateStickyDay(_sync.messages);
+    if (pos.pixels < 80 && _sync.hasMore && !_loadingOlder) {
       _loadOlder();
     }
   }
@@ -135,13 +203,12 @@ class _DirectChatScreenState extends State<DirectChatScreen>
   }
 
   Future<void> _loadOlder() async {
-    final sync = _sync;
-    if (sync == null || _loadingOlder || !sync.hasMore) return;
+    if (_loadingOlder || !_sync.hasMore) return;
     setState(() => _loadingOlder = true);
     final beforeExtent = _scrollController.hasClients
         ? _scrollController.position.maxScrollExtent
         : 0.0;
-    await sync.loadOlder();
+    await _sync.loadOlder();
     if (!mounted) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scrollController.hasClients) return;
@@ -156,23 +223,25 @@ class _DirectChatScreenState extends State<DirectChatScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    final sync = _sync;
-    if (sync == null) return;
     if (state == AppLifecycleState.resumed) {
-      sync.resume();
+      _sync.resume();
     } else if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive) {
-      sync.pause();
+      _sync.pause();
     }
   }
 
   @override
   void dispose() {
+    _realtime?.removeDirectMessageListener(_onDirectMessage);
+    _realtime?.removeDirectChatReadListener(_onDirectChatRead);
     WidgetsBinding.instance.removeObserver(this);
     _scrollController.removeListener(_onScroll);
-    _sync
-      ?..removeListener(_onSync)
-      ..dispose();
+    if (_initialized) {
+      _sync
+        ..removeListener(_onSync)
+        ..dispose();
+    }
     _messageCtrl.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -204,9 +273,8 @@ class _DirectChatScreenState extends State<DirectChatScreen>
   }
 
   Future<void> _send() async {
-    final sync = _sync;
     final me = context.read<AuthProvider>().user?.id;
-    if (sync == null || me == null) return;
+    if (me == null) return;
 
     if (_pending != null) {
       await _sendPending(me);
@@ -221,7 +289,7 @@ class _DirectChatScreenState extends State<DirectChatScreen>
     _clearReply();
     Analytics.instance.messageSendStarted(channel: 'direct');
     try {
-      await sync.sendText(
+      await _sync.sendText(
         draft,
         senderUserId: me,
         replyToId: reply?.id,
@@ -232,24 +300,17 @@ class _DirectChatScreenState extends State<DirectChatScreen>
       _scrollToBottom();
       widget.onMessageSent?.call();
     } catch (e) {
+      // sendText returns immediately; delivery errors surface on the bubble.
       Analytics.instance.messageSendFailed(
         channel: 'direct',
         type: FailureMapper.from(e).runtimeType.toString(),
       );
-      if (!mounted) return;
-      if (_messageCtrl.text.trim().isEmpty) {
-        _messageCtrl.text = draft;
-        _messageCtrl.selection = TextSelection.collapsed(offset: draft.length);
-      }
-      if (reply != null) _setReply(reply);
-      showAppSnackBar(context, FailureMapper.from(e).message);
     }
   }
 
   Future<void> _sendPending(String meId) async {
-    final sync = _sync;
     final pending = _pending;
-    if (sync == null || pending == null) return;
+    if (pending == null) return;
     final cancelToken = CancelToken();
     setState(() {
       _uploading = true;
@@ -259,7 +320,7 @@ class _DirectChatScreenState extends State<DirectChatScreen>
     final caption = _messageCtrl.text.trim();
     Analytics.instance.chatAttachmentStarted(channel: 'direct');
     try {
-      await sync.uploadAndSendMedia(
+      await _sync.uploadAndSendMedia(
         senderUserId: meId,
         bytes: pending.bytes,
         filename: pending.filename,
@@ -307,11 +368,8 @@ class _DirectChatScreenState extends State<DirectChatScreen>
     try {
       final updated =
           await context.read<ApiClient>().directToggleReaction(messageId, emoji);
-      final sync = _sync;
-      if (sync != null) {
-        final index = sync.messages.indexWhere((item) => item['id'] == updated['id']);
-        if (index != -1) sync.messages[index] = updated;
-      }
+      final index = _sync.messages.indexWhere((item) => item['id'] == updated['id']);
+      if (index != -1) _sync.messages[index] = updated;
       if (mounted) setState(() {});
     } catch (e) {
       if (mounted) showAppSnackBar(context, ApiClient.errorMessage(e));
@@ -464,10 +522,12 @@ class _DirectChatScreenState extends State<DirectChatScreen>
   List<_ChatListItem> _buildItems(List<Map<String, dynamic>> messages) {
     final items = <_ChatListItem>[];
     DateTime? lastDay;
+    final meId = context.read<AuthProvider>().user?.id;
     for (final raw in messages) {
       final model = ChatMessageModel.fromJson(
         raw,
-        peerLastReadAt: _sync?.peerLastReadAt,
+        currentUserId: meId,
+        peerLastReadAt: _sync.peerLastReadAt,
       );
       final date = model.createdAt;
       if (date != null) {
@@ -489,15 +549,17 @@ class _DirectChatScreenState extends State<DirectChatScreen>
     }
     final current = item.message!;
     final senderKey = current.senderUserId ?? '';
-    final isMine = senderKey == meId;
 
     bool isLastInGroup = true;
     bool isFirstInGroup = true;
+    final breaksGroup = current.isPairInvite || current.isReportMessage;
     for (var i = index + 1; i < items.length; i++) {
       final next = items[i];
       if (next.isSeparator) break;
       if (next.isMessage) {
-        isLastInGroup = next.message!.senderUserId != senderKey;
+        final nextBreaks = next.message!.isPairInvite || next.message!.isReportMessage;
+        isLastInGroup =
+            breaksGroup || nextBreaks || next.message!.senderUserId != senderKey;
         break;
       }
     }
@@ -505,13 +567,15 @@ class _DirectChatScreenState extends State<DirectChatScreen>
       final prev = items[i];
       if (prev.isSeparator) break;
       if (prev.isMessage) {
-        isFirstInGroup = prev.message!.senderUserId != senderKey;
+        final prevBreaks = prev.message!.isPairInvite || prev.message!.isReportMessage;
+        isFirstInGroup =
+            breaksGroup || prevBreaks || prev.message!.senderUserId != senderKey;
         break;
       }
     }
 
     return _MessageGroupMeta(
-      showAvatar: !isMine && isLastInGroup,
+      showAvatar: isLastInGroup,
       showMeta: isLastInGroup,
       isLastInGroup: isLastInGroup,
       isFirstInGroup: isFirstInGroup,
@@ -525,152 +589,189 @@ class _DirectChatScreenState extends State<DirectChatScreen>
     return '$apiBaseUrl/$photoUrl';
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final sync = _sync;
-    if (sync == null || (sync.loading && sync.messages.isEmpty)) {
-      return const AppScaffold(
-        body: AmbientCanvas(child: AppLoadingState(label: 'Загрузка чата…')),
+  Widget _messageArea(ChatSyncController sync) {
+    if (sync.messages.isNotEmpty) {
+      final items = _buildItems(sync.messages);
+      return Stack(
+        children: [
+          ListView.builder(
+            controller: _scrollController,
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.md,
+              AppSpacing.lg,
+              AppSpacing.md,
+              AppSpacing.xs,
+            ),
+            itemCount: items.length + (_loadingOlder ? 1 : 0),
+            itemBuilder: (context, index) {
+              if (_loadingOlder && index == 0) {
+                return Padding(
+                  padding: EdgeInsets.only(bottom: AppSpacing.sm),
+                  child: Center(
+                    child: SizedBox.square(
+                      dimension: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: AppColors.primary,
+                      ),
+                    ),
+                  ),
+                );
+              }
+              final itemIndex = _loadingOlder ? index - 1 : index;
+              final item = items[itemIndex];
+              if (item.isSeparator) {
+                return AppChatDateSeparator(label: item.separatorLabel!);
+              }
+              final message = item.message!;
+              final meId = context.read<AuthProvider>().user?.id;
+              final me = context.read<AuthProvider>().user;
+              final isMine = message.senderUserId == meId;
+              final group = _groupMeta(items, itemIndex, meId);
+              final failed =
+                  message.deliveryStatus == ChatDeliveryStatus.failed;
+              return AppChatMessage(
+                message: message,
+                isMine: isMine,
+                timeLabel: group.showMeta ? _timeLabel(message.createdAt) : null,
+                failed: failed,
+                showAvatar: group.showAvatar,
+                showMeta: group.showMeta,
+                isLastInGroup: group.isLastInGroup,
+                isFirstInGroup: group.isFirstInGroup,
+                peerAvatarUrl: _avatarUrl(widget.friend.photoUrl),
+                peerName: widget.friend.name.isEmpty
+                    ? '@${widget.friend.nickname}'
+                    : widget.friend.name,
+                myAvatarUrl: _avatarUrl(me?.photoUrl),
+                myName: me?.name.isNotEmpty == true ? me!.name : me?.nickname,
+                onReply: () => _setReply(message),
+                onReact: message.id == null
+                    ? null
+                    : (emoji) => _toggleReaction(message, emoji),
+                onRetry: meId == null
+                    ? null
+                    : () => sync.retryFailed(
+                          message.clientId ?? message.id!,
+                          senderUserId: meId,
+                        ),
+                onPairInviteJoined: () {
+                  final poller = context.read<WaitingRoomPoller>();
+                  unawaited(poller.refresh());
+                  if (poller.inQueue) {
+                    poller.start(forceRefresh: true);
+                  }
+                },
+              );
+            },
+          ),
+          AppChatStickyDateHeader(label: _stickyDayLabel),
+        ],
       );
     }
-    if (sync.error != null && sync.messages.isEmpty) {
-      return AppScaffold(
-        body: AmbientCanvas(
-          child: AppErrorState(
-            message: sync.error!,
-            correlationId: sync.errorCorrelationId,
-            onRetry: () => sync.sync(),
-          ),
+
+    if (!_initialized) {
+      return const Center(
+        child: SizedBox.square(
+          dimension: 28,
+          child: CircularProgressIndicator(strokeWidth: 2),
         ),
       );
     }
 
-    final meId = context.watch<AuthProvider>().user?.id;
-    final items = _buildItems(sync.messages);
+    if (sync.error != null) {
+      return AppErrorState(
+        message: sync.error!,
+        correlationId: sync.errorCorrelationId,
+        onRetry: () => sync.sync(forceRefresh: true),
+      );
+    }
+
+    return const AppEmptyState(
+      title: 'Начните общение',
+      subtitle:
+          'Напишите первое сообщение — собеседник увидит его без обновления.',
+      icon: Icons.chat_bubble_outline,
+    );
+  }
+
+  Widget _composerFor(ChatSyncController sync) {
+    if (!_initialized) {
+      return const SizedBox.shrink();
+    }
+    return AppChatComposer(
+      controller: _messageCtrl,
+      onSend: _send,
+      onAttach: _showAttachSheet,
+      pending: _pending,
+      onRemovePending: () => setState(() => _pending = null),
+      uploading: _uploading,
+      uploadProgress: _uploadProgress,
+      onCancelUpload: _cancelUpload,
+      replyPreview: _replyTo != null ? _replyPreviewFor(_replyTo!) : null,
+      onCancelReply: _clearReply,
+      quickReplies: directQuickReplies,
+      onQuickReply: (text) {
+        _messageCtrl.text = text;
+        _messageCtrl.selection =
+            TextSelection.collapsed(offset: text.length);
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final profileAction = IconButton(
+      tooltip: 'Посмотреть профиль',
+      icon: const Icon(Icons.person_outline_rounded),
+      onPressed: _openPublicProfile,
+    );
+
+    if (!_initialized) {
+      final title = widget.friend.name.isEmpty
+          ? '@${widget.friend.nickname}'
+          : widget.friend.name;
+      return AppChatShell(
+        appBar: AppChatAppBar(
+          title: title,
+          subtitle: '@${widget.friend.nickname}',
+          onTitleTap: _openPublicProfile,
+          avatar: AppAvatar(photoUrl: widget.friend.photoUrl, radius: 18, name: title),
+          actions: [profileAction],
+        ),
+        messageArea: const Center(
+          child: SizedBox.square(
+            dimension: 28,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
+        composer: const SizedBox.shrink(),
+      );
+    }
+
+    final sync = _sync;
     final title = widget.friend.name.isEmpty
         ? '@${widget.friend.nickname}'
         : widget.friend.name;
 
-    return AppScaffold(
-      safeBottom: false,
+    return AppChatShell(
       appBar: AppChatAppBar(
         title: title,
         subtitle: '@${widget.friend.nickname}',
         onTitleTap: _openPublicProfile,
         avatar: AppAvatar(photoUrl: widget.friend.photoUrl, radius: 18, name: title),
+        actions: [profileAction],
       ),
-      banner: AppConnectionBanner(visible: sync.offline, onRetry: () => sync.sync()),
-      body: AmbientCanvas(
-        child: Stack(
-          children: [
-            Column(
-              children: [
-                Expanded(
-                  child: sync.messages.isEmpty
-                      ? const AppEmptyState(
-                          title: 'Начните общение',
-                          subtitle:
-                              'Напишите первое сообщение — собеседник увидит его без обновления.',
-                          icon: Icons.chat_bubble_outline,
-                        )
-                      : Stack(
-                          children: [
-                            ListView.builder(
-                              controller: _scrollController,
-                              padding: const EdgeInsets.fromLTRB(
-                                AppSpacing.md,
-                                AppSpacing.lg,
-                                AppSpacing.md,
-                                AppSpacing.xs,
-                              ),
-                              itemCount: items.length + (_loadingOlder ? 1 : 0),
-                              itemBuilder: (context, index) {
-                                if (_loadingOlder && index == 0) {
-                                  return Padding(
-                                    padding: EdgeInsets.only(bottom: AppSpacing.sm),
-                                    child: Center(
-                                      child: SizedBox.square(
-                                        dimension: 20,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          color: AppColors.primary,
-                                        ),
-                                      ),
-                                    ),
-                                  );
-                                }
-                                final itemIndex = _loadingOlder ? index - 1 : index;
-                                final item = items[itemIndex];
-                                if (item.isSeparator) {
-                                  return AppChatDateSeparator(label: item.separatorLabel!);
-                                }
-                                final message = item.message!;
-                                final isMine = message.senderUserId == meId;
-                                final group = _groupMeta(items, itemIndex, meId);
-                                final failed =
-                                    message.deliveryStatus == ChatDeliveryStatus.failed;
-                                return AppChatMessage(
-                                  message: message,
-                                  isMine: isMine,
-                                  timeLabel: group.showMeta ? _timeLabel(message.createdAt) : null,
-                                  failed: failed,
-                                  showAvatar: group.showAvatar,
-                                  showMeta: group.showMeta,
-                                  isLastInGroup: group.isLastInGroup,
-                                  peerAvatarUrl: _avatarUrl(widget.friend.photoUrl),
-                                  peerName: title,
-                                  onReply: () => _setReply(message),
-                                  onReact: message.id == null
-                                      ? null
-                                      : (emoji) => _toggleReaction(message, emoji),
-                                  onRetry: meId == null
-                                      ? null
-                                      : () => sync.retryFailed(
-                                            message.clientId ?? message.id!,
-                                            senderUserId: meId,
-                                          ),
-                                );
-                              },
-                            ),
-                            AppChatStickyDateHeader(label: _stickyDayLabel),
-                          ],
-                        ),
-                ),
-                AppChatComposer(
-                  controller: _messageCtrl,
-                  onSend: _send,
-                  onAttach: _showAttachSheet,
-                  pending: _pending,
-                  onRemovePending: () => setState(() => _pending = null),
-                  uploading: _uploading,
-                  uploadProgress: _uploadProgress,
-                  onCancelUpload: _cancelUpload,
-                  replyPreview: _replyTo != null ? _replyPreviewFor(_replyTo!) : null,
-                  onCancelReply: _clearReply,
-                  quickReplies: directQuickReplies,
-                  onQuickReply: (text) {
-                    _messageCtrl.text = text;
-                    _messageCtrl.selection =
-                        TextSelection.collapsed(offset: text.length);
-                  },
-                ),
-              ],
-            ),
-            if (_showScrollToBottom && sync.messages.isNotEmpty)
-              Positioned(
-                right: AppSpacing.md,
-                bottom: widget.embedded ? 88 : 96,
-                child: FloatingActionButton.small(
-                  heroTag: 'scroll_bottom_${widget.friend.id}',
-                  backgroundColor: AppColors.primaryContainer,
-                  foregroundColor: AppColors.primarySoft,
-                  onPressed: _scrollToBottom,
-                  child: const Icon(Icons.keyboard_arrow_down_rounded),
-                ),
-              ),
-          ],
-        ),
+      banner: AppConnectionBanner(
+        visible: sync.offline,
+        onRetry: () => sync.sync(forceRefresh: true),
       ),
+      messageArea: _messageArea(sync),
+      composer: _composerFor(sync),
+      showScrollToBottom: _showScrollToBottom && sync.messages.isNotEmpty,
+      onScrollToBottom: _scrollToBottom,
+      scrollBottomOffset: widget.embedded ? 88 : 96,
+      scrollHeroTag: 'scroll_bottom_${widget.friend.id}',
     );
   }
 }

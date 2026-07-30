@@ -5,13 +5,14 @@ import mimetypes
 from pathlib import Path as FsPath
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from sqlalchemy import case, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
 from ..db import get_session
 from ..deps import get_current_user
+from ..media import read_upload
 from ..matrix import (
     create_room,
     download_media,
@@ -79,6 +80,7 @@ from .group_service import (
     _public_user_payload,
     _reaction_payloads,
     _report_payload,
+    _report_payloads,
     _require_active_group,
     _sync_user_daily_progress,
     _team_pulse,
@@ -93,26 +95,42 @@ router = APIRouter(tags=["reports"])
 async def report_upload_media(
     file: UploadFile = File(...),
     group_id: str = Form(...),
+    request: Request = None,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     await _require_active_group(session, group_id, user)
+    if request is not None:
+        from ..rate_limit import enforce as enforce_rate_limit
+        from ..rate_limit import record_failure as record_rate_limit_failure
+        settings = get_settings()
+        keys = (
+            f"upload:report:user:{user.id}",
+            f"upload:report:ip:{request.client.host if request.client else 'unknown'}",
+        )
+        for key in keys:
+            await enforce_rate_limit(session, key, limit=settings.upload_rate_limit_attempts, window_seconds=settings.upload_rate_limit_window_seconds, detail="Слишком много загрузок. Попробуйте позже.")
+        for key in keys:
+            await record_rate_limit_failure(session, key, window_seconds=settings.upload_rate_limit_window_seconds)
     user = await ensure_matrix_user(user, session)
-    content = await file.read(MAX_MEDIA_BYTES + 1)
+    declared_type = (file.content_type or "").lower()
+    read_limit = MAX_DIRECT_IMAGE_BYTES if declared_type.startswith("image/") else MAX_MEDIA_BYTES
+    content, content_type, filename = await read_upload(
+        file,
+        max_bytes=read_limit,
+        max_image_bytes=MAX_DIRECT_IMAGE_BYTES,
+        allow_types=set(),
+    )
     if not content:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Файл пустой")
     if len(content) > MAX_MEDIA_BYTES:
         raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Файл больше 100 МБ")
-    filename = file.filename or f"{uuid4().hex}.bin"
-    content_type = file.content_type or "application/octet-stream"
-    if content_type == "application/octet-stream":
-        content_type = mimetypes.guess_type(filename)[0] or content_type
     if not content_type.startswith(ALLOWED_MEDIA_PREFIXES):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Для отчёта можно загрузить фото, видео, аудио или видеокружок",
         )
-    media_url = await upload_media(user, filename, content_type, content)
+    media_url = await upload_media(user, session, filename, content_type, content, "group", group_id)
     await session.commit()
     return {
         "storage_url": media_url,
@@ -139,7 +157,7 @@ async def calendar(
     ).scalars().all()
     return {
         "group_id": group_id,
-        "days": [await _report_payload(session, report) for report in reports],
+        "days": await _report_payloads(session, reports),
         "today": date.today().isoformat(),
         "tracking_start_date": membership.created_at.date().isoformat(),
     }
@@ -149,7 +167,10 @@ async def calendar(
 async def calendar_all(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
+    limit: int = Query(default=365, ge=1, le=730),
 ) -> dict:
+    if not isinstance(limit, int):
+        limit = 365
     first_membership_at = await session.scalar(
         select(func.min(GroupMember.created_at)).where(GroupMember.user_id == user.id)
     )
@@ -158,8 +179,11 @@ async def calendar_all(
             select(HabitReport)
             .where(HabitReport.user_id == user.id)
             .order_by(HabitReport.report_date.asc(), HabitReport.created_at.asc())
+            .limit(limit + 1)
         )
     ).scalars().all()
+    has_more = len(reports) > limit
+    reports = reports[:limit]
     group_ids = {report.group_id for report in reports}
     groups_by_id: dict[str, Group] = {}
     if group_ids:
@@ -231,6 +255,7 @@ async def calendar_all(
 
     return {
         "days": days,
+        "has_more": has_more,
         "today": date.today().isoformat(),
         "tracking_start_date": tracking_start.isoformat() if tracking_start else None,
         "current_streak": metrics["current_streak"],
@@ -414,4 +439,3 @@ async def create_report(
     result["prime_points"] = user.prime_points
     result["team_day"] = await team_day_payload(session, group, day=today)
     return result
-

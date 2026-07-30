@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
-import 'package:prime/design/liquid/liquid_glass.dart';
 import 'package:prime/design/tokens.dart';
 import 'package:prime/design/typography.dart';
+import 'package:prime/ui/kit/tokens/kit_surfaces.dart';
 
 /// Card with corner expand affordance and expandable body content.
 class PrimeExpandCard extends StatelessWidget {
@@ -21,11 +21,11 @@ class PrimeExpandCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return LiquidGlass(
-      forceTier: LiquidTier.lite,
-      radius: AppRadius.xl,
+    return Container(
+      clipBehavior: Clip.antiAlias,
       padding: const EdgeInsets.all(AppSpacing.md),
-      clip: true,
+      decoration: kitSurfaceDecoration(context, PrimeSurfaceLevel.solid,
+          radius: AppRadius.xl),
       child: Stack(
         children: [
           Column(

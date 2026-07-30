@@ -9,7 +9,6 @@ import '../core/habits/habit_program_metadata.dart';
 import '../core/onboarding/onboarding_preferences.dart';
 import '../core/errors/failure_mapper.dart';
 import '../core/sync/waiting_room_poller.dart';
-import '../core/validation/about_quality.dart';
 import '../data/api_client.dart';
 import '../design/lottie_registry.dart';
 import '../design/routes.dart';
@@ -22,16 +21,16 @@ import '../providers/auth_provider.dart';
 import '../design/visuals/habit_tags.dart';
 import '../design/visuals/habit_art.dart';
 import '../design/visuals/ambient_and_progress.dart';
+import '../ui/kit/presentation/profile_surfaces.dart';
 import '../design/visuals/charts/charts.dart';
-import '../screens/group_detail_screen.dart';
 import '../ui/components/app_chip.dart';
 import '../ui/components/app_dialog.dart';
 import '../ui/components/app_icon_button.dart';
 import '../ui/components/app_primary_button.dart';
 import '../ui/components/app_skeleton.dart';
-import '../ui/components/app_textarea.dart';
 import '../ui/components/editorial/app_habit_catalog.dart';
 import '../ui/components/editorial/app_habit_detail_v2.dart';
+import '../ui/components/profile/about_before_team_sheet.dart';
 import '../ui/kit/prime_kit.dart';
 import '../widgets/async_error_view.dart';
 
@@ -262,14 +261,18 @@ class _SkillsScreenState extends State<SkillsScreen> {
           ),
           slivers: [
             SliverPadding(
-              padding: const EdgeInsets.fromLTRB(
-                AppSpacing.md,
-                AppSpacing.md,
-                AppSpacing.md,
-                AppSpacing.bottomNavClearance,
+              padding: KitLayout.tabScrollPadding(
+                context,
+                left: AppSpacing.md,
+                top: AppSpacing.md,
+                right: AppSpacing.md,
               ),
               sliver: SliverList(
                 delegate: SliverChildListDelegate([
+                  PrimeTabContentFrame(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
                   Text(
                     AppCopy.habits,
                     style: KitTypography.pageTitle.copyWith(color: p.ink),
@@ -313,7 +316,7 @@ class _SkillsScreenState extends State<SkillsScreen> {
                       Text(
                         _onboardingPrefs.recommendationReason(null)!,
                         style: AppTypography.caption.copyWith(
-                          color: AppColors.primarySoft,
+                          color: p.brandSoft,
                         ),
                       ),
                     ],
@@ -431,6 +434,9 @@ class _SkillsScreenState extends State<SkillsScreen> {
                       onFavoriteToggle: _toggleFavorite,
                     ),
                   ],
+                      ],
+                    ),
+                  ),
                 ]),
               ),
             ),
@@ -674,13 +680,14 @@ class _HowItWorksCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = context.prime;
     return PrimeContentCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             'Как это работает',
-            style: KitTypography.sectionTitle.copyWith(fontSize: 16),
+            style: KitTypography.sectionTitle.copyWith(fontSize: 16, color: p.ink),
           ),
           const SizedBox(height: AppSpacing.sm),
           const Center(
@@ -700,7 +707,7 @@ class _HowItWorksCard extends StatelessWidget {
                     child: Icon(
                       Icons.chevron_right_rounded,
                       size: 16,
-                      color: AppColors.textMuted,
+                      color: p.inkMuted,
                     ),
                   ),
                 Expanded(
@@ -709,7 +716,7 @@ class _HowItWorksCard extends StatelessWidget {
                       Icon(
                         _steps[i].$1,
                         size: 22,
-                        color: AppColors.primarySoft,
+                        color: p.brandSoft,
                       ),
                       const SizedBox(height: AppSpacing.xxs),
                       Text(
@@ -761,23 +768,7 @@ class SkillDetailScreen extends StatefulWidget {
   State<SkillDetailScreen> createState() => _SkillDetailScreenState();
 }
 
-String _aboutSheetError(Object error) {
-  final message = FailureMapper.from(error).message;
-  const profileFieldErrors = {
-    'Укажите имя',
-    'Укажите никнейм',
-    'Выберите область',
-    'Укажите возраст',
-  };
-  if (profileFieldErrors.contains(message)) {
-    return 'Не удалось сохранить «О себе»: профиль неполный ($message). '
-        'Откройте «Профиль» и заполните имя, ник, регион и возраст.';
-  }
-  return message;
-}
-
 class _SkillDetailScreenState extends State<SkillDetailScreen> {
-  bool _joining = false;
   late bool _favorite;
 
   @override
@@ -787,159 +778,29 @@ class _SkillDetailScreenState extends State<SkillDetailScreen> {
     Analytics.instance.habitDetailsViewed(widget.skill.id);
   }
 
-  Future<bool> _ensureAboutReady() async {
-    final auth = context.read<AuthProvider>();
-    final about = auth.user?.about ?? '';
-    if (AboutQuality.junkReason(about) == null) {
-      return true;
-    }
-
-    final controller = TextEditingController(text: about);
-    final completed = await showAppBottomSheet<bool>(
-      context: context,
-      child: Builder(
-        builder: (sheetContext) {
-        String? localError;
-        var saving = false;
-        return StatefulBuilder(
-          builder: (context, setModalState) {
-            final words = AboutQuality.wordCount(controller.text);
-            return SingleChildScrollView(
-              child: Padding(
-              padding: const EdgeInsets.fromLTRB(
-                AppSpacing.lg,
-                AppSpacing.lg,
-                AppSpacing.lg,
-                AppSpacing.lg,
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  const Text(
-                    'Расскажите о себе',
-                    style: AppTypography.title1,
-                  ),
-                  const SizedBox(height: AppSpacing.xs),
-                  const Text(
-                    'Перед поиском команды нужно минимум 50 осмысленных слов — это увидят участники при знакомстве.',
-                    style: AppTypography.bodySecondary,
-                  ),
-                  const SizedBox(height: AppSpacing.md),
-                  AppTextarea(
-                    controller: controller,
-                    label: 'О себе',
-                    hint:
-                        'Кто вы, зачем эта привычка, чем можете быть полезны команде…',
-                    minLines: 5,
-                    maxLines: 8,
-                    onChanged: (_) => setModalState(() {}),
-                  ),
-                  const SizedBox(height: AppSpacing.xs),
-                  Text(
-                    'Слов: $words / 50',
-                    style: AppTypography.caption.copyWith(
-                      color: words >= 50
-                          ? AppColors.success
-                          : AppColors.textSecondary,
-                    ),
-                  ),
-                  if (localError != null) ...[
-                    const SizedBox(height: AppSpacing.xs),
-                    Text(
-                      localError!,
-                      style: AppTypography.bodySecondary.copyWith(
-                        color: AppColors.error,
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: AppSpacing.md),
-                  AppPrimaryButton(
-                    label: AppCopy.continueLabel,
-                    loading: saving,
-                    onPressed: saving
-                        ? null
-                        : () async {
-                            final junk =
-                                AboutQuality.junkReason(controller.text);
-                            if (junk != null) {
-                              setModalState(() => localError = junk);
-                              return;
-                            }
-                            setModalState(() {
-                              saving = true;
-                              localError = null;
-                            });
-                            try {
-                              await auth.api.updateMe({
-                                'about': controller.text.trim(),
-                              });
-                              await auth.refreshUser();
-                              if (sheetContext.mounted) {
-                                Navigator.of(sheetContext).pop(true);
-                              }
-                            } catch (e) {
-                              setModalState(() {
-                                saving = false;
-                                localError = _aboutSheetError(e);
-                              });
-                            }
-                          },
-                  ),
-                ],
-              ),
-              ),
-            );
-          },
-        );
-        },
-      ),
-    );
-    controller.dispose();
-    return completed == true;
-  }
-
   Future<void> _joinGroup() async {
-    final aboutOk = await _ensureAboutReady();
+    final aboutOk = await ensureAboutBeforeTeam(
+      context,
+      reason: AboutBeforeTeamReason.search,
+    );
     if (!aboutOk || !mounted) return;
 
-    setState(() => _joining = true);
     Analytics.instance.searchStarted(widget.skill.id);
+    final api = context.read<ApiClient>();
+    final poller = context.read<WaitingRoomPoller>();
+    final skill = widget.skill;
+
+    widget.onSearchStarted?.call(skill);
+    if (mounted) Navigator.of(context).pop();
+
     try {
-      final result =
-          await context.read<ApiClient>().joinWaitingRoom(widget.skill.id);
-      if (!mounted) return;
-      context.read<WaitingRoomPoller>().start();
+      final result = await api.joinWaitingRoom(skill.id);
+      poller.start();
       if (result['matched_group_id'] != null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Команда найдена! Присоединяйся.')),
-        );
-        Navigator.of(context).pushReplacement(
-          PrimeRoute.sharedAxis(
-            builder: (_) =>
-                GroupDetailScreen(groupId: result['matched_group_id']),
-          ),
-        );
-      } else {
-        final waiting = result['people_waiting'] as int? ?? 0;
-        final needed = result['needed'] as int? ?? 6;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Поиск команды: $waiting/$needed. Можно искать несколько привычек сразу.',
-            ),
-          ),
-        );
-        widget.onSearchStarted?.call(widget.skill);
-        Navigator.of(context).pop();
+        await poller.refresh();
       }
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(FailureMapper.from(e).message)),
-      );
-    } finally {
-      if (mounted) setState(() => _joining = false);
+    } catch (_) {
+      // Groups tab shows queue state via poller; errors surface on refresh.
     }
   }
 
@@ -953,12 +814,12 @@ class _SkillDetailScreenState extends State<SkillDetailScreen> {
     final bottomBarHeight = PrimeContextualActionBar.heightFor(context);
 
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: ProfileSurfaces.canvas,
       bottomNavigationBar: PrimeContextualActionBar(
-        primaryLabel:
-            _joining ? AppCopy.searchingTeam : AppCopy.findTeam,
-        onPrimary: _joining ? () {} : _joinGroup,
-        caption: '6 человек · старт от 3 через 12 ч',
+        hint: 'Команда из 6 · первый сезон 30 дней',
+        primaryLabel: AppCopy.findTeam,
+        primaryIcon: Icons.groups_outlined,
+        onPrimary: _joinGroup,
       ),
       body: AmbientCanvas(
         child: Stack(
@@ -1049,13 +910,6 @@ class _SkillDetailScreenState extends State<SkillDetailScreen> {
                           AppChip(label: meta.durationLabel),
                           const AppChip(label: '6 человек'),
                         ],
-                      ),
-                      const SizedBox(height: AppSpacing.lg),
-                      AppHabitPreviewDayCard(
-                        skillId: widget.skill.id,
-                        dailyAction: meta.dailyAction,
-                        onCompleted: () => Analytics.instance
-                            .habitPreviewCompleted(widget.skill.id),
                       ),
                       const SizedBox(height: AppSpacing.lg),
                       AppHabitDetailSections(skill: widget.skill),

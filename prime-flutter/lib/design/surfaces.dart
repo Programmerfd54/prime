@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
-import 'glass.dart';
+import '../ui/kit/tokens/kit_surfaces.dart';
+import 'theme/prime_theme_context.dart';
 import 'tokens.dart';
 
 enum AppSurfaceTone { dark, tonal, brand, glass }
@@ -30,57 +31,38 @@ class PrimeSurface extends StatelessWidget {
   final VoidCallback? onTap;
   final Gradient? gradient;
 
-  Color get backgroundColor => switch (tone) {
-        AppSurfaceTone.dark => AppColors.surface,
-        AppSurfaceTone.tonal => AppColors.surfaceSoft,
-        AppSurfaceTone.brand => AppColors.primaryContainer,
-        AppSurfaceTone.glass => Colors.transparent,
+  PrimeSurfaceLevel get _level => switch (tone) {
+        AppSurfaceTone.glass => PrimeSurfaceLevel.glass,
+        AppSurfaceTone.brand => PrimeSurfaceLevel.accent,
+        AppSurfaceTone.tonal => PrimeSurfaceLevel.solid,
+        AppSurfaceTone.dark => PrimeSurfaceLevel.solid,
       };
-
-  Color get foregroundColor => AppColors.textPrimary;
-
-  Color get mutedForegroundColor => AppColors.textSecondary;
-
-  Color get borderColor => switch (tone) {
-        AppSurfaceTone.brand => AppColors.primary.withValues(alpha: 0.35),
-        AppSurfaceTone.glass => Colors.white.withValues(alpha: 0.10),
-        _ => AppColors.border,
-      };
-
-  List<BoxShadow> get shadows => AppElevation.none;
 
   @override
   Widget build(BuildContext context) {
+    final p = context.prime;
     final radius = borderRadius ?? BorderRadius.circular(AppRadius.xl);
     final pad = padding ?? const EdgeInsets.all(AppSpacing.lg);
 
-    Widget themed = DefaultTextStyle.merge(
-      style: TextStyle(color: foregroundColor),
+    final themed = DefaultTextStyle.merge(
+      style: TextStyle(color: p.ink),
       child: IconTheme.merge(
-        data: IconThemeData(color: mutedForegroundColor),
+        data: IconThemeData(color: p.inkSecondary),
         child: child,
       ),
     );
 
-    if (tone == AppSurfaceTone.glass && gradient == null) {
-      return GlassContainer(
-        width: width,
-        height: height,
-        margin: margin,
-        padding: pad,
-        borderRadius: radius,
-        onTap: onTap,
-        child: themed,
-      );
-    }
-
-    final decoration = BoxDecoration(
-      color: gradient == null ? backgroundColor : null,
-      gradient: gradient,
-      borderRadius: radius,
-      border: Border.all(color: borderColor),
-      boxShadow: shadows,
-    );
+    final decoration = gradient == null
+        ? kitSurfaceDecoration(
+            context,
+            _level,
+            borderRadius: radius,
+          )
+        : BoxDecoration(
+            gradient: gradient,
+            borderRadius: radius,
+            border: Border.all(color: p.hairline),
+          );
 
     Widget content = Container(
       width: width,

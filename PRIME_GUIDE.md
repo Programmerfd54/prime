@@ -243,8 +243,10 @@ app/routers/auth.py
 
 Регистрация и вход:
 
-- `POST /auth/register`;
-- `POST /auth/login`.
+- `POST /auth/register` — создаёт неподтверждённый аккаунт и отправляет код на почту, токен не выдаёт;
+- `POST /auth/verify-email` — принимает код и выдаёт первый токен;
+- `POST /auth/resend-verification` — новый код (с задержкой между отправками);
+- `POST /auth/login` — вернёт `403`, пока почта не подтверждена.
 
 ```text
 app/routers/users.py
@@ -290,6 +292,8 @@ https://api.inpr1me.ru/api/v1
 
 ```text
 POST /auth/register
+POST /auth/verify-email
+POST /auth/resend-verification
 POST /auth/login
 ```
 

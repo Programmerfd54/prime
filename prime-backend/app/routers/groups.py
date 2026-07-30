@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
 from ..db import get_session
-from ..deps import get_current_user
+from ..deps import get_current_user, require_moderator
 from ..matrix import (
     create_room,
     download_media,
@@ -75,6 +75,7 @@ from .group_service import (
     _group_payload,
     _mark_direct_chat_read,
     _maybe_match_waiting_room,
+    _notify_group_members,
     _public_user_payload,
     _reaction_payloads,
     _report_payload,
@@ -92,12 +93,14 @@ router = APIRouter(tags=["groups"])
 async def groups(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
+    limit: int = Query(default=20, ge=1, le=50),
 ) -> list[dict]:
     result = await session.execute(
         select(Group)
         .join(GroupMember, GroupMember.group_id == Group.id)
         .where(GroupMember.user_id == user.id, GroupMember.active.is_(True))
         .order_by(Group.created_at.desc())
+        .limit(limit)
     )
     return [await _group_payload(session, group) for group in result.scalars().all()]
 
@@ -240,6 +243,7 @@ async def intro_continue(
     await _activate_if_ready(session, group)
     await session.commit()
     await session.refresh(group)
+    await _notify_group_members(session, group_id=group.id)
     return await _group_payload(session, group)
 
 
@@ -282,6 +286,7 @@ async def intro_change(
         )
     await _fill_group_vacancies(session, group)
     await session.commit()
+    await _notify_group_members(session, group_id=group.id)
     return await waiting_room_payload(session, None)
 
 
@@ -301,6 +306,7 @@ async def rules_accept(
     await _activate_if_ready(session, group)
     await session.commit()
     await session.refresh(group)
+    await _notify_group_members(session, group_id=group.id)
     return await _group_payload(session, group)
 
 
@@ -314,14 +320,23 @@ async def accept_rules_alias(
 
 
 @router.post("/groups/{group_id}/vote")
-async def vote(group_id: str, payload: dict, user: User = Depends(get_current_user)) -> dict:
-    return {"group_id": group_id, "choice": payload.get("choice"), "accepted": True}
+async def vote(
+    group_id: str,
+    payload: dict,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    await _user_membership(session, group_id, user.id)
+    choice = str(payload.get("choice") or "").strip().lower()
+    if choice not in {"yes", "no", "accept", "reject"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректный вариант голосования")
+    return {"group_id": group_id, "choice": choice, "accepted": True}
 
 
 @router.post("/dev/groups/assemble-test-team")
 async def assemble_test_team(
     payload: dict,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_moderator),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     if not get_settings().enable_dev_tools:
@@ -377,5 +392,3 @@ async def assemble_test_team(
     await session.commit()
     await session.refresh(group)
     return await _group_payload(session, group)
-
-

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../../design/glass.dart';
+import '../../design/prime/prime_glass_surface.dart';
 import '../../design/haptics.dart';
 import '../../design/tokens.dart';
 import '../../design/typography.dart';
@@ -18,10 +18,10 @@ Future<void> showAppInfoDialog({
       backgroundColor: Colors.transparent,
       elevation: 0,
       insetPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
-      child: GlassContainer(
+      child: PrimeGlassSurface(
+        variant: PrimeGlassVariant.contextMenu,
         padding: const EdgeInsets.all(AppSpacing.lg),
-        borderRadius: BorderRadius.circular(AppRadius.xl),
-        glow: AppGlow.violet(opacity: 0.12),
+        radius: AppRadius.xl,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -59,10 +59,10 @@ Future<bool?> showAppConfirmDialog({
       backgroundColor: Colors.transparent,
       elevation: 0,
       insetPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
-      child: GlassContainer(
+      child: PrimeGlassSurface(
+        variant: PrimeGlassVariant.contextMenu,
         padding: const EdgeInsets.all(AppSpacing.lg),
-        borderRadius: BorderRadius.circular(AppRadius.xl),
-        glow: AppGlow.violet(opacity: 0.12),
+        radius: AppRadius.xl,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -121,16 +121,15 @@ Future<T?> showAppBottomSheet<T>({
     isScrollControlled: isScrollControlled,
     showDragHandle: true,
     backgroundColor: Colors.transparent,
-    barrierColor: Colors.black.withValues(alpha: 0.45),
-    builder: (_) => Padding(
+    barrierColor: Colors.black.withValues(alpha: 0.52),
+    builder: (ctx) => Padding(
       padding: EdgeInsets.only(
-        bottom: MediaQuery.viewInsetsOf(context).bottom,
+        bottom: MediaQuery.viewInsetsOf(ctx).bottom,
       ),
-      child: GlassContainer(
+      child: PrimeGlassSurface(
+        variant: PrimeGlassVariant.sheet,
         padding: EdgeInsets.zero,
-        borderRadius: const BorderRadius.vertical(
-          top: Radius.circular(AppRadius.xl),
-        ),
+        radius: AppRadius.xl,
         child: child,
       ),
     ),

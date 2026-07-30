@@ -1,14 +1,15 @@
 import 'package:flutter/material.dart';
 
-import '../../../core/habits/habit_preview_day.dart';
 import '../../../core/habits/habit_program_metadata.dart';
+import '../../../design/theme/prime_theme_context.dart';
 import '../../../design/tokens.dart';
 import '../../../design/typography.dart';
 import '../../../design/visuals/charts/charts.dart';
 import '../../../l10n/copy.dart';
 import '../../../models/skill.dart';
+import '../../kit/components/prime_content_card.dart';
+import '../../kit/tokens/kit_typography.dart';
 import '../app_primary_button.dart';
-import '../app_secondary_button.dart';
 import '../app_dialog.dart';
 import 'app_habit_catalog.dart';
 
@@ -25,22 +26,27 @@ class AppHabitDetailSections extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _VisualSectionCard(
+          icon: Icons.schedule_rounded,
           title: 'Пример одного дня',
           child: PrimeTimelinePreview(steps: timelineStepsFromMeta(meta)),
         ),
-        _SectionCard(
+        _EditorialSectionCard(
+          icon: Icons.task_alt_rounded,
           title: 'Что делать каждый день',
           body: meta.dailyAction,
         ),
-        const _SectionCard(
+        const _EditorialSectionCard(
+          icon: Icons.calendar_today_outlined,
           title: 'Как считается день',
           body: AppCopy.howDayCounts,
         ),
-        _SectionCard(
+        _EditorialSectionCard(
+          icon: Icons.cloud_off_outlined,
           title: 'Если пропустили',
           body: meta.skipPolicy,
         ),
         _VisualSectionCard(
+          icon: Icons.groups_outlined,
           title: 'Роль команды',
           child: Column(
             children: [
@@ -61,16 +67,24 @@ class AppHabitDetailSections extends StatelessWidget {
             ],
           ),
         ),
-        _SectionCard(
+        _EditorialSectionCard(
+          icon: Icons.trending_up_rounded,
           title: 'Что изменится',
           body: meta.outcome,
         ),
-        _SectionCard(
+        _EditorialSectionCard(
+          icon: Icons.description_outlined,
           title: 'Формат отчёта',
           body: meta.reportFormat,
         ),
+        const _EditorialSectionCard(
+          icon: Icons.flag_outlined,
+          title: 'После 30 дней',
+          body: AppCopy.cycleContinuationFootnote,
+        ),
         _VisualSectionCard(
-          title: 'Типичный темп цикла',
+          icon: Icons.show_chart_rounded,
+          title: 'Типичный темп сезона',
           subtitle: 'Иллюстрация — не ваши данные',
           child: PrimeNeonLineChart(
             values: const [0.35, 0.48, 0.62, 0.78, 0.85, 0.72, 0.65],
@@ -88,87 +102,6 @@ class AppHabitDetailSections extends StatelessWidget {
         ),
         _FaqBlock(items: meta.faq),
       ],
-    );
-  }
-}
-
-class AppHabitPreviewDayCard extends StatefulWidget {
-  const AppHabitPreviewDayCard({
-    super.key,
-    required this.skillId,
-    required this.dailyAction,
-    this.onCompleted,
-  });
-
-  final String skillId;
-  final String dailyAction;
-  final VoidCallback? onCompleted;
-
-  @override
-  State<AppHabitPreviewDayCard> createState() => _AppHabitPreviewDayCardState();
-}
-
-class _AppHabitPreviewDayCardState extends State<AppHabitPreviewDayCard> {
-  var _done = false;
-  var _loaded = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    final done = await HabitPreviewDay.isCompleted(widget.skillId);
-    if (mounted) setState(() {
-      _done = done;
-      _loaded = true;
-    });
-  }
-
-  Future<void> _toggle() async {
-    if (_done) {
-      await HabitPreviewDay.reset(widget.skillId);
-    } else {
-      await HabitPreviewDay.markCompleted(widget.skillId);
-      widget.onCompleted?.call();
-    }
-    if (mounted) setState(() => _done = !_done);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (!_loaded) return const SizedBox.shrink();
-
-    return Container(
-      padding: const EdgeInsets.all(AppSpacing.lg),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(AppRadius.xl),
-        color: AppColors.accentSurface.withValues(alpha: 0.35),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Ознакомительный день',
-            style: AppTypography.title2.copyWith(color: AppColors.primarySoft),
-          ),
-          const SizedBox(height: AppSpacing.xxs),
-          Text(
-            'Попробуйте действие до вступления в группу. Не запускает серию и не влияет на рейтинг.',
-            style: AppTypography.caption,
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          Text(widget.dailyAction, style: AppTypography.bodySecondary),
-          const SizedBox(height: AppSpacing.md),
-          AppSecondaryButton(
-            label: _done ? 'Сбросить demo' : 'Отметить demo-выполнение',
-            icon: _done ? Icons.restart_alt : Icons.check_circle_outline,
-            onPressed: _toggle,
-          ),
-        ],
-      ),
     );
   }
 }
@@ -301,13 +234,90 @@ class _CompareRow extends StatelessWidget {
   }
 }
 
+class _SectionHeader extends StatelessWidget {
+  const _SectionHeader({
+    required this.icon,
+    required this.title,
+    this.subtitle,
+  });
+
+  final IconData icon;
+  final String title;
+  final String? subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.prime;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 40,
+          height: 40,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: p.brandContainer.withValues(alpha: 0.55),
+            borderRadius: BorderRadius.circular(AppRadius.button),
+          ),
+          child: Icon(icon, size: 20, color: p.brand),
+        ),
+        const SizedBox(width: AppSpacing.sm),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: KitTypography.cardTitle.copyWith(color: p.ink)),
+              if (subtitle != null) ...[
+                const SizedBox(height: AppSpacing.xxs),
+                Text(subtitle!, style: KitTypography.caption.copyWith(color: p.inkSecondary)),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _EditorialSectionCard extends StatelessWidget {
+  const _EditorialSectionCard({
+    required this.icon,
+    required this.title,
+    required this.body,
+  });
+
+  final IconData icon;
+  final String title;
+  final String body;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+      child: PrimeContentCard(
+        padding: const EdgeInsets.all(AppSpacing.md),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _SectionHeader(icon: icon, title: title),
+            const SizedBox(height: AppSpacing.sm),
+            Text(body, style: AppTypography.bodySecondary),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _VisualSectionCard extends StatelessWidget {
   const _VisualSectionCard({
+    required this.icon,
     required this.title,
     required this.child,
     this.subtitle,
   });
 
+  final IconData icon;
   final String title;
   final String? subtitle;
   final Widget child;
@@ -316,55 +326,14 @@ class _VisualSectionCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-      child: Container(
-        width: double.infinity,
+      child: PrimeContentCard(
         padding: const EdgeInsets.all(AppSpacing.md),
-        decoration: BoxDecoration(
-          color: AppColors.surfaceSoft.withValues(alpha: 0.5),
-          borderRadius: BorderRadius.circular(AppRadius.lg),
-          border: Border.all(color: AppColors.border),
-        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(title, style: AppTypography.title2.copyWith(fontSize: 16)),
-            if (subtitle != null) ...[
-              const SizedBox(height: AppSpacing.xxs),
-              Text(subtitle!, style: AppTypography.caption),
-            ],
+            _SectionHeader(icon: icon, title: title, subtitle: subtitle),
             const SizedBox(height: AppSpacing.sm),
             child,
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _SectionCard extends StatelessWidget {
-  const _SectionCard({required this.title, required this.body});
-
-  final String title;
-  final String body;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(AppSpacing.md),
-        decoration: BoxDecoration(
-          color: AppColors.surfaceSoft.withValues(alpha: 0.5),
-          borderRadius: BorderRadius.circular(AppRadius.lg),
-          border: Border.all(color: AppColors.border),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(title, style: AppTypography.title2.copyWith(fontSize: 16)),
-            const SizedBox(height: AppSpacing.xxs),
-            Text(body, style: AppTypography.bodySecondary),
           ],
         ),
       ),
@@ -379,32 +348,52 @@ class _FaqBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('FAQ', style: AppTypography.title2),
-        const SizedBox(height: AppSpacing.sm),
-        for (final item in items)
-          Theme(
-            data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-            child: ExpansionTile(
-              tilePadding: EdgeInsets.zero,
-              title: Text(item.question, style: AppTypography.body),
-              children: [
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Padding(
-                    padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-                    child: Text(
-                      item.answer,
-                      style: AppTypography.bodySecondary,
-                    ),
+    final p = context.prime;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+      child: PrimeContentCard(
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.md,
+          vertical: AppSpacing.xs,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(top: AppSpacing.sm, bottom: AppSpacing.xxs),
+              child: Text(
+                'FAQ',
+                style: KitTypography.cardTitle.copyWith(color: p.ink),
+              ),
+            ),
+            for (final item in items)
+              Theme(
+                data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                child: Material(
+                  color: Colors.transparent,
+                  child: ExpansionTile(
+                    tilePadding: EdgeInsets.zero,
+                    iconColor: p.brand,
+                    collapsedIconColor: p.inkMuted,
+                    title: Text(item.question, style: AppTypography.body),
+                    children: [
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Padding(
+                          padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                          child: Text(
+                            item.answer,
+                            style: AppTypography.bodySecondary,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ],
-            ),
-          ),
-      ],
+              ),
+          ],
+        ),
+      ),
     );
   }
 }

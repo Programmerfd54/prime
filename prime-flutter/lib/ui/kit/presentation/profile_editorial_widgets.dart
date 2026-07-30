@@ -1,26 +1,33 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/media/media_urls.dart';
 import '../../../core/metrics/calendar_metrics.dart';
-import '../../../design/liquid/liquid_glass.dart';
+import '../../../l10n/copy.dart';
 import '../../../design/tokens.dart';
 import '../../../design/visuals/charts/charts.dart';
 import '../../../models/report.dart';
-import '../../components/app_icon_button.dart';
+import '../../components/profile/verified_email_badge.dart';
+import 'profile_surfaces.dart';
 import 'profile_typography.dart';
-import 'profile_utils.dart';
+import 'profile_icons.dart';
 
 /// Profile color system — TZ §5.2 (local to profile screens).
 abstract final class ProfilePalette {
   static const warmYellow = Color(0xFFFFD65A);
   static const charcoal = Color(0xFF262628);
   static const chartSurface = Color(0xFF262628);
-  static const contentSurface = Color(0xFF353240);
+  static const contentSurface = Color(0xFF2A282E);
+  static const cardSurface = contentSurface;
+  static const chartGold = warmYellow;
+  static const taupe = Color(0xFF3D3835);
+  static const dustyLavender = Color(0xFF4A4458);
   static const coolGrey = Color(0xFFC7CDD4);
   static const mint = Color(0xFF58D6B2);
   static const coral = Color(0xFFFF7A72);
   static const offWhite = Color(0xFFFAF9FC);
   static const brand = Color(0xFF8B5CF6);
   static const brandSoft = Color(0xFFA78BFA);
+  static const primaryAction = Color(0xFF6D28D9);
 
   static const tagPastels = [
     Color(0xFF9B7B8E),
@@ -95,6 +102,9 @@ class ProfileHeroCard extends StatefulWidget {
     this.onMessage,
     this.onMore,
     this.scrollOffset = 0,
+    this.moreButtonKey,
+    this.statusBadge,
+    this.showVerifiedBadge = false,
   });
 
   final String displayName;
@@ -114,9 +124,14 @@ class ProfileHeroCard extends StatefulWidget {
   final VoidCallback? onMessage;
   final VoidCallback? onMore;
   final double scrollOffset;
+  final GlobalKey? moreButtonKey;
+  final String? statusBadge;
+  final bool showVerifiedBadge;
 
-  static const cardRadius = 32.0;
-  static const photoHeight = 380.0;
+  static const cardRadius = ProfileSurfaces.shellRadius;
+  static const photoHeightWithPhoto = 280.0;
+  static const photoHeightNoPhoto = 220.0;
+  static const portraitAspectRatio = 5 / 4;
   static const horizontalMargin = 16.0;
   static const maxContentWidth = 560.0;
 
@@ -157,13 +172,16 @@ class _ProfileHeroCardState extends State<ProfileHeroCard>
 
   @override
   Widget build(BuildContext context) {
-    final bio = sanitizeProfileBio(widget.about);
     final buckets = profileRhythmBuckets(widget.calendar);
     final visibleTags = widget.tags.take(3).toList();
     final extraTags = widget.tags.length - visibleTags.length;
+    final hasPhoto =
+        widget.photoUrl != null && widget.photoUrl!.trim().isNotEmpty;
     final parallax = MediaQuery.disableAnimationsOf(context)
         ? 0.0
-        : widget.scrollOffset.clamp(0.0, 80.0) * 0.15;
+        : widget.scrollOffset.clamp(0.0, 80.0) * 0.1;
+    final shell = ProfileSurfaces.profileShell;
+    final aboutText = widget.about?.trim();
 
     return FadeTransition(
       opacity: _fade,
@@ -176,48 +194,44 @@ class _ProfileHeroCardState extends State<ProfileHeroCard>
             padding: const EdgeInsets.symmetric(
               horizontal: ProfileHeroCard.horizontalMargin,
             ),
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(ProfileHeroCard.cardRadius),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.28),
-                    blurRadius: 40,
-                    offset: const Offset(0, 16),
-                  ),
-                ],
-              ),
-              child: ClipRRect(
-                borderRadius:
-                    BorderRadius.circular(ProfileHeroCard.cardRadius),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(ProfileSurfaces.shellRadius),
+              child: DecoratedBox(
+                decoration: ProfileSurfaces.heroShellDecoration(),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    SizedBox(
-                      height: ProfileHeroCard.photoHeight,
-                      child: Stack(
+                    AspectRatio(
+                      aspectRatio: ProfileHeroCard.portraitAspectRatio,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxHeight: 300),
+                        child: Stack(
                         fit: StackFit.expand,
                         children: [
-                          Transform.translate(
-                            offset: Offset(0, parallax),
-                            child: ProfileHeroImage(
-                              photoUrl: widget.photoUrl,
-                              alignment: Alignment.topCenter,
+                          if (hasPhoto)
+                            Transform.translate(
+                              offset: Offset(0, parallax),
+                              child: ProfileHeroImage(
+                                photoUrl: widget.photoUrl,
+                                displayName: widget.displayName,
+                                alignment: Alignment.topCenter,
+                              ),
+                            )
+                          else
+                            ProfileHeroImage(
+                              photoUrl: null,
+                              displayName: widget.displayName,
+                              compact: true,
+                            ),
+                          DecoratedBox(
+                            decoration: BoxDecoration(
+                              gradient: ProfileSurfaces.photoOverlayGradient,
                             ),
                           ),
                           DecoratedBox(
                             decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                begin: Alignment.topCenter,
-                                end: Alignment.bottomCenter,
-                                colors: [
-                                  Colors.black.withValues(alpha: 0.06),
-                                  Colors.transparent,
-                                  Colors.black.withValues(alpha: 0.28),
-                                  ProfilePalette.contentSurface
-                                      .withValues(alpha: 0.92),
-                                ],
-                                stops: const [0.0, 0.35, 0.72, 1.0],
+                              gradient: ProfileSurfaces.photoToShellGradient(
+                                shell,
                               ),
                             ),
                           ),
@@ -229,47 +243,82 @@ class _ProfileHeroCardState extends State<ProfileHeroCard>
                             onAvatarTap: widget.onAvatarTap,
                             onMessage: widget.onMessage,
                             onMore: widget.onMore,
+                            moreButtonKey: widget.moreButtonKey,
                           ),
                           Positioned(
-                            left: AppSpacing.lg,
-                            right: AppSpacing.lg,
+                            left: ProfileSurfaces.heroContentPadding,
+                            right: ProfileSurfaces.heroContentPadding,
                             bottom: AppSpacing.md,
                             child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.center,
                               children: [
                                 Text(
                                   widget.displayName,
                                   style: ProfileTypography.displayName.copyWith(
                                     color: ProfilePalette.offWhite,
+                                    fontSize: 30,
+                                    fontWeight: FontWeight.w600,
+                                    shadows: [
+                                      Shadow(
+                                        color: Colors.black
+                                            .withValues(alpha: 0.4),
+                                        blurRadius: 10,
+                                      ),
+                                    ],
                                   ),
-                                  textAlign: TextAlign.center,
-                                  maxLines: 1,
+                                  maxLines: 2,
                                   overflow: TextOverflow.ellipsis,
+                                  textAlign: TextAlign.center,
                                 ),
-                                if (widget.subtitle != null &&
-                                    widget.subtitle!.isNotEmpty) ...[
+                                if (widget.subtitle?.isNotEmpty == true) ...[
                                   const SizedBox(height: 4),
-                                  Text(
-                                    widget.subtitle!,
-                                    style: ProfileTypography.subtitle.copyWith(
-                                      color: ProfilePalette.offWhite
-                                          .withValues(alpha: 0.82),
-                                    ),
-                                    textAlign: TextAlign.center,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Flexible(
+                                        child: Text(
+                                          widget.subtitle!,
+                                          style: ProfileTypography.subtitle.copyWith(
+                                            color: ProfilePalette.offWhite
+                                                .withValues(alpha: 0.9),
+                                            fontWeight: FontWeight.w400,
+                                          ),
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                          textAlign: TextAlign.center,
+                                        ),
+                                      ),
+                                      if (widget.showVerifiedBadge) ...[
+                                        const SizedBox(width: 4),
+                                        const VerifiedEmailBadge(size: 18),
+                                      ],
+                                    ],
                                   ),
                                 ],
-                                if (widget.statusLine != null &&
-                                    widget.statusLine!.isNotEmpty) ...[
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    widget.statusLine!,
-                                    style: ProfileTypography.secondary.copyWith(
-                                      color: ProfilePalette.brandSoft,
+                                if (widget.statusBadge?.isNotEmpty == true) ...[
+                                  const SizedBox(height: 10),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 6,
                                     ),
-                                    textAlign: TextAlign.center,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
+                                    decoration: BoxDecoration(
+                                      color: ProfilePalette.warmYellow
+                                          .withValues(alpha: 0.24),
+                                      borderRadius: BorderRadius.circular(14),
+                                      border: Border.all(
+                                        color: ProfilePalette.warmYellow
+                                            .withValues(alpha: 0.5),
+                                      ),
+                                    ),
+                                    child: Text(
+                                      widget.statusBadge!,
+                                      style: ProfileTypography.tag.copyWith(
+                                        color: ProfilePalette.warmYellow,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                      textAlign: TextAlign.center,
+                                    ),
                                   ),
                                 ],
                               ],
@@ -277,41 +326,54 @@ class _ProfileHeroCardState extends State<ProfileHeroCard>
                           ),
                         ],
                       ),
+                      ),
                     ),
-                    ColoredBox(
-                      color: ProfilePalette.contentSurface,
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(
-                          AppSpacing.lg,
-                          AppSpacing.sm,
-                          AppSpacing.lg,
-                          AppSpacing.lg,
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            if (visibleTags.isNotEmpty) ...[
-                              ProfileHabitTagsRow(
-                                tags: visibleTags,
-                                extraCount: extraTags,
-                              ),
-                              const SizedBox(height: AppSpacing.sm),
-                            ],
-                            if (bio.isNotEmpty) ...[
-                              _ProfileExpandableBio(text: bio),
-                              const SizedBox(height: AppSpacing.md),
-                            ],
-                            if (widget.metrics.isNotEmpty) ...[
-                              ProfileMetricPillsRow(
-                                metrics: widget.metrics,
-                                onHero: true,
-                              ),
-                              const SizedBox(height: AppSpacing.md),
-                            ],
-                            if (widget.showChart)
-                              ProfileTrendChart(buckets: buckets),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(
+                        ProfileSurfaces.heroContentPadding,
+                        AppSpacing.sm,
+                        ProfileSurfaces.heroContentPadding,
+                        ProfileSurfaces.heroContentPadding,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          if (visibleTags.isNotEmpty) ...[
+                            ProfileHabitTagsRow(
+                              tags: visibleTags,
+                              extraCount: extraTags,
+                              centered: true,
+                            ),
+                            const SizedBox(height: AppSpacing.md),
                           ],
-                        ),
+                          if (aboutText?.isNotEmpty == true) ...[
+                            _ProfileHeroBio(text: aboutText!),
+                            const SizedBox(height: AppSpacing.md),
+                          ],
+                          if (widget.statusLine?.isNotEmpty == true) ...[
+                            Text(
+                              widget.statusLine!,
+                              style: ProfileTypography.secondary.copyWith(
+                                color: ProfilePalette.offWhite
+                                    .withValues(alpha: 0.82),
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.center,
+                            ),
+                            const SizedBox(height: AppSpacing.md),
+                          ],
+                          if (widget.metrics.isNotEmpty) ...[
+                            ProfileMetricPillsRow(
+                              metrics: widget.metrics,
+                              onHero: true,
+                            ),
+                          ],
+                          if (widget.showChart && widget.metrics.isNotEmpty)
+                            const SizedBox(height: AppSpacing.md),
+                          if (widget.showChart)
+                            ProfileTrendChart(buckets: buckets),
+                        ],
                       ),
                     ),
                   ],
@@ -321,6 +383,27 @@ class _ProfileHeroCardState extends State<ProfileHeroCard>
           ),
         ),
       ),
+    );
+  }
+}
+
+class _ProfileHeroBio extends StatelessWidget {
+  const _ProfileHeroBio({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      text,
+      style: ProfileTypography.bio.copyWith(
+        color: ProfilePalette.offWhite.withValues(alpha: 0.82),
+        fontSize: 14,
+        height: 1.45,
+      ),
+      textAlign: TextAlign.center,
+      maxLines: 4,
+      overflow: TextOverflow.ellipsis,
     );
   }
 }
@@ -407,6 +490,17 @@ List<WeekDayBucket> profileRhythmBuckets(CalendarOut? calendar) {
   return buckets;
 }
 
+/// Team / cohort comparison line for hero rhythm chart (TZ §7.7).
+List<double> profileRhythmComparison(List<WeekDayBucket> buckets) {
+  if (buckets.isEmpty) return const [];
+  final mean = buckets.map((b) => b.intensity).reduce((a, b) => a + b) /
+      buckets.length;
+  return [
+    for (final b in buckets)
+      ((mean * 0.72) + (b.intensity * 0.12)).clamp(0.05, 0.95),
+  ];
+}
+
 class ProfileTrendChart extends StatelessWidget {
   const ProfileTrendChart({super.key, required this.buckets});
 
@@ -416,33 +510,36 @@ class ProfileTrendChart extends StatelessWidget {
   Widget build(BuildContext context) {
     final values = buckets.map((b) => b.intensity).toList();
     final labels = buckets.map((b) => b.label).toList();
+    final comparison = profileRhythmComparison(buckets);
     final hasChart = values.where((v) => v > 0).length >= 2;
 
     return Container(
       padding: const EdgeInsets.all(AppSpacing.md),
       decoration: BoxDecoration(
-        color: ProfilePalette.chartSurface,
-        borderRadius: BorderRadius.circular(24),
+        color: ProfileSurfaces.surfaceElevated,
+        borderRadius: BorderRadius.circular(21),
+        border: Border.all(color: ProfileSurfaces.outlineStrong),
       ),
       constraints: const BoxConstraints(minHeight: 180),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
+          Text(
+            'Ритм за 30 дней',
+            style: ProfileTypography.cardTitle.copyWith(
+              color: ProfilePalette.offWhite,
+              fontSize: 17,
+            ),
+          ),
+          const SizedBox(height: AppSpacing.xs),
+          Wrap(
+            spacing: AppSpacing.sm,
+            runSpacing: AppSpacing.xxs,
             children: [
-              Text(
-                'Ритм за 30 дней',
-                style: ProfileTypography.cardTitle.copyWith(
-                  color: ProfilePalette.offWhite,
-                  fontSize: 17,
-                ),
-              ),
-              const Spacer(),
               _LegendDot(
                 color: ProfilePalette.warmYellow,
                 label: 'Вы',
               ),
-              const SizedBox(width: AppSpacing.sm),
               _LegendDot(
                 color: ProfilePalette.coolGrey.withValues(alpha: 0.6),
                 label: 'Среднее',
@@ -465,7 +562,7 @@ class ProfileTrendChart extends StatelessWidget {
                   Text(
                     'График появится после нескольких отметок',
                     style: ProfileTypography.secondary.copyWith(
-                      color: ProfilePalette.coolGrey.withValues(alpha: 0.65),
+                      color: ProfilePalette.coolGrey.withValues(alpha: 0.88),
                     ),
                     textAlign: TextAlign.center,
                   ),
@@ -475,6 +572,7 @@ class ProfileTrendChart extends StatelessWidget {
           else
             PrimeNeonLineChart(
               values: values,
+              secondaryValues: comparison,
               labels: labels,
               height: 110,
               style: PrimeLineChartStyle.editorial,
@@ -489,51 +587,143 @@ class ProfileHeroImage extends StatelessWidget {
   const ProfileHeroImage({
     super.key,
     this.photoUrl,
+    this.displayName,
     this.alignment = Alignment.topCenter,
+    this.compact = false,
   });
 
   final String? photoUrl;
+  final String? displayName;
   final Alignment alignment;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
-    if (photoUrl != null && photoUrl!.isNotEmpty) {
+    final url = absolutePhotoUrl(photoUrl);
+    if (url != null) {
       return Image.network(
-        photoUrl!,
+        url,
         fit: BoxFit.cover,
         alignment: alignment,
-        errorBuilder: (_, __, ___) => const _HeroPlaceholder(),
+        errorBuilder: (_, __, ___) => _HeroPlaceholder(
+          displayName: displayName ?? '',
+          compact: compact,
+        ),
       );
     }
-    return const _HeroPlaceholder();
+    return _HeroPlaceholder(
+      displayName: displayName ?? '',
+      compact: compact,
+    );
   }
 }
 
 class _HeroPlaceholder extends StatelessWidget {
-  const _HeroPlaceholder();
+  const _HeroPlaceholder({
+    required this.displayName,
+    this.compact = false,
+  });
+
+  final String displayName;
+  final bool compact;
+
+  String get _initials {
+    final cleaned = displayName.replaceAll('@', '').trim();
+    if (cleaned.isEmpty) return '?';
+    final parts = cleaned.split(RegExp(r'\s+')).where((p) => p.isNotEmpty);
+    final list = parts.toList();
+    if (list.length >= 2) {
+      return '${list[0][0]}${list[1][0]}'.toUpperCase();
+    }
+    final single = list.first;
+    return (single.length >= 2
+            ? single.substring(0, 2)
+            : single.substring(0, 1))
+        .toUpperCase();
+  }
 
   @override
   Widget build(BuildContext context) {
+    final monogramSize = compact ? 120.0 : 128.0;
+
     return DecoratedBox(
       decoration: BoxDecoration(
         gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
           colors: [
-            ProfilePalette.brand.withValues(alpha: 0.35),
+            ProfilePalette.dustyLavender.withValues(alpha: 0.55),
+            ProfilePalette.taupe,
             ProfilePalette.contentSurface,
           ],
         ),
       ),
-      child: Center(
-        child: Icon(
-          Icons.person_outline_rounded,
-          size: 72,
-          color: ProfilePalette.offWhite.withValues(alpha: 0.35),
-        ),
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          Positioned.fill(
+            child: CustomPaint(painter: _SubtleMeshPainter(seed: displayName)),
+          ),
+          Container(
+            width: monogramSize,
+            height: monogramSize,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: ProfilePalette.charcoal.withValues(alpha: 0.72),
+              border: Border.all(
+                color: ProfilePalette.offWhite.withValues(alpha: 0.14),
+                width: 1.5,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.25),
+                  blurRadius: 24,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+            ),
+            alignment: Alignment.center,
+            child: Text(
+              _initials,
+              style: ProfileTypography.displayName.copyWith(
+                fontSize: compact ? 40 : 44,
+                fontWeight: FontWeight.w600,
+                color: ProfilePalette.offWhite.withValues(alpha: 0.92),
+                letterSpacing: 1.2,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
+}
+
+class _SubtleMeshPainter extends CustomPainter {
+  const _SubtleMeshPainter({required this.seed});
+
+  final String seed;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final hash = seed.hashCode.abs();
+    final paint = Paint()
+      ..color = ProfilePalette.brandSoft.withValues(alpha: 0.06)
+      ..style = PaintingStyle.fill;
+    final cx = size.width * (0.25 + (hash % 50) / 100);
+    final cy = size.height * 0.35;
+    canvas.drawCircle(Offset(cx, cy), size.width * 0.35, paint);
+    paint.color = ProfilePalette.warmYellow.withValues(alpha: 0.04);
+    canvas.drawCircle(
+      Offset(size.width * 0.75, size.height * 0.55),
+      size.width * 0.28,
+      paint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _SubtleMeshPainter oldDelegate) =>
+      oldDelegate.seed != seed;
 }
 
 class _HeroActions extends StatelessWidget {
@@ -545,6 +735,7 @@ class _HeroActions extends StatelessWidget {
     this.onAvatarTap,
     this.onMessage,
     this.onMore,
+    this.moreButtonKey,
   });
 
   final ProfileHeroMode mode;
@@ -554,28 +745,33 @@ class _HeroActions extends StatelessWidget {
   final VoidCallback? onAvatarTap;
   final VoidCallback? onMessage;
   final VoidCallback? onMore;
+  final GlobalKey? moreButtonKey;
 
   @override
   Widget build(BuildContext context) {
+    final topInset = mode == ProfileHeroMode.public
+        ? MediaQuery.paddingOf(context).top + AppSpacing.xs
+        : AppSpacing.md;
+
     return Positioned(
-      top: MediaQuery.paddingOf(context).top + AppSpacing.xs,
+      top: topInset,
       left: AppSpacing.md,
       right: AppSpacing.md,
       child: Row(
         children: [
           if (mode == ProfileHeroMode.public)
             ProfileGlassAction(
-              icon: Icons.arrow_back_rounded,
+              icon: ProfileIcons.back,
               onPressed: onBack ?? () => Navigator.maybePop(context),
               semanticsLabel: 'Назад',
             )
           else
-            const SizedBox(width: 46),
+            const SizedBox(width: 44),
           const Spacer(),
           if (mode == ProfileHeroMode.public) ...[
             if (onMessage != null) ...[
               ProfileGlassAction(
-                icon: Icons.chat_bubble_outline_rounded,
+                icon: ProfileIcons.message,
                 onPressed: onMessage,
                 semanticsLabel: 'Написать',
               ),
@@ -583,7 +779,8 @@ class _HeroActions extends StatelessWidget {
             ],
             if (onMore != null)
               ProfileGlassAction(
-                icon: Icons.more_horiz_rounded,
+                key: moreButtonKey,
+                icon: ProfileIcons.more,
                 onPressed: onMore,
                 semanticsLabel: 'Ещё',
               ),
@@ -591,7 +788,7 @@ class _HeroActions extends StatelessWidget {
           if (mode == ProfileHeroMode.own) ...[
             if (onEdit != null || onAvatarTap != null) ...[
               ProfileGlassAction(
-                icon: Icons.edit_outlined,
+                icon: ProfileIcons.edit,
                 onPressed: onEdit ?? onAvatarTap,
                 semanticsLabel: 'Редактировать',
               ),
@@ -599,7 +796,7 @@ class _HeroActions extends StatelessWidget {
             ],
             if (onSettings != null)
               ProfileGlassAction(
-                icon: Icons.settings_outlined,
+                icon: ProfileIcons.settings,
                 onPressed: onSettings,
                 semanticsLabel: 'Настройки',
               ),
@@ -610,37 +807,53 @@ class _HeroActions extends StatelessWidget {
   }
 }
 
+enum ProfileGlassActionVariant { onPhoto, onSurface }
+
 class ProfileGlassAction extends StatelessWidget {
   const ProfileGlassAction({
     super.key,
     required this.icon,
     this.onPressed,
     this.semanticsLabel,
+    this.variant = ProfileGlassActionVariant.onPhoto,
   });
 
   final IconData icon;
   final VoidCallback? onPressed;
   final String? semanticsLabel;
+  final ProfileGlassActionVariant variant;
+
+  static const _size = 44.0;
+  static const _radius = 14.0;
 
   @override
   Widget build(BuildContext context) {
+    final fill = ProfileSurfaces.surfaceElevated.withValues(alpha: 0.82);
+    final border = ProfileSurfaces.outlineStrong;
+    final iconColor = ProfilePalette.offWhite.withValues(alpha: 0.94);
+
     return Semantics(
       button: true,
       label: semanticsLabel,
-      child: LiquidGlass(
-        forceTier: LiquidTier.full,
-        allowBlurOnWeb: true,
-        radius: 23,
-        width: 46,
-        height: 46,
-        padding: EdgeInsets.zero,
-        sigma: 20,
-        fillOpacity: 0.14,
-        child: AppIconButton(
-          icon: icon,
-          onPressed: onPressed,
-          foregroundColor: ProfilePalette.offWhite,
-          iconSize: AppIconSizes.sm,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onPressed,
+          borderRadius: BorderRadius.circular(_radius),
+          child: Ink(
+            width: _size,
+            height: _size,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(_radius),
+              color: fill,
+              border: Border.all(color: border),
+            ),
+            child: ProfileIcon(
+              icon,
+              size: AppIconSizes.sm,
+              color: iconColor,
+            ),
+          ),
         ),
       ),
     );
@@ -652,27 +865,38 @@ class ProfileHabitTagsRow extends StatelessWidget {
     super.key,
     required this.tags,
     this.extraCount = 0,
+    this.centered = false,
   });
 
   final List<ProfileHabitTag> tags;
   final int extraCount;
+  final bool centered;
 
   @override
   Widget build(BuildContext context) {
+    final chips = <Widget>[
+      for (final tag in tags) ProfileTag(label: tag.label, accent: tag.accent),
+      if (extraCount > 0)
+        ProfileTag(label: '+$extraCount', accent: ProfilePalette.coolGrey),
+    ];
+
+    if (centered) {
+      return Wrap(
+        alignment: WrapAlignment.center,
+        spacing: AppSpacing.xs,
+        runSpacing: AppSpacing.xs,
+        children: chips,
+      );
+    }
+
     return SizedBox(
       height: 34,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         shrinkWrap: true,
-        itemCount: tags.length + (extraCount > 0 ? 1 : 0),
+        itemCount: chips.length,
         separatorBuilder: (_, __) => const SizedBox(width: AppSpacing.xs),
-        itemBuilder: (context, i) {
-          if (extraCount > 0 && i == tags.length) {
-            return ProfileTag(label: '+$extraCount', accent: ProfilePalette.coolGrey);
-          }
-          final tag = tags[i];
-          return ProfileTag(label: tag.label, accent: tag.accent);
-        },
+        itemBuilder: (context, i) => chips[i],
       ),
     );
   }
@@ -687,30 +911,37 @@ class ProfileTag extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
       decoration: BoxDecoration(
-        color: ProfilePalette.mutedTagFill(accent),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            accent.withValues(alpha: 0.72),
+            Color.alphaBlend(
+              Colors.white.withValues(alpha: 0.12),
+              accent.withValues(alpha: 0.58),
+            ),
+          ],
+        ),
         borderRadius: BorderRadius.circular(16),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 5,
-            height: 5,
-            decoration: const BoxDecoration(
-              color: ProfilePalette.offWhite,
-              shape: BoxShape.circle,
-            ),
-          ),
-          const SizedBox(width: 6),
-          Text(
-            label,
-            style: ProfileTypography.tag.copyWith(
-              color: ProfilePalette.offWhite.withValues(alpha: 0.92),
-            ),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.18),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.12),
+            blurRadius: 8,
+            offset: const Offset(0, 3),
           ),
         ],
+      ),
+      child: Text(
+        label,
+        style: ProfileTypography.tag.copyWith(
+          color: ProfilePalette.offWhite.withValues(alpha: 0.95),
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
   }
@@ -789,15 +1020,19 @@ class ProfileMetricPillsRow extends StatelessWidget {
 
 class _MetricPillCell extends StatelessWidget {
   const _MetricPillCell({required this.metric, required this.onHero});
+
+  static const _pillRadius = 16.0;
+  static const _pillHeight = 58.0;
+
   final ProfileMetricPill metric;
   final bool onHero;
 
   @override
   Widget build(BuildContext context) {
     final labelColor = onHero
-        ? ProfilePalette.offWhite.withValues(alpha: 0.85)
-        : ProfilePalette.coolGrey;
-    final (valueColor, decoration) = _pillStyle(metric.variant);
+        ? ProfilePalette.offWhite.withValues(alpha: 0.92)
+        : ProfilePalette.coolGrey.withValues(alpha: 0.95);
+    final (valueColor, decoration) = _pillStyle(metric.variant, onHero: onHero);
 
     return Column(
       children: [
@@ -825,10 +1060,10 @@ class _MetricPillCell extends StatelessWidget {
     if (metric.variant == ProfileMetricPillVariant.hatched) {
       return Container(
         width: double.infinity,
-        constraints: const BoxConstraints(minHeight: 36),
+        constraints: const BoxConstraints(minHeight: _pillHeight),
         decoration: decoration,
         child: ClipRRect(
-          borderRadius: BorderRadius.circular(AppRadius.pill),
+          borderRadius: BorderRadius.circular(_pillRadius),
           child: Stack(
             alignment: Alignment.center,
             children: [
@@ -843,48 +1078,79 @@ class _MetricPillCell extends StatelessWidget {
     }
     return Container(
       width: double.infinity,
-      constraints: const BoxConstraints(minHeight: 36),
+      constraints: const BoxConstraints(minHeight: _pillHeight),
       alignment: Alignment.center,
-      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
       decoration: decoration,
       child: text,
     );
   }
 
-  (Color, BoxDecoration) _pillStyle(ProfileMetricPillVariant variant) {
+  (Color, BoxDecoration) _pillStyle(
+    ProfileMetricPillVariant variant, {
+    required bool onHero,
+  }) {
     switch (variant) {
       case ProfileMetricPillVariant.gold:
         return (
           ProfilePalette.charcoal,
           BoxDecoration(
             color: ProfilePalette.warmYellow,
-            borderRadius: BorderRadius.circular(AppRadius.pill),
+            borderRadius: BorderRadius.circular(_pillRadius),
+            border: onHero
+                ? Border.all(
+                    color: ProfilePalette.warmYellow.withValues(alpha: 0.55),
+                  )
+                : null,
+            boxShadow: onHero
+                ? [
+                    BoxShadow(
+                      color: ProfilePalette.warmYellow.withValues(alpha: 0.22),
+                      blurRadius: 10,
+                      offset: const Offset(0, 3),
+                    ),
+                  ]
+                : null,
           ),
         );
       case ProfileMetricPillVariant.charcoal:
         return (
           ProfilePalette.offWhite,
           BoxDecoration(
-            color: ProfilePalette.charcoal,
-            borderRadius: BorderRadius.circular(AppRadius.pill),
+            color: onHero
+                ? ProfileSurfaces.surfaceElevated
+                : ProfilePalette.charcoal,
+            borderRadius: BorderRadius.circular(_pillRadius),
+            border: Border.all(
+              color: onHero
+                  ? ProfileSurfaces.outlineStrong
+                  : ProfileSurfaces.outlineSoft,
+            ),
           ),
         );
       case ProfileMetricPillVariant.hatched:
         return (
           ProfilePalette.offWhite,
           BoxDecoration(
-            color: const Color(0xFF3A3840),
-            borderRadius: BorderRadius.circular(AppRadius.pill),
+            color: onHero
+                ? ProfileSurfaces.surfaceTinted
+                : const Color(0xFF3A3840),
+            borderRadius: BorderRadius.circular(_pillRadius),
+            border: Border.all(color: ProfileSurfaces.outlineStrong),
           ),
         );
       case ProfileMetricPillVariant.glass:
         return (
           ProfilePalette.offWhite,
           BoxDecoration(
-            color: ProfilePalette.coolGrey.withValues(alpha: 0.22),
-            borderRadius: BorderRadius.circular(AppRadius.pill),
+            color: onHero
+                ? ProfileSurfaces.surfaceElevated.withValues(alpha: 0.88)
+                : ProfilePalette.coolGrey.withValues(alpha: 0.22),
+            borderRadius: BorderRadius.circular(_pillRadius),
             border: Border.all(
-              color: ProfilePalette.coolGrey.withValues(alpha: 0.28),
+              color: onHero
+                  ? ProfilePalette.brandSoft.withValues(alpha: 0.42)
+                  : ProfilePalette.coolGrey.withValues(alpha: 0.28),
             ),
           ),
         );
@@ -969,10 +1235,10 @@ class ProfileLinkTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return Material(
       color: ProfilePalette.charcoal,
-      borderRadius: BorderRadius.circular(AppRadius.lg),
+      borderRadius: BorderRadius.circular(18),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(AppRadius.lg),
+        borderRadius: BorderRadius.circular(18),
         child: Padding(
           padding: const EdgeInsets.symmetric(
             horizontal: AppSpacing.md,
@@ -1060,10 +1326,10 @@ List<ProfileMetricPill> buildPublicProfileMetrics({
   if (metrics.isEmpty) return metrics;
   if (metrics.length < 3) {
     metrics.add(ProfileMetricPill(
-      label: 'Циклы',
+      label: AppCopy.profileProgressLabel,
       value: successfulDays != null && successfulDays > 0
           ? '${successfulDays % 30}/30'
-          : 'Нет цикла',
+          : AppCopy.profileProgressEmpty,
       variant: ProfileMetricPillVariant.hatched,
     ));
   }

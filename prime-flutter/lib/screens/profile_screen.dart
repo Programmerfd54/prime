@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -20,16 +22,20 @@ import '../ui/components/app_dropdown_field.dart';
 import '../ui/components/app_primary_button.dart';
 import '../ui/components/app_snackbar.dart';
 import '../ui/components/app_textarea.dart';
-import '../ui/components/app_skeleton.dart';
 import '../ui/components/prime_text_field.dart';
+import '../ui/kit/presentation/profile_about_card.dart';
 import '../ui/kit/presentation/profile_editorial_widgets.dart';
+import '../ui/kit/presentation/profile_icons.dart';
 import '../ui/kit/presentation/profile_page_layout.dart';
 import '../ui/kit/presentation/profile_sections.dart';
+import '../ui/kit/presentation/profile_states.dart';
+import '../ui/kit/presentation/profile_surfaces.dart';
+import '../ui/kit/presentation/profile_tabs.dart';
 import '../ui/kit/presentation/profile_view_model.dart';
 import '../ui/kit/tokens/kit_layout.dart';
-import '../widgets/async_error_view.dart';
 import 'account_settings_screen.dart';
 import 'avatar_screen.dart';
+import 'edit_profile_screen.dart';
 import 'prime_history_screen.dart';
 import 'tournaments_screen.dart';
 
@@ -51,28 +57,29 @@ class _ProfileScreenState extends State<ProfileScreen> {
   CalendarOut? _calendar;
   List<ProfileHabitTag> _habitTags = const [];
   GroupModel? _activeGroup;
-  bool _loading = true;
-  String? _error;
-  String? _errorCorrelationId;
+  Map<String, dynamic> _preferences = const {};
+  bool _loadingCalendar = true;
+  bool _loadingAchievements = false;
+  bool _achievementsLoaded = false;
+  bool _offlineCached = false;
   double _scrollOffset = 0;
+  OwnProfileTab _tab = OwnProfileTab.overview;
+
+  final _cycleKey = GlobalKey();
+  final _analyticsKey = GlobalKey();
+  final _achievementsKey = GlobalKey();
 
   @override
   void initState() {
     super.initState();
-    _load();
+    _loadSecondary();
   }
 
-  Future<void> _load() async {
-    if (mounted) {
-      setState(() {
-        _loading = true;
-        _error = null;
-        _errorCorrelationId = null;
-      });
-    }
-    final api = context.read<ApiClient>();
+  Future<void> _loadAchievements() async {
+    if (_achievementsLoaded || _loadingAchievements) return;
+    setState(() => _loadingAchievements = true);
     try {
-      final list = await api.listAchievements();
+      final list = await context.read<ApiClient>().listAchievements();
       _achievements = list
           .map((j) => AchievementModel.fromJson(j as Map<String, dynamic>))
           .toList()
@@ -82,23 +89,42 @@ class _ProfileScreenState extends State<ProfileScreen> {
           if (aDone != bDone) return aDone.compareTo(bDone);
           return a.requiredDays.compareTo(b.requiredDays);
         });
-      try {
-        final calendar = CalendarOut.fromJson(await api.calendarAll());
+      _achievementsLoaded = true;
+    } catch (_) {
+      _achievements = const [];
+    } finally {
+      if (mounted) setState(() => _loadingAchievements = false);
+    }
+  }
+
+  Future<void> _loadSecondary() async {
+    if (mounted) {
+      setState(() {
+        _loadingCalendar = true;
+        _offlineCached = false;
+      });
+    }
+    final api = context.read<ApiClient>();
+    final userId = context.read<AuthProvider>().user?.id;
+
+    try {
+      final calendarFuture = api.calendarAll().then((raw) {
+        final calendar = CalendarOut.fromJson(raw);
         _calendar = calendar;
         _currentStreak = calendar.currentStreak;
         _bestStreak = calendar.bestStreak;
         _cyclePacePercent = calendar.cyclePacePercent;
         _insights = calendar.insights;
-      } catch (_) {
+      }).catchError((_) {
         _calendar = null;
         _currentStreak = 0;
         _bestStreak = 0;
         _cyclePacePercent = null;
         _insights = const [];
-      }
-      try {
-        final userId = context.read<AuthProvider>().user?.id;
-        final rows = await api.listGroups();
+        _offlineCached = true;
+      });
+
+      final groupsFuture = api.listGroups().then((rows) {
         final groups = rows
             .map((g) => GroupModel.fromJson(g as Map<String, dynamic>))
             .toList();
@@ -118,25 +144,39 @@ class _ProfileScreenState extends State<ProfileScreen> {
           }
         }
         _activeGroup = activeGroup;
-        if (skillNames.isEmpty && _calendar != null) {
-          final bySkill = completionBySkill(_calendar!);
-          final top = bySkill.entries.toList()
-            ..sort((a, b) => b.value.compareTo(a.value));
-          skillNames.addAll(top.take(3).map((e) => e.key));
-        }
-        _habitTags = profileHabitTagsFromNames(skillNames);
-      } catch (_) {
-        _habitTags = const [];
+        return skillNames;
+      }).catchError((_) {
         _activeGroup = null;
+        return <String>{};
+      });
+
+      final prefsFuture = api.getPreferences().then((prefs) {
+        _preferences = prefs;
+      }).catchError((_) {
+        _preferences = const {};
+      });
+
+      final results =
+          await Future.wait([calendarFuture, groupsFuture, prefsFuture]);
+      final skillNames = results[1] as Set<String>;
+      if (skillNames.isEmpty && _calendar != null) {
+        final bySkill = completionBySkill(_calendar!);
+        final top = bySkill.entries.toList()
+          ..sort((a, b) => b.value.compareTo(a.value));
+        _habitTags = profileHabitTagsFromNames(top.take(3).map((e) => e.key));
+      } else {
+        _habitTags = profileHabitTagsFromNames(skillNames);
       }
-    } catch (e) {
-      if (mounted) {
-        final failure = FailureMapper.from(e);
-        _error = failure.message;
-        _errorCorrelationId = failure.correlationId;
-      }
+    } finally {
+      if (mounted) setState(() => _loadingCalendar = false);
     }
-    if (mounted) setState(() => _loading = false);
+  }
+
+  Future<void> _load() async {
+    await _loadSecondary();
+    if (_tab == OwnProfileTab.achievements) {
+      await _loadAchievements();
+    }
   }
 
   void _openAvatar() {
@@ -146,135 +186,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _editProfile() async {
-    final auth = context.read<AuthProvider>();
-    final user = auth.user;
-    if (user == null) return;
-    final nameCtrl = TextEditingController(text: user.name);
-    final aboutCtrl = TextEditingController(text: user.about);
-    final ageCtrl = TextEditingController(text: user.age?.toString() ?? '');
-    List<Map<String, dynamic>> regions = [];
-    String? regionCode = user.regionCode;
-    try {
-      regions = await context.read<ApiClient>().listRegions();
-    } catch (_) {}
-    if (!mounted) return;
-    var saving = false;
-    String? error;
-    final saved = await showAppBottomSheet<bool>(
-      context: context,
-      child: StatefulBuilder(
-        builder: (sheetContext, setModalState) {
-          return Padding(
-            padding: EdgeInsets.only(
-              left: AppSpacing.lg,
-              right: AppSpacing.lg,
-              top: AppSpacing.lg,
-              bottom: MediaQuery.viewInsetsOf(sheetContext).bottom +
-                  AppSpacing.lg,
-            ),
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  const Text(
-                    'Редактировать профиль',
-                    style: AppTypography.title1,
-                  ),
-                  const SizedBox(height: AppSpacing.md),
-                  PrimeTextField(
-                    controller: nameCtrl,
-                    label: 'Имя',
-                    icon: Icons.person_outline,
-                  ),
-                  const SizedBox(height: AppSpacing.sm),
-                  AppTextarea(
-                    controller: aboutCtrl,
-                    label: 'О себе',
-                    minLines: 3,
-                    maxLines: 6,
-                  ),
-                  const SizedBox(height: AppSpacing.sm),
-                  PrimeTextField(
-                    controller: ageCtrl,
-                    label: 'Возраст',
-                    icon: Icons.cake_outlined,
-                    keyboardType: TextInputType.number,
-                  ),
-                  const SizedBox(height: AppSpacing.sm),
-                  if (regions.isNotEmpty)
-                    AppDropdownField<String>(
-                      value: regions.any((r) => r['code'] == regionCode)
-                          ? regionCode
-                          : null,
-                      label: 'Область',
-                      items: [
-                        for (final region in regions)
-                          DropdownMenuItem(
-                            value: region['code'] as String?,
-                            child: Text(region['name'] as String? ?? ''),
-                          ),
-                      ],
-                      onChanged: (value) =>
-                          setModalState(() => regionCode = value),
-                    ),
-                  if (error != null) ...[
-                    const SizedBox(height: AppSpacing.xs),
-                    Text(
-                      error!,
-                      style: AppTypography.caption.copyWith(
-                        color: AppColors.error,
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: AppSpacing.md),
-                  AppPrimaryButton(
-                    label: AppCopy.save,
-                    loading: saving,
-                    onPressed: saving
-                        ? null
-                        : () async {
-                            setModalState(() {
-                              saving = true;
-                              error = null;
-                            });
-                            try {
-                              final selected = regions
-                                  .cast<Map<String, dynamic>?>()
-                                  .firstWhere(
-                                    (item) => item?['code'] == regionCode,
-                                    orElse: () => null,
-                                  );
-                              await auth.api.updateMe({
-                                'name': nameCtrl.text.trim(),
-                                'about': aboutCtrl.text.trim(),
-                                'age': int.tryParse(ageCtrl.text.trim()),
-                                'region_code': regionCode,
-                                if (selected != null) 'city': selected['name'],
-                              });
-                              await auth.refreshUser();
-                              if (sheetContext.mounted) {
-                                Navigator.of(sheetContext).pop(true);
-                              }
-                            } catch (e) {
-                              setModalState(() {
-                                saving = false;
-                                error = FailureMapper.from(e).message;
-                              });
-                            }
-                          },
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
+    final saved = await Navigator.of(context).push<bool>(
+      PrimeRoute.sharedAxis(builder: (_) => const EditProfileScreen()),
     );
-    nameCtrl.dispose();
-    aboutCtrl.dispose();
-    ageCtrl.dispose();
     if (saved == true && mounted) {
+      try {
+        _preferences = await context.read<ApiClient>().getPreferences();
+      } catch (_) {}
+      setState(() {});
       showAppSnackBar(context, 'Профиль обновлён');
     }
   }
@@ -321,8 +240,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
         variant: ProfileMetricPillVariant.charcoal,
       ),
       ProfileMetricPill(
-        label: 'Циклы',
-        value: cycleDay > 0 ? '$cycleDay/30' : 'Нет цикла',
+        label: AppCopy.profileProgressLabel,
+        value: cycleDay > 0 ? '$cycleDay/30' : AppCopy.profileProgressEmpty,
         variant: ProfileMetricPillVariant.hatched,
       ),
       ProfileMetricPill(
@@ -336,24 +255,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   Widget build(BuildContext context) {
     final user = context.watch<AuthProvider>().user;
-    if (_loading) return const AppProfileSkeleton();
-    if (_error != null) {
-      return AsyncErrorView(
-        message: _error!,
-        correlationId: _errorCorrelationId,
-        onRetry: _load,
-      );
-    }
+    if (user == null) return const ProfileLoadingState();
 
-    final photoUrl = absolutePhotoUrl(user?.photoUrl);
-    final displayName = user?.name.isNotEmpty == true
-        ? user!.name
-        : (user?.nickname.isNotEmpty == true ? '@${user!.nickname}' : '');
-    final cycleDay = (user?.successfulDays ?? 0) % 30;
+    final photoUrl = absolutePhotoUrl(user.photoUrl);
+    final displayName = user.name.isNotEmpty
+        ? user.name
+        : (user.nickname.isNotEmpty ? '@${user.nickname}' : '');
+    final cycleDay = user.successfulDays % 30;
     final subtitle = [
-      if (user?.nickname.isNotEmpty == true) '@${user!.nickname}',
-      if (user?.regionName?.isNotEmpty == true) user!.regionName,
-      if (user?.age != null) '${user!.age} лет',
+      if (user.nickname.isNotEmpty) '@${user.nickname}',
+      if (user.regionName?.isNotEmpty == true) user.regionName,
+      if (user.age != null) '${user.age} лет',
     ].join(' · ');
     final consistency7 = _calendar == null
         ? 0
@@ -361,12 +273,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final statusLine = _habitTags.isNotEmpty
         ? _habitTags.first.label
         : (cycleDay > 0 ? 'День $cycleDay/30' : null);
-    final aboutRows = user == null
-        ? const <ProfileAboutRow>[]
-        : ownProfileAboutRows(
-            user: user,
-            habitNames: _habitTags.map((t) => t.label),
-          );
+    final aboutData = buildOwnAboutData(
+      user: user,
+      habitNames: _habitTags.map((t) => t.label),
+      activeGroup: _activeGroup,
+      cycleDay: cycleDay,
+      preferences: _preferences,
+    );
     final memberPhotos = _memberPhotoUrls(_activeGroup);
     final reportedToday = _reportedToday(_calendar);
 
@@ -375,11 +288,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
       subtitle: subtitle.isEmpty ? null : subtitle,
       statusLine: statusLine,
       photoUrl: photoUrl,
-      about: user?.about,
+      about: user.about,
       tags: _habitTags,
+      showVerifiedBadge: user.emailVerified,
       metrics: _ownMetrics(
         streak: _currentStreak,
-        primes: user?.primePoints ?? 0,
+        primes: user.primePoints,
         cycleDay: cycleDay,
         consistency7: consistency7,
       ),
@@ -396,6 +310,147 @@ class _ProfileScreenState extends State<ProfileScreen> {
       onAvatarTap: _openAvatar,
     );
 
+    final tabLabels = const ['Обзор', 'Прогресс', 'Привычки', 'Достижения'];
+
+    Widget tabBody() {
+      switch (_tab) {
+        case OwnProfileTab.overview:
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ProfileAboutCard(
+                data: aboutData,
+                onEdit: _editProfile,
+                onFillProfile: _editProfile,
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              ProfileLinkTile(
+                icon: ProfileIcons.trophy,
+                title: 'Турниры',
+                onTap: () {
+                  Navigator.of(context).push(
+                    PrimeRoute.sharedAxis(
+                      builder: (_) => TournamentsScreen(
+                        onShowMessage: () =>
+                            showAppSnackBar(context, 'Турниры скоро'),
+                      ),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              ProfileLinkTile(
+                icon: ProfileIcons.history,
+                title: 'История Праймов',
+                onTap: () {
+                  Navigator.of(context).push(
+                    PrimeRoute.sharedAxis(
+                      builder: (_) => const PrimeHistoryScreen(),
+                    ),
+                  );
+                },
+              ),
+            ],
+          );
+        case OwnProfileTab.progress:
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              KeyedSubtree(
+                key: _cycleKey,
+                child: ProfileCurrentCycleSection(
+                  successfulDays: user.successfulDays,
+                  currentStreak: _currentStreak,
+                  primePoints: user.primePoints,
+                  bestStreak: _bestStreak,
+                  cyclePacePercent: _cyclePacePercent,
+                  calendar: _calendar,
+                  streakShields: user.streakShields,
+                  shieldPending: user.shieldPending,
+                  habitName: _activeGroup?.skillName ?? _activeGroup?.name,
+                  memberPhotoUrls: memberPhotos,
+                  reportedToday: reportedToday,
+                  onChooseHabit: widget.onOpenGroups,
+                  onCheckIn: widget.onOpenGroups,
+                  onBuyShield: () async {
+                    try {
+                      await context.read<ApiClient>().buyStreakShield();
+                      await context.read<AuthProvider>().refreshUser();
+                      if (mounted) showAppSnackBar(context, 'Щит куплен');
+                    } catch (e) {
+                      if (mounted) {
+                        showAppSnackBar(context, ApiClient.errorMessage(e));
+                      }
+                    }
+                  },
+                  onUseShield: () async {
+                    try {
+                      await context.read<ApiClient>().useStreakShield();
+                      await context.read<AuthProvider>().refreshUser();
+                      if (mounted) showAppSnackBar(context, 'Щит активирован');
+                    } catch (e) {
+                      if (mounted) {
+                        showAppSnackBar(context, ApiClient.errorMessage(e));
+                      }
+                    }
+                  },
+                ),
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              KeyedSubtree(
+                key: _analyticsKey,
+                child: ProfileAnalyticsSection(
+                  calendar: _calendar,
+                  insights: _insights,
+                  onInsightOpened: (insight) =>
+                      Analytics.instance.insightOpened(insight.id),
+                ),
+              ),
+            ],
+          );
+        case OwnProfileTab.habits:
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (_habitTags.isEmpty)
+                ProfileAboutCard(
+                  data: aboutData.copyWith(
+                    currentFocus: 'Выберите первую привычку',
+                    teamStatus: 'Ищу команду',
+                  ),
+                  onFillProfile: widget.onOpenGroups,
+                )
+              else ...[
+                ProfileHabitTagsRow(tags: _habitTags),
+                const SizedBox(height: AppSpacing.md),
+                ProfileAboutCard(data: aboutData, onEdit: _editProfile),
+              ],
+              const SizedBox(height: AppSpacing.lg),
+              AppPrimaryButton(
+                label: _habitTags.isEmpty
+                    ? 'Выбрать привычку'
+                    : 'Управление привычками',
+                onPressed: widget.onOpenGroups,
+              ),
+            ],
+          );
+        case OwnProfileTab.achievements:
+          if (_loadingAchievements && !_achievementsLoaded) {
+            return const Padding(
+              padding: EdgeInsets.all(AppSpacing.lg),
+              child: Center(child: CircularProgressIndicator()),
+            );
+          }
+          return KeyedSubtree(
+            key: _achievementsKey,
+            child: ProfileAchievementsSection(
+              achievements: _achievements,
+              successfulDays: user.successfulDays,
+            ),
+          );
+      }
+    }
+
     final sections = Padding(
       padding: const EdgeInsets.fromLTRB(
         AppSpacing.md,
@@ -406,90 +461,48 @@ class _ProfileScreenState extends State<ProfileScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          ProfileAboutSection(rows: aboutRows),
-          if (aboutRows.isNotEmpty) const SizedBox(height: AppSpacing.lg),
-          ProfileCurrentCycleSection(
-            successfulDays: user?.successfulDays ?? 0,
-            currentStreak: _currentStreak,
-            primePoints: user?.primePoints ?? 0,
-            bestStreak: _bestStreak,
-            cyclePacePercent: _cyclePacePercent,
-            calendar: _calendar,
-            streakShields: user?.streakShields ?? 0,
-            shieldPending: user?.shieldPending ?? false,
-            habitName: _activeGroup?.skillName ?? _activeGroup?.name,
-            memberPhotoUrls: memberPhotos,
-            reportedToday: reportedToday,
-            onChooseHabit: widget.onOpenGroups,
-            onCheckIn: widget.onOpenGroups,
-            onBuyShield: () async {
-              try {
-                await context.read<ApiClient>().buyStreakShield();
-                await context.read<AuthProvider>().refreshUser();
-                if (mounted) showAppSnackBar(context, 'Щит куплен');
-              } catch (e) {
-                if (mounted) {
-                  showAppSnackBar(context, ApiClient.errorMessage(e));
-                }
-              }
-            },
-            onUseShield: () async {
-              try {
-                await context.read<ApiClient>().useStreakShield();
-                await context.read<AuthProvider>().refreshUser();
-                if (mounted) showAppSnackBar(context, 'Щит активирован');
-              } catch (e) {
-                if (mounted) {
-                  showAppSnackBar(context, ApiClient.errorMessage(e));
-                }
+          if (_offlineCached) ...[
+            ProfileOfflineBanner(onRetry: _load),
+            const SizedBox(height: AppSpacing.md),
+          ],
+          ProfileTabBar(
+            tabs: tabLabels,
+            selectedIndex: _tab.index,
+            onSelected: (i) {
+              final tab = OwnProfileTab.values[i];
+              setState(() => _tab = tab);
+              if (tab == OwnProfileTab.achievements) {
+                unawaited(_loadAchievements());
               }
             },
           ),
-          const SizedBox(height: AppSpacing.lg),
-          ProfileAnalyticsSection(
-            calendar: _calendar,
-            insights: _insights,
-            onInsightOpened: (insight) =>
-                Analytics.instance.insightOpened(insight.id),
-            onCheckIn: widget.onOpenGroups,
-          ),
-          const SizedBox(height: AppSpacing.lg),
-          ProfileLinkTile(
-            icon: Icons.emoji_events_outlined,
-            title: 'Турниры',
-            onTap: () {
-              Navigator.of(context).push(
-                PrimeRoute.sharedAxis(
-                  builder: (_) => TournamentsScreen(
-                    onShowMessage: () =>
-                        showAppSnackBar(context, 'Турниры скоро'),
-                  ),
-                ),
-              );
-            },
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          ProfileLinkTile(
-            icon: Icons.history,
-            title: 'История Праймов',
-            onTap: () {
-              Navigator.of(context).push(
-                PrimeRoute.sharedAxis(
-                  builder: (_) => const PrimeHistoryScreen(),
-                ),
-              );
-            },
-          ),
-          const SizedBox(height: AppSpacing.lg),
-          ProfileAchievementsSection(
-            achievements: _achievements,
-            successfulDays: user?.successfulDays ?? 0,
-          ),
+          const SizedBox(height: AppSpacing.md),
+          tabBody(),
         ],
       ),
     );
 
-    return AmbientCanvas(
+    final rail = [
+      ProfileRailDestination(
+        icon: ProfileIcons.cycle,
+        label: 'Цикл',
+        key: _cycleKey,
+      ),
+      ProfileRailDestination(
+        icon: ProfileIcons.analytics,
+        label: 'Аналитика',
+        key: _analyticsKey,
+      ),
+      ProfileRailDestination(
+        icon: ProfileIcons.achievements,
+        label: 'Достижения',
+        key: _achievementsKey,
+      ),
+    ];
+
+    return Scaffold(
+      backgroundColor: ProfileSurfaces.canvas,
+      body: AmbientCanvas(
       child: NotificationListener<ScrollNotification>(
         onNotification: (notification) {
           if (notification is ScrollUpdateNotification ||
@@ -507,14 +520,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
               child: ProfilePageLayout(
                 hero: hero,
                 sections: sections,
+                railDestinations: rail,
               ),
             ),
             SliverPadding(
-              padding: const EdgeInsets.only(bottom: KitLayout.navBottomClearance),
+              padding: EdgeInsets.only(bottom: KitLayout.dockScrollTail(context)),
               sliver: const SliverToBoxAdapter(child: SizedBox.shrink()),
             ),
           ],
         ),
+      ),
       ),
     );
   }

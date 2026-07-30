@@ -24,6 +24,14 @@ class WaitingRoomPoller extends ChangeNotifier {
   String? get matchedGroupId => status?.matchedGroupId;
   bool get isActive => _timer?.isActive == true;
 
+  /// Primary queue row — use for peopleWaiting/slots when API returns [queues].
+  WaitingRoomStatus? get primaryStatus {
+    final current = status;
+    if (current == null) return null;
+    if (current.queues.isNotEmpty) return current.queues.first;
+    return current.inQueue ? current : null;
+  }
+
   /// Starts periodic polling. Safe to call repeatedly — does not restart
   /// an already-running timer or fire a duplicate immediate refresh.
   void start({Duration? interval, bool forceRefresh = false}) {
@@ -55,11 +63,27 @@ class WaitingRoomPoller extends ChangeNotifier {
     _refreshing = true;
     loading = status == null;
     try {
+      if (status == null) {
+        try {
+          final cached = await _api.waitingRoomStatus();
+          if (_disposed) return;
+          status = WaitingRoomStatus.fromJson(cached);
+          loading = false;
+          notifyListeners();
+        } catch (_) {
+          // Live fetch below.
+        }
+      }
+      await _api.invalidateWaitingRoomCache();
       final raw = await _api.waitingRoomStatusLive();
       if (_disposed) return;
       status = WaitingRoomStatus.fromJson(raw);
       stats = await _fetchStatsForStatus(status);
       error = null;
+      if (status?.matchedGroupId != null &&
+          status!.matchedGroupId!.isNotEmpty) {
+        _timer?.cancel();
+      }
     } catch (e) {
       error = FailureMapper.from(e).message;
     } finally {

@@ -49,6 +49,16 @@ final class ForbiddenFailure extends AppFailure {
   });
 }
 
+/// Login succeeded on credentials but the signup was never confirmed.
+final class EmailNotVerifiedFailure extends AppFailure {
+  const EmailNotVerifiedFailure({
+    super.message = AppCopy.emailNotVerified,
+    super.statusCode = 403,
+    super.correlationId,
+    super.debugDetail,
+  });
+}
+
 final class NotFoundFailure extends AppFailure {
   const NotFoundFailure({
     super.message = AppCopy.notFound,

@@ -158,9 +158,23 @@ def login_or_register(base_url: str, plan: QueuePlan, index: int) -> str:
             "nickname": nickname,
         },
     )
-    if not isinstance(registered, dict) or not registered.get("access_token"):
-        raise RuntimeError(f"Cannot login/register {email}")
-    return str(registered["access_token"])
+    # Register only creates a pending account; ENABLE_DEV_TOOLS hands the
+    # confirmation code back so seeding does not need a mailbox.
+    code = registered.get("verification_code") if isinstance(registered, dict) else None
+    if not code:
+        raise RuntimeError(
+            f"Cannot login/register {email} — set ENABLE_DEV_TOOLS=true so "
+            "register returns the verification code"
+        )
+    verified = safe_request(
+        base_url,
+        "POST",
+        "/auth/verify-email",
+        {"email": email, "code": code},
+    )
+    if not isinstance(verified, dict) or not verified.get("access_token"):
+        raise RuntimeError(f"Cannot verify {email}")
+    return str(verified["access_token"])
 
 
 def seed(base_url: str, count: int) -> None:

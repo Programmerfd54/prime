@@ -1,3 +1,4 @@
+import hashlib
 import logging
 
 from sqlalchemy import select
@@ -32,11 +33,12 @@ async def send_push(
                 )
             ).scalars().all()
     for device in tokens:
+        token_fingerprint = hashlib.sha256(device.token.encode("utf-8")).hexdigest()[:16]
         logger.info(
-            "push_stub user=%s platform=%s token=%s title=%r body=%r data=%s",
+            "push_stub user=%s platform=%s token_fingerprint=%s title=%r body=%r data=%s",
             user_id,
             device.platform,
-            device.token[:12] + "...",
+            token_fingerprint,
             title,
             body,
             payload,

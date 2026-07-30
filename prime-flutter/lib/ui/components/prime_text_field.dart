@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 
+import '../../design/theme/prime_theme_context.dart';
 import '../../design/tokens.dart';
 import '../../design/typography.dart';
 
@@ -156,17 +157,18 @@ class _PrimeTextFieldState extends State<PrimeTextField> {
       listenable: _focus,
       builder: (context, _) {
         final focused = _focus.hasFocus;
+        final p = context.prime;
         final fill = widget.light
             ? AppColors.surfaceLightWarm
-            : AppColors.elevatedSurface.withValues(alpha: 0.85);
+            : p.surfaceSoft;
         final labelColor = widget.light
             ? (focused ? AppColors.primaryDeep : AppColors.textOnLightMuted)
-            : (focused ? AppColors.primarySoft : AppColors.textMuted);
+            : (focused ? p.brandSoft : p.inkMuted);
         final textColor =
-            widget.light ? AppColors.textOnLight : AppColors.textPrimary;
+            widget.light ? AppColors.textOnLight : p.ink;
         final borderColor = focused
-            ? AppColors.primary
-            : (widget.light ? AppColors.borderOnLight : AppColors.border);
+            ? p.brand
+            : (widget.light ? AppColors.borderOnLight : p.hairline);
 
         return FormField<String>(
           initialValue: widget.controller.text,
@@ -178,21 +180,19 @@ class _PrimeTextFieldState extends State<PrimeTextField> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 ClipRRect(
-                  borderRadius: BorderRadius.circular(AppRadius.md),
+                  borderRadius: BorderRadius.circular(AppRadius.button),
                   child: AnimatedContainer(
                     duration: AppDurations.fast,
                     clipBehavior: Clip.antiAlias,
                     decoration: BoxDecoration(
                       color: fill,
-                      borderRadius: BorderRadius.circular(AppRadius.md),
+                      borderRadius: BorderRadius.circular(AppRadius.button),
                       border: Border.all(color: borderColor, width: 1.5),
                       boxShadow: focused
                           ? [
                               BoxShadow(
-                                color:
-                                    AppColors.primary.withValues(alpha: 0.22),
-                                blurRadius: 10,
-                                spreadRadius: 0,
+                                color: p.brand.withValues(alpha: 0.12),
+                                blurRadius: 8,
                                 offset: const Offset(0, 2),
                               ),
                             ]
@@ -228,15 +228,13 @@ class _PrimeTextFieldState extends State<PrimeTextField> {
                         hintStyle: AppTypography.bodySecondary.copyWith(
                           color: widget.light
                               ? AppColors.textOnLightMuted
-                              : AppColors.textMuted,
+                              : p.inkMuted,
                         ),
                         prefixIcon: widget.icon == null
                             ? null
                             : Icon(
                                 widget.icon,
-                                color: focused
-                                    ? AppColors.primary
-                                    : AppColors.textMuted,
+                                color: focused ? p.brand : p.inkMuted,
                               ),
                         suffixIcon: widget.suffixIcon,
                         filled: true,

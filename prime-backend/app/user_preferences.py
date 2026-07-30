@@ -29,6 +29,8 @@ ONBOARDING_GOAL_IDS = frozenset(
 
 QUIT_COUNT_VALUES = frozenset({"1", "2", "3+"})
 ATTEMPT_COUNT_VALUES = frozenset({"1", "2-3", "4+"})
+PREFERRED_TIME_OF_DAY_VALUES = frozenset({"morning", "day", "evening"})
+SUPPORT_STYLE_VALUES = frozenset({"practical", "gentle", "strict"})
 
 
 def parse_onboarding_preferences(raw: str | None) -> dict:
@@ -78,6 +80,12 @@ def _normalize_onboarding_preferences(data: dict) -> dict:
     attempt_count = data.get("habit_attempt_count")
     if isinstance(attempt_count, str) and attempt_count in ATTEMPT_COUNT_VALUES:
         result["habit_attempt_count"] = attempt_count
+    time_of_day = data.get("preferred_time_of_day")
+    if isinstance(time_of_day, str) and time_of_day in PREFERRED_TIME_OF_DAY_VALUES:
+        result["preferred_time_of_day"] = time_of_day
+    support_style = data.get("support_style")
+    if isinstance(support_style, str) and support_style in SUPPORT_STYLE_VALUES:
+        result["support_style"] = support_style
     return result
 
 
@@ -89,6 +97,8 @@ def merge_onboarding_preferences(existing: dict, incoming: dict) -> dict:
         "selected_skill_id",
         "completed_at",
         "preferred_action_window",
+        "preferred_time_of_day",
+        "support_style",
         "habit_quit_count",
         "habit_attempt_count",
     ):

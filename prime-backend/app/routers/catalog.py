@@ -36,6 +36,7 @@ from ..models import (
     PrimeEvent,
     ReportAttachment,
     User,
+    LocalMediaAsset,
     WaitingRoomEntry,
     utcnow,
 )
@@ -107,6 +108,39 @@ async def matrix_media(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> Response:
+    media_url = f"mxc://{server_name}/{media_id}"
+    media_query = or_(
+        ChatMessage.url == media_url,
+        ChatMessage.thumbnail_url == media_url,
+    )
+    chat_message = await session.scalar(select(ChatMessage).where(media_query))
+    if chat_message is not None:
+        allowed = await svc._user_membership(session, chat_message.group_id, user.id) is not None
+    else:
+        direct_message = await session.scalar(
+            select(DirectMessage).where(
+                DirectMessage.url == media_url,
+                or_(
+                    DirectMessage.sender_user_id == user.id,
+                    DirectMessage.recipient_user_id == user.id,
+                ),
+            )
+        )
+        if direct_message is not None:
+            allowed = True
+        else:
+            attachment = await session.scalar(select(ReportAttachment).where(ReportAttachment.url == media_url))
+            report = (
+                await session.scalar(select(HabitReport).where(HabitReport.id == attachment.report_id))
+                if attachment is not None
+                else None
+            )
+            allowed = report is not None and (
+                report.user_id == user.id
+                or await svc._user_membership(session, report.group_id, user.id) is not None
+            )
+    if not allowed:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Медиафайл не найден")
     user = await ensure_matrix_user(user, session)
     try:
         content, content_type = await download_media(user, server_name, media_id)
@@ -115,7 +149,49 @@ async def matrix_media(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Медиафайл не найден",
         ) from error
-    return Response(content=content, media_type=content_type)
+    return Response(
+        content=content,
+        media_type=content_type,
+        headers={
+            "Content-Disposition": "inline" if content_type.startswith("image/") else "attachment",
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.get("/local-media/{asset_id}")
+async def local_media(
+    asset_id: str,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    asset = await session.scalar(select(LocalMediaAsset).where(LocalMediaAsset.id == asset_id))
+    if asset is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Медиафайл не найден")
+    # Local fallback media is restricted to its owner until it is attached to
+    # an authorized group/direct-message record. Matrix media remains governed
+    # by Matrix room ACLs through /media/{server}/{id}.
+    allowed = asset.owner_user_id == user.id
+    if asset.scope_type == "group" and asset.scope_id:
+        allowed = allowed or await svc._user_membership(session, asset.scope_id, user.id) is not None
+    elif asset.scope_type == "direct" and asset.scope_id:
+        allowed = allowed or await svc._are_friends(session, user.id, asset.scope_id)
+    if not allowed:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Медиафайл не найден")
+    path = FsPath("uploads/private-media") / asset.storage_key
+    if not path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Медиафайл не найден")
+    disposition = "inline" if asset.content_type.startswith("image/") else "attachment"
+    return Response(
+        content=path.read_bytes(),
+        media_type=asset.content_type,
+        headers={
+            "Content-Disposition": disposition,
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+        },
+    )
 
 
 @router.get("/skills")
@@ -241,5 +317,3 @@ async def achievements(
         }
         for item in items
     ]
-
-

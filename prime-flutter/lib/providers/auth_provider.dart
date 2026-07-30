@@ -1,13 +1,17 @@
+import 'dart:async';
 import 'dart:developer' as dev;
 
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/painting.dart';
 
 import '../core/media/media_urls.dart';
+import '../core/errors/app_failure.dart';
 import '../core/errors/failure_mapper.dart';
 import '../core/sync/user_personalization_sync.dart';
 import '../data/api_client.dart';
 import '../data/auth_storage.dart';
+import '../models/email_verification.dart';
 import '../models/user.dart';
 
 void _log(String msg) {
@@ -21,6 +25,7 @@ class AuthProvider extends ChangeNotifier {
   bool _disposed = false;
 
   AuthProvider(this.api) {
+    api.onTokenRefresh = _refreshSession;
     api.onUnauthorized = () {
       // Fire-and-forget; avoid awaiting inside Dio interceptor.
       handleUnauthorized();
@@ -31,6 +36,7 @@ class AuthProvider extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     api.onUnauthorized = null;
+    api.onTokenRefresh = null;
     super.dispose();
   }
 
@@ -155,10 +161,23 @@ class AuthProvider extends ChangeNotifier {
 
   Future<void> _persistAuth(Map<String, dynamic> tokenJson) async {
     final token = tokenJson['access_token'] as String;
+    final refreshToken = tokenJson['refresh_token'] as String?;
     _log('Saving token...');
-    await _storage.saveAuth(accessToken: token);
+    await _storage.saveAuth(accessToken: token, refreshToken: refreshToken);
     _log('Token saved, setting auth header');
     api.setAuthToken(token);
+  }
+
+  Future<bool> _refreshSession() async {
+    final refreshToken = await _storage.refreshToken;
+    if (refreshToken == null || refreshToken.isEmpty) return false;
+    try {
+      final tokens = await api.refreshSession(refreshToken);
+      await _persistAuth(tokens);
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<void> _setUserFromJson(Map<String, dynamic> json) async {
@@ -169,7 +188,10 @@ class AuthProvider extends ChangeNotifier {
     await UserPersonalizationSync.syncAfterAuth(api);
   }
 
-  Future<void> register(String email, String password,
+  /// Creates the account and triggers the confirmation email.
+  ///
+  /// Does not sign the user in: the session starts in [verifyEmail].
+  Future<EmailVerificationTicket> register(String email, String password,
       {required String name, required String nickname}) async {
     _loading = true;
     _safeNotify();
@@ -181,11 +203,8 @@ class AuthProvider extends ChangeNotifier {
         name: name,
         nickname: nickname,
       );
-      _log('Register OK, persisting auth...');
-      await _persistAuth(j);
-      _log('Fetching /users/me...');
-      await _setUserFromJson(await api.getMe());
-      _log('User loaded');
+      _log('Register OK, awaiting email confirmation');
+      return EmailVerificationTicket.fromJson(j);
     } catch (e) {
       _log('Register error: $e');
       rethrow;
@@ -193,6 +212,34 @@ class AuthProvider extends ChangeNotifier {
       _loading = false;
       _safeNotify();
     }
+  }
+
+  /// Confirms the emailed code, which is what actually starts the session.
+  Future<void> verifyEmail({
+    required String email,
+    required String code,
+  }) async {
+    _loading = true;
+    _safeNotify();
+    try {
+      final j = await api.verifyEmail(email: email, code: code);
+      await _persistAuth(j);
+      _log('Email verified, fetching /users/me...');
+      await _setUserFromJson(await api.getMe());
+    } catch (e) {
+      _log('Verify email error: $e');
+      rethrow;
+    } finally {
+      _loading = false;
+      _safeNotify();
+    }
+  }
+
+  /// Requests a fresh code. Returns the cooldown before the next resend and,
+  /// on dev backends, the code itself.
+  Future<EmailVerificationTicket> resendVerification(String email) async {
+    final j = await api.resendVerification(email);
+    return EmailVerificationTicket.fromJson({...j, 'email': email});
   }
 
   Future<void> login(String email, String password,
@@ -211,6 +258,10 @@ class AuthProvider extends ChangeNotifier {
       await _setUserFromJson(await api.getMe());
     } catch (e) {
       _log('Login error: $e');
+      if (e is DioException && e.response?.statusCode == 403) {
+        // Password was right — the signup was simply never confirmed.
+        throw EmailNotVerifiedFailure(debugDetail: e.message);
+      }
       rethrow;
     } finally {
       _loading = false;
@@ -221,6 +272,37 @@ class AuthProvider extends ChangeNotifier {
   Future<void> refreshUser() async {
     await _setUserFromJson(await api.getMe());
     _safeNotify();
+  }
+
+  /// Apply PATCH /users/me response without heavy personalization sync.
+  Future<void> applyUserUpdate(Map<String, dynamic> json) async {
+    final user = UserModel.fromJson(json);
+    _user = user;
+    _offlineMode = false;
+    await _storage.saveCachedUser(user);
+    _safeNotify();
+  }
+
+  /// Optimistic about text — closes sheets instantly, syncs in background.
+  Future<void> applyAboutLocally(String about) async {
+    final user = _user;
+    if (user == null) return;
+    _user = user.copyWith(about: about.trim());
+    _offlineMode = false;
+    await _storage.saveCachedUser(_user!);
+    _safeNotify();
+  }
+
+  void persistAboutInBackground(String about) {
+    final trimmed = about.trim();
+    unawaited(() async {
+      try {
+        final updated = await api.updateAbout(trimmed);
+        await applyUserUpdate(updated);
+      } catch (e) {
+        _log('about background sync failed: $e');
+      }
+    }());
   }
 
   Future<void> uploadAvatarBytes({
@@ -257,6 +339,11 @@ class AuthProvider extends ChangeNotifier {
   }
 
   Future<void> logout() async {
+    try {
+      await api.logoutSession();
+    } catch (_) {
+      // Local logout must complete even when the network is unavailable.
+    }
     await _storage.clear();
     await api.clearResponseCache();
     api.setAuthToken(null);

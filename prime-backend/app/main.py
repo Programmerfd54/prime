@@ -1,17 +1,19 @@
 import logging
 import re
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from .config import get_settings
-from .db import create_db_schema
+from .db import SessionLocal, create_db_schema
 from .logging_config import configure_logging
 from .middleware import request_log_middleware, security_headers_middleware
+from .matrix import migrate_legacy_tokens
+from .outbox_worker import run_outbox_worker
 from .routers import auth, catalog, chat, groups, notifications, reports, social, users, waiting_room
 
 
@@ -24,7 +26,18 @@ logger = logging.getLogger("prime.app")
 async def lifespan(app: FastAPI):
     logger.info("starting_prime_api")
     await create_db_schema()
-    yield
+    async with SessionLocal() as session:
+        migrated = await migrate_legacy_tokens(session)
+        if migrated:
+            logger.info("matrix_tokens_encrypted", extra={"count": migrated})
+    stop_event = asyncio.Event()
+    worker = asyncio.create_task(run_outbox_worker(stop_event))
+    try:
+        yield
+    finally:
+        stop_event.set()
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
     logger.info("stopping_prime_api")
 
 
@@ -43,7 +56,6 @@ app = FastAPI(
 app.middleware("http")(security_headers_middleware)
 app.middleware("http")(request_log_middleware)
 Path("uploads").mkdir(parents=True, exist_ok=True)
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 _cors_origins = [
     origin.strip()
     for origin in settings.cors_allowed_origins.split(",")
@@ -66,12 +78,32 @@ def _apply_cors_headers(request: Request, response: JSONResponse) -> JSONRespons
     origin = _cors_allow_origin(request.headers.get("origin"))
     if origin:
         response.headers["Access-Control-Allow-Origin"] = origin
-        response.headers["Access-Control-Allow-Credentials"] = "true"
         response.headers["Vary"] = "Origin"
     request_id = getattr(request.state, "request_id", None)
     if request_id:
         response.headers["X-Request-ID"] = request_id
     return response
+
+
+def _error_payload(
+    request: Request,
+    *,
+    status_code: int,
+    message: str,
+    fields: list[dict] | None = None,
+    retryable: bool | None = None,
+) -> dict:
+    request_id = getattr(request.state, "request_id", None)
+    return {
+        "detail": message,
+        "error": {
+            "code": f"HTTP_{status_code}",
+            "message": message,
+            "requestId": request_id,
+            "retryable": retryable if retryable is not None else status_code >= 500 or status_code == 429,
+            "fields": fields or [],
+        },
+    }
 
 
 @app.exception_handler(StarletteHTTPException)
@@ -82,7 +114,10 @@ async def http_exception_handler(
     detail = exc.detail
     if not isinstance(detail, str):
         detail = str(detail)
-    response = JSONResponse(status_code=exc.status_code, content={"detail": detail})
+    response = JSONResponse(
+        status_code=exc.status_code,
+        content=_error_payload(request, status_code=exc.status_code, message=detail),
+    )
     return _apply_cors_headers(request, response)
 
 
@@ -91,7 +126,24 @@ async def validation_exception_handler(
     request: Request,
     exc: RequestValidationError,
 ) -> JSONResponse:
-    response = JSONResponse(status_code=422, content={"detail": exc.errors()})
+    fields = [
+        {
+            "field": ".".join(str(part) for part in error.get("loc", [])),
+            "message": error.get("msg", "Некорректное значение"),
+            "type": error.get("type", "validation_error"),
+        }
+        for error in exc.errors()
+    ]
+    response = JSONResponse(
+        status_code=422,
+        content=_error_payload(
+            request,
+            status_code=422,
+            message="Ошибка валидации",
+            fields=fields,
+            retryable=False,
+        ),
+    )
     return _apply_cors_headers(request, response)
 
 
@@ -100,7 +152,12 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     logger.exception("unhandled_exception", exc_info=exc)
     response = JSONResponse(
         status_code=500,
-        content={"detail": "Внутренняя ошибка сервера"},
+        content=_error_payload(
+            request,
+            status_code=500,
+            message="Внутренняя ошибка сервера",
+            retryable=True,
+        ),
     )
     return _apply_cors_headers(request, response)
 
@@ -109,14 +166,15 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
     allow_origin_regex=_cors_regex,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
     expose_headers=["X-Request-ID"],
 )
 
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")
+app.include_router(users.legacy_router, prefix="/api/v1")
 app.include_router(catalog.router, prefix="/api/v1")
 app.include_router(social.router, prefix="/api/v1")
 app.include_router(notifications.router, prefix="/api/v1")

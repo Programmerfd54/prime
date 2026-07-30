@@ -27,7 +27,7 @@ services:
       prime-postgres:
         condition: service_healthy
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
       - ./logs:/app/logs
       - ./uploads:/app/uploads
@@ -38,14 +38,14 @@ services:
       retries: 10
 
   matrix-synapse:
-    image: matrixdotorg/synapse:latest
+    image: ${SYNAPSE_IMAGE:?SYNAPSE_IMAGE must be pinned to a reviewed digest or version}
     container_name: prime-matrix-synapse
     restart: unless-stopped
     environment:
       SYNAPSE_CONFIG_DIR: /data
       SYNAPSE_CONFIG_PATH: /data/homeserver.yaml
     ports:
-      - "8008:8008"
+      - "127.0.0.1:8008:8008"
     volumes:
       - ./matrix:/data
 

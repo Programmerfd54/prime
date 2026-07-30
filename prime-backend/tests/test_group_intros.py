@@ -90,3 +90,47 @@ async def test_group_activation_posts_member_intro_messages(monkeypatch) -> None
     finally:
         await session.close()
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_early_start_group_transitions_to_rules_pending_when_all_confirm() -> None:
+    engine, session = await make_session()
+    try:
+        users = [make_user(index) for index in range(1, 4)]
+        group = Group(
+            name="Early start",
+            skill_id="body-charge",
+            region_code="74",
+            status="introduction",
+            max_members=3,
+        )
+        session.add_all([group, *users])
+        await session.flush()
+        for index, user in enumerate(users):
+            session.add(
+                GroupMember(
+                    group_id=group.id,
+                    user_id=user.id,
+                    role="creator" if index == 0 else "member",
+                )
+            )
+        await session.flush()
+
+        for user in users:
+            membership = await session.scalar(
+                select(GroupMember).where(
+                    GroupMember.group_id == group.id,
+                    GroupMember.user_id == user.id,
+                )
+            )
+            membership.confirmed_participation = True
+            session.add(membership)
+
+        await misc._activate_if_ready(session, group)
+        await session.commit()
+        await session.refresh(group)
+
+        assert group.status == "rules_pending"
+    finally:
+        await session.close()
+        await engine.dispose()

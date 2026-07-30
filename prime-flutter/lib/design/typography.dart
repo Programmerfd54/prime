@@ -2,39 +2,23 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 
-/// PRIME Liquid type scale.
-///
-/// - **Playfair Display** — editorial serif headlines (roman + italic accents)
-/// - **Manrope** — UI body, captions, buttons
-/// - **Unbounded** — tabular numeric metrics only
-///
-/// Styles are **colorless** so ink resolves from [TextTheme] / [DefaultTextStyle]
-/// and adapts to light/dark via [PrimeTheme]. Use `.copyWith(color: …)` for
-/// on-brand / on-glass / explicit overrides.
+/// PRIME type scale — Manrope only (V2 TZ §4).
 abstract final class AppTypography {
-  static const String _ui = 'Poppins';
-  static const String _uiLegacy = 'Manrope';
-  static const String _serif = 'PlayfairDisplay';
-  static const String _numeric = 'Unbounded';
-
-  /// Fallback chain: Manrope then system sans if Poppins fails to load.
-  static const List<String> _uiFallback = [_uiLegacy, 'sans-serif'];
-  static const List<String> _serifFallback = [_ui, _uiLegacy];
-
-  // ── Editorial serif ──────────────────────────────────────────────────────
+  static const String family = 'Manrope';
+  static const List<String> fallback = ['sans-serif'];
 
   static const TextStyle displayHero = TextStyle(
-    fontFamily: _serif,
-    fontFamilyFallback: _serifFallback,
+    fontFamily: family,
+    fontFamilyFallback: fallback,
     fontWeight: FontWeight.w700,
-    letterSpacing: -1.2,
+    letterSpacing: -1.0,
     height: 1.08,
     fontSize: 48,
   );
 
   static const TextStyle display = TextStyle(
-    fontFamily: _serif,
-    fontFamilyFallback: _serifFallback,
+    fontFamily: family,
+    fontFamilyFallback: fallback,
     fontWeight: FontWeight.w700,
     letterSpacing: -0.6,
     height: 1.14,
@@ -44,27 +28,26 @@ abstract final class AppTypography {
   static const TextStyle displaySerif = display;
 
   static const TextStyle heroSerif = TextStyle(
-    fontFamily: _serif,
-    fontFamilyFallback: _serifFallback,
+    fontFamily: family,
+    fontFamilyFallback: fallback,
     fontWeight: FontWeight.w600,
-    letterSpacing: -0.8,
+    letterSpacing: -0.5,
     height: 1.12,
     fontSize: 40,
   );
 
   static const TextStyle titleSerif = TextStyle(
-    fontFamily: _serif,
-    fontFamilyFallback: _serifFallback,
+    fontFamily: family,
+    fontFamilyFallback: fallback,
     fontWeight: FontWeight.w600,
     letterSpacing: -0.3,
     height: 1.22,
     fontSize: 22,
   );
 
-  /// Italic accent words inside serif headlines.
   static const TextStyle serifItalic = TextStyle(
-    fontFamily: _serif,
-    fontFamilyFallback: _serifFallback,
+    fontFamily: family,
+    fontFamilyFallback: fallback,
     fontStyle: FontStyle.italic,
     fontWeight: FontWeight.w500,
     letterSpacing: -0.2,
@@ -72,11 +55,9 @@ abstract final class AppTypography {
     fontSize: 22,
   );
 
-  // ── Sans UI ──────────────────────────────────────────────────────────────
-
   static const TextStyle largeTitle = TextStyle(
-    fontFamily: _ui,
-    fontFamilyFallback: _uiFallback,
+    fontFamily: family,
+    fontFamilyFallback: fallback,
     fontWeight: FontWeight.w700,
     letterSpacing: -0.4,
     height: 1.18,
@@ -84,8 +65,8 @@ abstract final class AppTypography {
   );
 
   static const TextStyle titleXL = TextStyle(
-    fontFamily: _ui,
-    fontFamilyFallback: _uiFallback,
+    fontFamily: family,
+    fontFamilyFallback: fallback,
     fontWeight: FontWeight.w700,
     letterSpacing: -0.3,
     height: 1.2,
@@ -93,8 +74,8 @@ abstract final class AppTypography {
   );
 
   static const TextStyle title1 = TextStyle(
-    fontFamily: _ui,
-    fontFamilyFallback: _uiFallback,
+    fontFamily: family,
+    fontFamilyFallback: fallback,
     fontWeight: FontWeight.w600,
     letterSpacing: -0.2,
     height: 1.25,
@@ -102,79 +83,108 @@ abstract final class AppTypography {
   );
 
   static const TextStyle title2 = TextStyle(
-    fontFamily: _ui,
-    fontFamilyFallback: _uiFallback,
+    fontFamily: family,
+    fontFamilyFallback: fallback,
     fontWeight: FontWeight.w600,
     letterSpacing: -0.1,
     height: 1.3,
     fontSize: 17,
   );
 
+  /// V5 unified scale — single source for Kit + Profile forwarders.
+  static const TextStyle pageTitle = TextStyle(
+    fontFamily: family,
+    fontFamilyFallback: fallback,
+    fontWeight: FontWeight.w700,
+    letterSpacing: -0.6,
+    height: 1.12,
+    fontSize: 32,
+  );
+
+  static const TextStyle sectionTitle = titleSerif;
+
+  static const TextStyle cardTitle = title2;
+
+  static const TextStyle listTitle = TextStyle(
+    fontFamily: family,
+    fontFamilyFallback: fallback,
+    fontWeight: FontWeight.w600,
+    fontSize: 16,
+    height: 1.25,
+  );
+
+  static const TextStyle listSubtitle = bodySecondary;
+
+  static const TextStyle chip = TextStyle(
+    fontFamily: family,
+    fontFamilyFallback: fallback,
+    fontWeight: FontWeight.w600,
+    fontSize: 15,
+    height: 1.2,
+  );
+
+  static const TextStyle metricMedium = numericSm;
+
   static const TextStyle body = TextStyle(
-    fontFamily: _ui,
-    fontFamilyFallback: _uiFallback,
+    fontFamily: family,
+    fontFamilyFallback: fallback,
     fontWeight: FontWeight.w400,
     fontSize: 15,
     height: 1.45,
   );
 
   static const TextStyle bodySecondary = TextStyle(
-    fontFamily: _ui,
-    fontFamilyFallback: _uiFallback,
+    fontFamily: family,
+    fontFamilyFallback: fallback,
     fontWeight: FontWeight.w400,
     fontSize: 14,
     height: 1.45,
   );
 
   static const TextStyle caption = TextStyle(
-    fontFamily: _ui,
-    fontFamilyFallback: _uiFallback,
+    fontFamily: family,
+    fontFamilyFallback: fallback,
     fontWeight: FontWeight.w500,
     fontSize: 12,
     height: 1.3,
   );
 
   static const TextStyle button = TextStyle(
-    fontFamily: _ui,
-    fontFamilyFallback: _uiFallback,
+    fontFamily: family,
+    fontFamilyFallback: fallback,
     fontWeight: FontWeight.w600,
     fontSize: 16,
     height: 1.2,
   );
 
-  // ── Numeric (Unbounded only) ─────────────────────────────────────────────
-
   static const TextStyle numeric = TextStyle(
-    fontFamily: _numeric,
-    fontWeight: FontWeight.w700,
+    fontFamily: family,
+    fontFamilyFallback: fallback,
+    fontWeight: FontWeight.w600,
     fontSize: 32,
     height: 1.1,
-    letterSpacing: -0.6,
+    letterSpacing: -0.4,
     fontFeatures: [FontFeature.tabularFigures()],
   );
 
   static const TextStyle numericSm = TextStyle(
-    fontFamily: _numeric,
+    fontFamily: family,
+    fontFamilyFallback: fallback,
     fontWeight: FontWeight.w600,
     fontSize: 20,
     height: 1.15,
-    letterSpacing: -0.3,
+    letterSpacing: -0.2,
     fontFeatures: [FontFeature.tabularFigures()],
   );
 
-  /// Spec names for metric styles.
   static const TextStyle metricLarge = numeric;
   static const TextStyle metricCompact = numericSm;
 
-  // Backward-compatible aliases
   static const TextStyle headline = largeTitle;
   static const TextStyle title = title2;
   static const TextStyle bodyMuted = bodySecondary;
   static const TextStyle label = caption;
 
-  /// Parses `*italic spans*` into a [TextSpan] tree.
-  ///
-  /// Example: `accent('Не знаешь, *с чего* начать?', style: heroSerif)`
   static TextSpan accent(
     String source, {
     TextStyle? style,
@@ -210,7 +220,6 @@ abstract final class AppTypography {
     return TextSpan(style: base, children: children);
   }
 
-  /// Convenience widget wrapping [accent].
   static Widget accentText(
     String source, {
     TextStyle? style,
@@ -227,7 +236,6 @@ abstract final class AppTypography {
     );
   }
 
-  /// Builds a [TextTheme] tinted with [ink] / [inkSecondary] / [inkMuted].
   static TextTheme textTheme({
     Color? ink,
     Color? inkSecondary,

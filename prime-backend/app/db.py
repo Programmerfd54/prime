@@ -1,6 +1,9 @@
 from collections.abc import AsyncGenerator
+import hashlib
+from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy import text
 from .config import get_settings
 
 
@@ -9,13 +12,90 @@ class Base(DeclarativeBase):
 
 
 settings = get_settings()
-engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+_engine_options = {"pool_pre_ping": True}
+if not settings.database_url.startswith("sqlite"):
+    _engine_options.update(
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow,
+        pool_timeout=settings.db_pool_timeout_seconds,
+        pool_recycle=settings.db_pool_recycle_seconds,
+    )
+engine = create_async_engine(settings.database_url, **_engine_options)
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
     async with SessionLocal() as session:
         yield session
+
+
+def _split_sql_statements(sql: str) -> list[str]:
+    """Split a migration file into individual statements for PostgreSQL drivers."""
+    statements: list[str] = []
+    current: list[str] = []
+    for line in sql.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("--"):
+            continue
+        current.append(line)
+        if stripped.endswith(";"):
+            statement = "\n".join(current).strip()
+            if statement.endswith(";"):
+                statement = statement[:-1].strip()
+            if statement:
+                statements.append(statement)
+            current = []
+    remainder = "\n".join(current).strip()
+    if remainder:
+        statements.append(remainder.rstrip(";").strip())
+    return statements
+
+
+async def _apply_forward_migrations(conn) -> None:
+    """Apply checked-in PostgreSQL migrations after the legacy bootstrap.
+
+    The project predates Alembic and still needs the idempotent bootstrap above
+    for existing installations.  This ledger makes new changes observable and
+    prevents silently running a changed migration twice.
+    """
+    if conn.dialect.name != "postgresql":
+        return
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version VARCHAR(255) PRIMARY KEY,
+                checksum VARCHAR(64) NOT NULL,
+                applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """
+        )
+    )
+    migration_dir = Path(__file__).resolve().parents[1] / "migrations"
+    if not migration_dir.exists():
+        return
+    applied = {
+        row.version: row.checksum
+        for row in (await conn.execute(text("SELECT version, checksum FROM schema_migrations"))).all()
+    }
+    for path in sorted(migration_dir.glob("[0-9]*_*.sql")):
+        version = path.name
+        sql = path.read_text(encoding="utf-8")
+        checksum = hashlib.sha256(sql.encode("utf-8")).hexdigest()
+        previous_checksum = applied.get(version)
+        if previous_checksum is not None:
+            if previous_checksum != checksum:
+                raise RuntimeError(f"Migration checksum mismatch: {version}")
+            continue
+        for statement in _split_sql_statements(sql):
+            await conn.exec_driver_sql(statement)
+        await conn.execute(
+            text(
+                "INSERT INTO schema_migrations (version, checksum) "
+                "VALUES (:version, :checksum)"
+            ),
+            {"version": version, "checksum": checksum},
+        )
 
 
 async def create_db_schema() -> None:
@@ -139,6 +219,7 @@ async def create_db_schema() -> None:
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ",
             "ALTER TABLE waiting_room_entries ADD COLUMN IF NOT EXISTS pair_code VARCHAR(32)",
             "CREATE INDEX IF NOT EXISTS ix_waiting_room_entries_pair_code ON waiting_room_entries (pair_code)",
+            "ALTER TABLE waiting_room_entries ADD COLUMN IF NOT EXISTS pair_start_confirmed_at TIMESTAMPTZ",
             """
             CREATE TABLE IF NOT EXISTS notifications (
                 id VARCHAR(36) PRIMARY KEY,
@@ -169,6 +250,24 @@ async def create_db_schema() -> None:
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS streak_shields INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS shield_pending BOOLEAN NOT NULL DEFAULT FALSE",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE",
+            # The DEFAULT grandfathers accounts that existed before email
+            # confirmation shipped; dropping it right away keeps every new
+            # signup unverified until it confirms the code.
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ DEFAULT now()",
+            "ALTER TABLE users ALTER COLUMN email_verified_at DROP DEFAULT",
+            """
+            CREATE TABLE IF NOT EXISTS email_verification_codes (
+                id VARCHAR(36) PRIMARY KEY,
+                user_id VARCHAR(36) NOT NULL,
+                code_hash VARCHAR(64) NOT NULL,
+                expires_at TIMESTAMPTZ NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                used_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ DEFAULT now()
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS ix_email_verification_codes_user_id ON email_verification_codes (user_id)",
+            "CREATE INDEX IF NOT EXISTS ix_email_verification_codes_expires_at ON email_verification_codes (expires_at)",
             """
             CREATE TABLE IF NOT EXISTS custom_skills (
                 id VARCHAR(36) PRIMARY KEY,
@@ -229,3 +328,4 @@ async def create_db_schema() -> None:
         )
         for statement in migrations:
             await conn.exec_driver_sql(statement)
+        await _apply_forward_migrations(conn)

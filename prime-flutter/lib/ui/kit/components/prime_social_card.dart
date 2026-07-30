@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/media/media_urls.dart';
 import '../../../design/tokens.dart';
 import '../../../design/theme/prime_theme_context.dart';
 import '../tokens/kit_typography.dart';
@@ -98,7 +99,9 @@ class _AvatarBubble extends StatelessWidget {
       child: CircleAvatar(
         radius: 16,
         backgroundColor: p.surface,
-        backgroundImage: item.photoUrl != null ? NetworkImage(item.photoUrl!) : null,
+        backgroundImage: absolutePhotoUrl(item.photoUrl) != null
+            ? NetworkImage(absolutePhotoUrl(item.photoUrl)!)
+            : null,
         child: item.photoUrl == null
             ? Text(
                 item.name.isNotEmpty ? item.name[0] : '?',

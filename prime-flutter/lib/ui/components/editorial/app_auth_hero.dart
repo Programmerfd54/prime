@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../../../design/theme/prime_theme_context.dart';
 import '../../../design/tokens.dart';
 import '../../../design/typography.dart';
 import '../../../design/visuals/ambient_and_progress.dart';
@@ -21,6 +22,7 @@ class AppAuthHero extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = context.prime;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -29,14 +31,14 @@ class AppAuthHero extends StatelessWidget {
           child: Stack(
             alignment: Alignment.center,
             children: [
-              const _PrimeBrandArt(size: 160),
+              _PrimeBrandArt(size: 160, accent: p.brand),
               if (!compact)
                 Positioned(
                   bottom: 0,
                   child: Text(
                     'ПРАЙМ',
                     style: AppTypography.caption.copyWith(
-                      color: AppColors.primarySoft,
+                      color: p.brandSoft,
                       fontWeight: FontWeight.w700,
                       letterSpacing: 4,
                     ),
@@ -46,18 +48,31 @@ class AppAuthHero extends StatelessWidget {
           ),
         ),
         const SizedBox(height: AppSpacing.md),
-        Text(title, style: AppTypography.largeTitle),
+        Text(title, style: AppTypography.largeTitle.copyWith(color: p.ink)),
         const SizedBox(height: AppSpacing.xs),
-        Text(subtitle, style: AppTypography.bodySecondary),
+        Text(subtitle, style: AppTypography.bodySecondary.copyWith(color: p.inkSecondary)),
       ],
     );
   }
 }
 
-class _PrimeBrandArt extends StatelessWidget {
-  const _PrimeBrandArt({required this.size});
+/// Compact PRIME brand orb for splash / loading states.
+class PrimeBrandMark extends StatelessWidget {
+  const PrimeBrandMark({super.key, this.size = 88});
 
   final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return _PrimeBrandArt(size: size, accent: context.prime.brand);
+  }
+}
+
+class _PrimeBrandArt extends StatelessWidget {
+  const _PrimeBrandArt({required this.size, required this.accent});
+
+  final double size;
+  final Color accent;
 
   @override
   Widget build(BuildContext context) {
@@ -65,13 +80,17 @@ class _PrimeBrandArt extends StatelessWidget {
       width: size,
       height: size,
       child: CustomPaint(
-        painter: _PrimeBrandPainter(),
+        painter: _PrimeBrandPainter(accent: accent),
       ),
     );
   }
 }
 
 class _PrimeBrandPainter extends CustomPainter {
+  _PrimeBrandPainter({required this.accent});
+
+  final Color accent;
+
   @override
   void paint(Canvas canvas, Size size) {
     final c = Offset(size.width / 2, size.height / 2);
@@ -91,12 +110,12 @@ class _PrimeBrandPainter extends CustomPainter {
       );
     }
 
-    orb(c, r * 1.2, AppColors.primary);
+    orb(c, r * 1.2, accent);
     orb(c + Offset(-r * 0.3, r * 0.2), r * 0.5, AppColors.habitFocus);
     orb(c + Offset(r * 0.35, -r * 0.15), r * 0.4, AppColors.habitSocial);
 
     final ring = Paint()
-      ..color = AppColors.primary.withValues(alpha: 0.5)
+      ..color = accent.withValues(alpha: 0.5)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2.5;
     canvas.drawCircle(c, r * 0.72, ring);
@@ -107,7 +126,7 @@ class _PrimeBrandPainter extends CustomPainter {
       canvas.drawCircle(
         p,
         r * 0.09,
-        Paint()..color = AppColors.primarySoft.withValues(alpha: 0.75),
+        Paint()..color = accent.withValues(alpha: 0.55),
       );
     }
 
@@ -117,15 +136,16 @@ class _PrimeBrandPainter extends CustomPainter {
       Paint()
         ..shader = RadialGradient(
           colors: [
-            AppColors.primary,
-            AppColors.primary.withValues(alpha: 0.4),
+            accent,
+            accent.withValues(alpha: 0.4),
           ],
         ).createShader(Rect.fromCircle(center: c, radius: r * 0.22)),
     );
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _PrimeBrandPainter oldDelegate) =>
+      oldDelegate.accent != accent;
 }
 
 /// Onboarding page hero — full visual module per slide.

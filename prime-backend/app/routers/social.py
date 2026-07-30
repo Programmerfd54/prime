@@ -1,11 +1,10 @@
 """social routes — split from misc.py."""
 from datetime import date, datetime, timedelta, timezone
-import asyncio
 import mimetypes
 from pathlib import Path as FsPath
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from sqlalchemy import case, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,7 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import get_settings
 from ..db import get_session
 from ..deps import get_current_user
+from ..media import read_upload
+from ..direct_message_events import DirectMessagePush, direct_message_hub
 from ..notifications import create_notification
+from ..pagination import decode_cursor, encode_cursor
 from ..matrix import (
     create_room,
     download_media,
@@ -130,6 +132,161 @@ async def find_user_by_nickname(
     }
 
 
+async def _discover_item_payload(
+    session: AsyncSession,
+    viewer: User,
+    found: User,
+) -> dict:
+    pending_request = await session.scalar(
+        select(FriendRequest).where(
+            FriendRequest.status == "pending",
+            or_(
+                (FriendRequest.requester_user_id == viewer.id)
+                & (FriendRequest.addressee_user_id == found.id),
+                (FriendRequest.requester_user_id == found.id)
+                & (FriendRequest.addressee_user_id == viewer.id),
+            ),
+        )
+    )
+    pending_direction = None
+    if pending_request is not None:
+        pending_direction = (
+            "outgoing"
+            if pending_request.requester_user_id == viewer.id
+            else "incoming"
+        )
+    return {
+        "user": _public_user_payload(found),
+        "is_friend": await _are_friends(session, viewer.id, found.id),
+        "has_pending_request": pending_request is not None,
+        "pending_request_id": pending_request.id if pending_request is not None else None,
+        "pending_direction": pending_direction,
+    }
+
+
+async def _discover_items_payload(
+    session: AsyncSession,
+    viewer: User,
+    found_users: list[User],
+) -> list[dict]:
+    """Batch relationship state to avoid two queries per discover card."""
+    ids = [item.id for item in found_users]
+    if not ids:
+        return []
+    friends = (
+        await session.execute(
+            select(Friendship).where(
+                or_(
+                    (Friendship.user_low_id == viewer.id) & Friendship.user_high_id.in_(ids),
+                    (Friendship.user_high_id == viewer.id) & Friendship.user_low_id.in_(ids),
+                )
+            )
+        )
+    ).scalars().all()
+    friend_ids = {
+        row.user_high_id if row.user_low_id == viewer.id else row.user_low_id
+        for row in friends
+    }
+    pending = (
+        await session.execute(
+            select(FriendRequest).where(
+                FriendRequest.status == "pending",
+                or_(
+                    (FriendRequest.requester_user_id == viewer.id) & FriendRequest.addressee_user_id.in_(ids),
+                    (FriendRequest.addressee_user_id == viewer.id) & FriendRequest.requester_user_id.in_(ids),
+                ),
+            )
+        )
+    ).scalars().all()
+    pending_by_user: dict[str, FriendRequest] = {}
+    for row in pending:
+        other_id = row.addressee_user_id if row.requester_user_id == viewer.id else row.requester_user_id
+        pending_by_user[other_id] = row
+    items = []
+    for found in found_users:
+        request = pending_by_user.get(found.id)
+        items.append(
+            {
+                "user": _public_user_payload(found),
+                "is_friend": found.id in friend_ids,
+                "has_pending_request": request is not None,
+                "pending_request_id": request.id if request is not None else None,
+                "pending_direction": (
+                    "outgoing" if request and request.requester_user_id == viewer.id else "incoming"
+                ) if request else None,
+            }
+        )
+    return items
+
+
+@router.get("/users/discover")
+async def discover_users(
+    region_code: str | None = Query(default=None, max_length=8),
+    cursor: str | None = Query(default=None),
+    limit: int = Query(default=30, ge=1, le=50),
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    normalized_region = region_code.strip() if region_code else None
+    if normalized_region == "":
+        normalized_region = None
+
+    cursor_created_at = None
+    cursor_id = None
+    if cursor:
+        try:
+            cursor_created_at, cursor_id = decode_cursor(cursor)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Некорректный cursor",
+            ) from exc
+
+    query = (
+        select(User)
+        .where(
+            User.id != user.id,
+            User.is_active.is_(True),
+            User.email_verified_at.is_not(None),
+            User.nickname != "",
+        )
+        .order_by(User.created_at.desc(), User.id.desc())
+        .limit(limit + 1)
+    )
+    if normalized_region is not None:
+        query = query.where(User.region_code == normalized_region)
+    if cursor_created_at is not None and cursor_id is not None:
+        if session.get_bind().dialect.name == "sqlite":
+            cursor_key = cursor_created_at.strftime("%Y-%m-%d %H:%M:%S")
+            created_key = func.strftime("%Y-%m-%d %H:%M:%S", User.created_at)
+            query = query.where(
+                or_(
+                    created_key < cursor_key,
+                    (created_key == cursor_key) & (User.id < cursor_id),
+                )
+            )
+        else:
+            query = query.where(
+                or_(
+                    User.created_at < cursor_created_at,
+                    (User.created_at == cursor_created_at) & (User.id < cursor_id),
+                )
+            )
+
+    rows = (await session.execute(query)).scalars().all()
+    has_more = len(rows) > limit
+    page = rows[:limit]
+
+    items = await _discover_items_payload(session, user, page)
+    next_cursor = (
+        encode_cursor(page[-1].created_at, page[-1].id)
+        if has_more and page and page[-1].created_at is not None
+        else None
+    )
+
+    return {"items": items, "next_cursor": next_cursor}
+
+
 async def _create_friend_request_for_addressee(
     session: AsyncSession,
     requester: User,
@@ -152,6 +309,17 @@ async def _create_friend_request_for_addressee(
         session.add(Friendship(user_low_id=low, user_high_id=high))
         reverse.status = "accepted"
         session.add(reverse)
+        await create_notification(
+            session,
+            addressee.id,
+            "system",
+            requester.name or requester.nickname,
+            "принял(а) вашу заявку в друзья",
+            {
+                "friend_id": requester.id,
+                "friend_nickname": requester.nickname,
+            },
+        )
         await session.commit()
         return {"status": "accepted"}
 
@@ -250,6 +418,21 @@ async def respond_friend_request(
         )
         if friendship is None:
             session.add(Friendship(user_low_id=low, user_high_id=high))
+        requester = await session.scalar(
+            select(User).where(User.id == request.requester_user_id)
+        )
+        if requester is not None:
+            await create_notification(
+                session,
+                request.requester_user_id,
+                "system",
+                user.name or user.nickname,
+                "принял(а) вашу заявку в друзья",
+                {
+                    "friend_id": user.id,
+                    "friend_nickname": user.nickname,
+                },
+            )
     await session.commit()
     return {"status": request.status}
 
@@ -283,7 +466,11 @@ async def friends(
     if not friend_ids:
         return {"friends": []}
     rows = (
-        await session.execute(select(User).where(User.id.in_(friend_ids)).order_by(User.name.asc()))
+        await session.execute(
+            select(User)
+            .where(User.id.in_(friend_ids), User.is_active.is_(True))
+            .order_by(User.name.asc())
+        )
     ).scalars().all()
     return {"friends": [_user_payload(friend) for friend in rows]}
 
@@ -292,8 +479,9 @@ async def friends(
 async def list_direct_chats(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
+    limit: int = Query(default=100, ge=1, le=100),
 ) -> dict:
-    return {"chats": await _direct_chat_inbox_items(session, user)}
+    return {"chats": await _direct_chat_inbox_items(session, user, limit)}
 
 
 @router.post("/direct-chats/{friend_id}/read")
@@ -311,7 +499,7 @@ async def mark_direct_chat_read(
 @router.get("/direct-chats/{friend_id}/messages")
 async def direct_messages(
     friend_id: str,
-    before: datetime | None = None,
+    before: str | None = None,
     limit: int = Query(default=50, ge=1, le=100),
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
@@ -319,13 +507,27 @@ async def direct_messages(
     if not await _are_friends(session, user.id, friend_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Друг не найден")
     filters = [DirectMessage.conversation_key == _direct_conversation_key(user.id, friend_id)]
-    if before is not None:
-        filters.append(DirectMessage.created_at < before)
+    before_created_at = None
+    before_id = None
+    if before:
+        try:
+            before_created_at, before_id = decode_cursor(before)
+        except ValueError:
+            try:
+                before_created_at = datetime.fromisoformat(before)
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail="Некорректный курсор") from error
+        filters.append(
+            or_(
+                DirectMessage.created_at < before_created_at,
+                (DirectMessage.created_at == before_created_at) & (DirectMessage.id < (before_id or "")),
+            )
+        )
     messages = (
         await session.execute(
             select(DirectMessage)
             .where(*filters)
-            .order_by(DirectMessage.created_at.desc())
+            .order_by(DirectMessage.created_at.desc(), DirectMessage.id.desc())
             .limit(limit + 1)
         )
     ).scalars().all()
@@ -349,7 +551,7 @@ async def direct_messages(
     return {
         "messages": payloads,
         "has_more": has_more,
-        "next_before": page[0].created_at.isoformat() if has_more and page else None,
+        "next_before": encode_cursor(page[0].created_at, page[0].id) if has_more and page else None,
         "peer_last_read_at": peer_last_read_at.isoformat() if peer_last_read_at else None,
     }
 
@@ -358,19 +560,35 @@ async def direct_messages(
 async def direct_chat_upload_media(
     friend_id: str,
     file: UploadFile = File(...),
+    request: Request = None,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     if not await _are_friends(session, user.id, friend_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Друг не найден")
+    if request is not None:
+        from ..rate_limit import enforce as enforce_rate_limit
+        from ..rate_limit import record_failure as record_rate_limit_failure
+        settings = get_settings()
+        keys = (
+            f"upload:direct:user:{user.id}",
+            f"upload:direct:ip:{request.client.host if request.client else 'unknown'}",
+        )
+        for key in keys:
+            await enforce_rate_limit(session, key, limit=settings.upload_rate_limit_attempts, window_seconds=settings.upload_rate_limit_window_seconds, detail="Слишком много загрузок. Попробуйте позже.")
+        for key in keys:
+            await record_rate_limit_failure(session, key, window_seconds=settings.upload_rate_limit_window_seconds)
     user = await ensure_matrix_user(user, session)
-    content = await file.read(MAX_DIRECT_FILE_BYTES + 1)
+    declared_type = (file.content_type or "").lower()
+    read_limit = MAX_DIRECT_IMAGE_BYTES if declared_type.startswith("image/") else MAX_DIRECT_FILE_BYTES
+    content, content_type, filename = await read_upload(
+        file,
+        max_bytes=read_limit,
+        max_image_bytes=MAX_DIRECT_IMAGE_BYTES,
+        allow_types=ALLOWED_DIRECT_DOCUMENT_TYPES,
+    )
     if not content:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Файл пустой")
-    filename = file.filename or f"{uuid4().hex}.bin"
-    content_type = file.content_type or "application/octet-stream"
-    if content_type == "application/octet-stream":
-        content_type = mimetypes.guess_type(filename)[0] or content_type
     is_image = content_type.startswith("image/")
     max_bytes = MAX_DIRECT_IMAGE_BYTES if is_image else MAX_DIRECT_FILE_BYTES
     if len(content) > max_bytes:
@@ -388,8 +606,6 @@ async def direct_chat_upload_media(
             "image/jpeg",
             "image/png",
             "image/webp",
-            "image/heic",
-            "image/heif",
         }:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -403,7 +619,7 @@ async def direct_chat_upload_media(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Этот формат пока не поддерживается",
         )
-    mxc_url = await upload_media(user, filename, content_type, content)
+    mxc_url = await upload_media(user, session, filename, content_type, content, "direct", friend_id)
     await session.commit()
     return {
         "mxc_url": mxc_url,
@@ -497,6 +713,15 @@ async def send_direct_message(
                 return _direct_message_payload(existing, current_user_id=user.id)
         raise
     await session.refresh(message)
+    recipient_payload = _direct_message_payload(message, current_user_id=friend_id)
+    direct_message_hub.publish(
+        friend_id,
+        DirectMessagePush(
+            friend_id=user.id,
+            message_id=message.id,
+            message=recipient_payload,
+        ),
+    )
     return _direct_message_payload(message, current_user_id=user.id)
 
 
@@ -550,5 +775,3 @@ async def direct_toggle_reaction(
         current_user_id=user.id,
         reply_preview=reply_preview,
     )
-
-

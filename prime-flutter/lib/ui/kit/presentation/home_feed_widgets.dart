@@ -1,12 +1,16 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/media/media_urls.dart';
 import '../../../design/theme/prime_theme_context.dart';
 import '../../../design/tokens.dart';
 import '../../../design/typography.dart';
+import '../../../l10n/copy.dart';
 import '../../../design/visuals/charts/prime_radial_progress.dart';
 import '../../../design/visuals/habit_art.dart';
 import '../../../models/group.dart';
 import '../../../models/report.dart';
+import '../../../ui/components/app_compact_button.dart';
+import '../components/prime_content_card.dart';
 import '../components/prime_social_card.dart';
 import '../tokens/kit_layout.dart';
 import '../tokens/kit_surfaces.dart';
@@ -97,9 +101,12 @@ class HomeHeader extends StatelessWidget {
               child: CircleAvatar(
                 radius: KitLayout.headerAvatar / 2 - 2,
                 backgroundColor: p.surfaceElevated,
-                backgroundImage:
-                    photoUrl != null ? NetworkImage(photoUrl!) : null,
-                child: photoUrl == null && name.isNotEmpty
+                backgroundImage: () {
+                  final url = absolutePhotoUrl(photoUrl);
+                  return url != null ? NetworkImage(url) : null;
+                }(),
+                child: (photoUrl == null || photoUrl!.trim().isEmpty) &&
+                        name.isNotEmpty
                     ? Text(
                         name[0].toUpperCase(),
                         style: KitTypography.cardTitle.copyWith(color: p.ink),
@@ -173,8 +180,8 @@ class _StreakBadge extends StatelessWidget {
             '$streak',
             style: KitTypography.chip.copyWith(
               color: p.ink,
-              fontFamily: 'Unbounded',
               fontSize: 13,
+              fontWeight: FontWeight.w600,
             ),
           ),
         ],
@@ -573,6 +580,7 @@ class HomeTeamPulseCard extends StatelessWidget {
     required this.avatars,
     this.subtitle,
     this.waitingNames = const [],
+    this.pulseStatus,
     this.onTap,
     this.onNudge,
   });
@@ -583,6 +591,7 @@ class HomeTeamPulseCard extends StatelessWidget {
   final int teamTotal;
   final List<PrimeSocialAvatar> avatars;
   final List<String> waitingNames;
+  final TeamPulseStatus? pulseStatus;
   final VoidCallback? onTap;
   final VoidCallback? onNudge;
 
@@ -591,38 +600,41 @@ class HomeTeamPulseCard extends StatelessWidget {
     final p = context.prime;
     final progress = teamTotal > 0 ? teamReady / teamTotal : 0.0;
     final complete = teamTotal > 0 && teamReady >= teamTotal;
+    final accent = switch (pulseStatus) {
+      TeamPulseStatus.allDone => p.mint,
+      TeamPulseStatus.support => p.warning,
+      TeamPulseStatus.high => p.brand,
+      _ => complete ? p.mint : p.coral,
+    };
 
-    return Material(
-      color: p.surfaceElevated,
-      borderRadius: BorderRadius.circular(AppRadius.lg),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(AppRadius.lg),
-        child: Padding(
-          padding: const EdgeInsets.all(AppSpacing.md),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    return PrimeContentCard(
+      onTap: onTap,
+      padding: const EdgeInsets.all(AppSpacing.md),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
             children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      title,
-                      style: KitTypography.cardTitle.copyWith(
-                        fontSize: 18,
-                        color: p.ink,
-                      ),
-                    ),
+              Icon(Icons.monitor_heart_outlined, color: accent, size: 22),
+              const SizedBox(width: AppSpacing.xs),
+              Expanded(
+                child: Text(
+                  title,
+                  style: KitTypography.cardTitle.copyWith(
+                    fontSize: 18,
+                    color: p.ink,
                   ),
-                  Text(
-                    '$teamReady/$teamTotal',
-                    style: KitTypography.metricMedium.copyWith(
-                      color: complete ? p.mint : p.brand,
-                      fontSize: 20,
-                    ),
-                  ),
-                ],
+                ),
               ),
+              Text(
+                '$teamReady/$teamTotal',
+                style: KitTypography.metricMedium.copyWith(
+                  color: accent,
+                  fontSize: 20,
+                ),
+              ),
+            ],
+          ),
           if (subtitle != null) ...[
             const SizedBox(height: AppSpacing.xxs),
             Text(
@@ -637,9 +649,7 @@ class HomeTeamPulseCard extends StatelessWidget {
               value: progress.clamp(0.0, 1.0),
               minHeight: 6,
               backgroundColor: p.surfaceSoft,
-              valueColor: AlwaysStoppedAnimation(
-                complete ? p.mint : p.coral,
-              ),
+              valueColor: AlwaysStoppedAnimation(accent),
             ),
           ),
           const SizedBox(height: AppSpacing.sm),
@@ -666,35 +676,21 @@ class HomeTeamPulseCard extends StatelessWidget {
             const SizedBox(height: AppSpacing.sm),
             Align(
               alignment: Alignment.centerRight,
-              child: TextButton(
+              child: AppCompactButton(
+                label: AppCopy.nudgeTeam,
                 onPressed: onNudge,
-                style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: AppSpacing.md,
-                    vertical: AppSpacing.xxs,
-                  ),
-                  backgroundColor: p.coral.withValues(alpha: 0.12),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(AppRadius.pill),
-                  ),
-                ),
-                child: Text(
-                  'Напомнить',
-                  style: KitTypography.chip.copyWith(color: p.coral),
-                ),
+                primary: false,
               ),
             ),
           ],
           if (complete) ...[
             const SizedBox(height: AppSpacing.xs),
             Text(
-              'Команда на волне! 🔥',
+              'Команда закрыла день',
               style: KitTypography.chip.copyWith(color: p.mint),
             ),
           ],
-            ],
-          ),
-        ),
+        ],
       ),
     );
   }

@@ -10,9 +10,11 @@ import '../../../design/visuals/gauges/gauges.dart';
 import '../../../models/achievement.dart';
 import '../../../models/report.dart';
 import '../../components/app_primary_button.dart';
-import '../components/prime_glass_overlay.dart';
-import '../tokens/kit_layout.dart';
 import 'profile_editorial_widgets.dart';
+import 'profile_icons.dart';
+import 'profile_states.dart';
+import 'profile_surfaces.dart';
+import '../components/prime_action_menu.dart';
 import 'profile_typography.dart';
 
 /// «Сейчас в работе» — one expressive card (TZ §8).
@@ -62,6 +64,7 @@ class ProfileCurrentCycleSection extends StatelessWidget {
           Text('Сейчас в работе', style: _sectionTitle()),
           const SizedBox(height: AppSpacing.sm),
           _ProfileSurface(
+            kind: ProfileSurfaceKind.tinted,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -112,6 +115,7 @@ class ProfileCurrentCycleSection extends StatelessWidget {
         Text('Сейчас в работе', style: _sectionTitle()),
         const SizedBox(height: AppSpacing.sm),
         _ProfileSurface(
+          kind: ProfileSurfaceKind.tinted,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -327,6 +331,7 @@ class _ProfileAnalyticsSectionState extends State<ProfileAnalyticsSection> {
           Text('Аналитика', style: _sectionTitle()),
           const SizedBox(height: AppSpacing.sm),
           _ProfileSurface(
+            kind: ProfileSurfaceKind.analytics,
             child: Column(
               children: [
                 Icon(
@@ -352,13 +357,6 @@ class _ProfileAnalyticsSectionState extends State<ProfileAnalyticsSection> {
                 ),
                 const SizedBox(height: AppSpacing.md),
                 _PreviewMetrics(),
-                if (widget.onCheckIn != null) ...[
-                  const SizedBox(height: AppSpacing.md),
-                  AppPrimaryButton(
-                    label: 'Сделать первый check-in',
-                    onPressed: widget.onCheckIn,
-                  ),
-                ],
               ],
             ),
           ),
@@ -422,6 +420,7 @@ class _ProfileAnalyticsSectionState extends State<ProfileAnalyticsSection> {
         ),
         const SizedBox(height: AppSpacing.sm),
         _ProfileSurface(
+          kind: ProfileSurfaceKind.analytics,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -795,21 +794,26 @@ class _CompactMetric extends StatelessWidget {
 }
 
 class _ProfileSurface extends StatelessWidget {
-  const _ProfileSurface({required this.child, this.onTap});
+  const _ProfileSurface({
+    required this.child,
+    this.onTap,
+    this.kind = ProfileSurfaceKind.neutral,
+    this.radius = 20,
+  });
+
   final Widget child;
   final VoidCallback? onTap;
+  final ProfileSurfaceKind kind;
+  final double radius;
 
   @override
   Widget build(BuildContext context) {
     final surface = Container(
       width: double.infinity,
       padding: const EdgeInsets.all(AppSpacing.md),
-      decoration: BoxDecoration(
-        color: ProfilePalette.charcoal,
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(
-          color: ProfilePalette.coolGrey.withValues(alpha: 0.08),
-        ),
+      decoration: ProfileSurfaces.cardDecoration(
+        fill: profileSurfaceColor(kind),
+        radius: radius,
       ),
       child: child,
     );
@@ -818,7 +822,7 @@ class _ProfileSurface extends StatelessWidget {
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(radius),
         child: surface,
       ),
     );
@@ -863,6 +867,7 @@ class ProfileAchievementsSection extends StatelessWidget {
           Text('Достижения', style: _sectionTitle()),
           const SizedBox(height: AppSpacing.sm),
           _ProfileSurface(
+            kind: ProfileSurfaceKind.tinted,
             child: Column(
               children: [
                 Icon(
@@ -955,6 +960,7 @@ class _ProfileAchievementHeroCard extends StatelessWidget {
         : (successfulDays / achievement.requiredDays).clamp(0.0, 1.0);
 
     return _ProfileSurface(
+      kind: ProfileSurfaceKind.warm,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1015,35 +1021,66 @@ class _ProfileAchievementCarouselCard extends StatelessWidget {
             : ProfilePalette.coolGrey;
 
     return _ProfileSurface(
-      child: SizedBox(
-        height: 120,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Icon(Icons.military_tech_outlined, color: accent, size: 28),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  achievement.name,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: ProfileTypography.cardTitle.copyWith(
-                    color: ProfilePalette.offWhite,
-                    fontSize: 16,
+      radius: 19,
+      child: ProfileHoverable(
+        borderRadius: 19,
+        child: SizedBox(
+          height: 132,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: unlocked ? 0.22 : 0.12),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                alignment: Alignment.center,
+                child: ProfileIcon(
+                  achievementIconForCode(achievement.code),
+                  size: 24,
+                  color: accent,
+                ),
+              ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    achievement.name,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: ProfileTypography.cardTitle.copyWith(
+                      color: ProfilePalette.offWhite,
+                      fontSize: 16,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  unlocked
-                      ? 'Получено'
-                      : '${achievement.requiredDays} дн.',
-                  style: ProfileTypography.metricLabel.copyWith(color: accent),
-                ),
-              ],
-            ),
-          ],
+                  const SizedBox(height: 4),
+                  Text(
+                    unlocked
+                        ? 'Получено'
+                        : '${achievement.requiredDays} дн.',
+                    style: ProfileTypography.metricLabel.copyWith(color: accent),
+                  ),
+                  if (!unlocked && isNext) ...[
+                    const SizedBox(height: 6),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: LinearProgressIndicator(
+                        value: (successfulDays / achievement.requiredDays)
+                            .clamp(0.0, 1.0),
+                        minHeight: 4,
+                        backgroundColor:
+                            ProfilePalette.coolGrey.withValues(alpha: 0.15),
+                        color: ProfilePalette.warmYellow,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1235,7 +1272,7 @@ class _AboutRow extends StatelessWidget {
   }
 }
 
-/// Glass contextual bar for public profiles (TZ §13).
+/// Glass contextual bar for public profiles (TZ §13, §25).
 class ProfileActionBar extends StatelessWidget {
   const ProfileActionBar({
     super.key,
@@ -1244,7 +1281,12 @@ class ProfileActionBar extends StatelessWidget {
     this.primaryLoading = false,
     this.secondaryLabel,
     this.onSecondary,
-    this.onMore,
+    this.onSave,
+    this.onShare,
+    this.onCopyNickname,
+    this.onBlock,
+    this.onReport,
+    this.moreButtonKey,
   });
 
   final String primaryLabel;
@@ -1252,11 +1294,78 @@ class ProfileActionBar extends StatelessWidget {
   final bool primaryLoading;
   final String? secondaryLabel;
   final VoidCallback? onSecondary;
-  final VoidCallback? onMore;
+  final VoidCallback? onSave;
+  final VoidCallback? onShare;
+  final VoidCallback? onCopyNickname;
+  final VoidCallback? onBlock;
+  final VoidCallback? onReport;
+  final GlobalKey? moreButtonKey;
+
+  static const _barRadius = 21.0;
+  static const _buttonRadius = 15.0;
 
   static double heightFor(BuildContext context) {
     final bottom = MediaQuery.paddingOf(context).bottom;
-    return KitLayout.contextualBarMin + bottom + AppSpacing.md;
+    return 72 + bottom + AppSpacing.sm;
+  }
+
+  bool get _hasMenuActions =>
+      onSecondary != null ||
+      onSave != null ||
+      onShare != null ||
+      onCopyNickname != null ||
+      onBlock != null ||
+      onReport != null;
+
+  Future<void> _openMenu(BuildContext context) async {
+    final items = <PrimeActionMenuItem>[
+      if (secondaryLabel != null && onSecondary != null)
+        PrimeActionMenuItem(
+          label: secondaryLabel!,
+          icon: Icons.group_add_outlined,
+          onTap: onSecondary!,
+        ),
+      if (onSave != null)
+        PrimeActionMenuItem(
+          label: 'Сохранить',
+          icon: Icons.bookmark_outline,
+          onTap: onSave!,
+        ),
+      if (onShare != null)
+        PrimeActionMenuItem(
+          label: 'Поделиться',
+          icon: Icons.ios_share_rounded,
+          onTap: onShare!,
+        ),
+      if (onCopyNickname != null)
+        PrimeActionMenuItem(
+          label: 'Скопировать никнейм',
+          icon: Icons.copy_outlined,
+          onTap: onCopyNickname!,
+        ),
+      if (onBlock != null)
+        PrimeActionMenuItem(
+          label: 'Скрыть профиль',
+          icon: Icons.block_outlined,
+          onTap: onBlock!,
+          destructive: true,
+        ),
+      if (onReport != null)
+        PrimeActionMenuItem(
+          label: 'Пожаловаться',
+          icon: Icons.flag_outlined,
+          onTap: onReport!,
+          destructive: true,
+        ),
+    ];
+    if (items.isEmpty) return;
+    final box = context.findRenderObject() as RenderBox?;
+    final offset = box?.localToGlobal(Offset.zero) ?? Offset.zero;
+    await showPrimeActionMenu(
+      context: context,
+      items: items,
+      position: Offset(offset.dx, offset.dy - 8),
+    );
   }
 
   @override
@@ -1272,67 +1381,73 @@ class ProfileActionBar extends StatelessWidget {
           AppSpacing.md,
           0,
         ),
-        child: PrimeGlassOverlay(
-          borderRadius: BorderRadius.circular(AppRadius.xl),
-          padding: EdgeInsets.fromLTRB(
-            AppSpacing.md,
-            AppSpacing.sm,
-            AppSpacing.sm,
-            AppSpacing.sm + bottom * 0.25,
-          ),
-          child: Row(
-            children: [
-              if (secondaryLabel != null && onSecondary != null) ...[
-                OutlinedButton(
-                  onPressed: onSecondary,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: ProfilePalette.offWhite,
-                    side: BorderSide(
-                      color: ProfilePalette.coolGrey.withValues(alpha: 0.35),
-                    ),
-                    minimumSize: const Size(0, AppControlHeights.buttonCompact),
-                    padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
-                  ),
-                  child: Text(
-                    secondaryLabel!,
-                    style: ProfileTypography.cta.copyWith(fontSize: 14),
-                  ),
-                ),
-                const SizedBox(width: AppSpacing.sm),
-              ],
-              Expanded(
-                child: FilledButton(
-                  onPressed: primaryLoading ? null : onPrimary,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: ProfilePalette.warmYellow,
-                    foregroundColor: ProfilePalette.charcoal,
-                    minimumSize:
-                        const Size.fromHeight(AppControlHeights.buttonCompact),
-                  ),
-                  child: primaryLoading
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : Text(
-                          primaryLabel,
-                          style: ProfileTypography.cta.copyWith(
-                            color: ProfilePalette.charcoal,
-                          ),
-                        ),
-                ),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: ProfilePalette.charcoal.withValues(alpha: 0.96),
+            borderRadius: BorderRadius.circular(_barRadius),
+            border: Border.all(
+              color: ProfilePalette.coolGrey.withValues(alpha: 0.1),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.32),
+                blurRadius: 24,
+                offset: const Offset(0, -4),
               ),
-              if (onMore != null)
-                IconButton(
-                  onPressed: onMore,
-                  icon: Icon(
-                    Icons.more_horiz_rounded,
-                    color: ProfilePalette.offWhite.withValues(alpha: 0.85),
-                  ),
-                  tooltip: 'Ещё',
-                ),
             ],
+          ),
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+              AppSpacing.sm,
+              AppSpacing.sm,
+              AppSpacing.sm,
+              AppSpacing.sm + bottom * 0.15,
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: FilledButton(
+                    onPressed: primaryLoading ? null : onPrimary,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: ProfilePalette.primaryAction,
+                      foregroundColor: ProfilePalette.offWhite,
+                      minimumSize: const Size.fromHeight(50),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(_buttonRadius),
+                      ),
+                    ),
+                    child: primaryLoading
+                        ? SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: ProfilePalette.offWhite
+                                  .withValues(alpha: 0.9),
+                            ),
+                          )
+                        : Text(
+                            primaryLabel,
+                            style: ProfileTypography.cta.copyWith(
+                              color: ProfilePalette.offWhite,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                  ),
+                ),
+                if (_hasMenuActions) ...[
+                  const SizedBox(width: AppSpacing.xs),
+                  ProfileGlassAction(
+                    key: moreButtonKey,
+                    icon: ProfileIcons.more,
+                    onPressed: () => _openMenu(context),
+                    semanticsLabel: 'Действия',
+                    variant: ProfileGlassActionVariant.onSurface,
+                  ),
+                ],
+              ],
+            ),
           ),
         ),
       ),

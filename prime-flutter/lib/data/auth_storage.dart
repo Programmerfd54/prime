@@ -11,6 +11,7 @@ import '../models/user.dart';
 /// и однократной миграции данных из старых версий приложения.
 class AuthStorage {
   static const _keyToken = 'prime_access_token';
+  static const _keyRefreshToken = 'prime_refresh_token';
   static const _keyCachedUser = 'prime_cached_user';
   static const _keyOnboarding = 'prime_onboarding_done';
   static const _keyDeveloperMode = 'prime_developer_mode';
@@ -20,8 +21,14 @@ class AuthStorage {
 
   Future<void> saveAuth({
     required String accessToken,
+    String? refreshToken,
   }) async {
     await _secure.write(key: _keyToken, value: accessToken);
+    if (refreshToken != null && refreshToken.isNotEmpty) {
+      await _secure.write(key: _keyRefreshToken, value: refreshToken);
+    } else {
+      await _secure.delete(key: _keyRefreshToken);
+    }
     await _removeLegacyAuth();
   }
 
@@ -39,6 +46,8 @@ class AuthStorage {
   }
 
   Future<String?> get accessToken => _readWithMigration(_keyToken);
+
+  Future<String?> get refreshToken => _secure.read(key: _keyRefreshToken);
 
   Future<void> saveCachedUser(UserModel user) async {
     await _secure.write(key: _keyCachedUser, value: jsonEncode(user.toJson()));
@@ -65,6 +74,7 @@ class AuthStorage {
 
   Future<void> clear() async {
     await _secure.delete(key: _keyToken);
+    await _secure.delete(key: _keyRefreshToken);
     await _secure.delete(key: _keyCachedUser);
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_keyDeveloperMode);

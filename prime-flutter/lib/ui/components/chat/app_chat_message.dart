@@ -7,9 +7,12 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../core/errors/failure_mapper.dart';
 import '../../../core/media/media_urls.dart';
 import '../../../core/media/media_validation.dart';
+import '../../../core/validation/about_quality.dart';
 import '../../../data/api_client.dart';
 import '../../../design/lottie_registry.dart';
+import '../../../design/prime/prime_toast_overlay.dart';
 import '../../../design/routes.dart';
+import '../../../providers/auth_provider.dart';
 import '../../../design/tokens.dart';
 import '../../../design/typography.dart';
 import '../../../models/chat_message.dart';
@@ -17,6 +20,7 @@ import '../app_message_bubble.dart';
 import '../app_primary_button.dart';
 import '../app_snackbar.dart';
 import '../app_text_button.dart';
+import '../profile/about_before_team_sheet.dart';
 import '../profile/app_avatar.dart';
 import 'app_group_chat_message.dart' show groupReactionEmojis;
 
@@ -33,8 +37,11 @@ class AppChatMessage extends StatelessWidget {
     this.showAvatar = false,
     this.showMeta = true,
     this.isLastInGroup = true,
+    this.isFirstInGroup = true,
     this.peerAvatarUrl,
     this.peerName,
+    this.myAvatarUrl,
+    this.myName,
     this.onReply,
     this.onReact,
     this.onPairInviteJoined,
@@ -49,8 +56,11 @@ class AppChatMessage extends StatelessWidget {
   final bool showAvatar;
   final bool showMeta;
   final bool isLastInGroup;
+  final bool isFirstInGroup;
   final String? peerAvatarUrl;
   final String? peerName;
+  final String? myAvatarUrl;
+  final String? myName;
   final VoidCallback? onReply;
   final ValueChanged<String>? onReact;
   final VoidCallback? onPairInviteJoined;
@@ -88,6 +98,13 @@ class AppChatMessage extends StatelessWidget {
           const SizedBox(width: AppSpacing.xs),
         ],
         Flexible(child: content),
+        if (isMine) ...[
+          const SizedBox(width: AppSpacing.xs),
+          if (showAvatar)
+            AppAvatar(photoUrl: myAvatarUrl, radius: 16, name: myName ?? '?')
+          else
+            const SizedBox(width: 32),
+        ],
       ],
     );
 
@@ -111,10 +128,16 @@ class AppChatMessage extends StatelessWidget {
       );
     }
 
+    final isCardMessage = message.isPairInvite || message.isReportMessage;
+    final bottomGap = isCardMessage
+        ? AppSpacing.sm
+        : (isLastInGroup ? AppSpacing.sm : AppSpacing.xxs);
+    final topGap = isFirstInGroup && isLastInGroup
+        ? AppSpacing.xxs
+        : (isFirstInGroup ? AppSpacing.xs : 0.0);
+
     return Padding(
-      padding: EdgeInsets.only(
-        bottom: isLastInGroup ? AppSpacing.xs : 2,
-      ),
+      padding: EdgeInsets.only(top: topGap, bottom: bottomGap),
       child: row,
     );
   }
@@ -234,6 +257,34 @@ class _PairInviteBubbleState extends State<_PairInviteBubble> {
   Future<void> _join() async {
     final code = _inviteCode;
     if (code.isEmpty || _joining || _joined || widget.isMine) return;
+
+    final about = context.read<AuthProvider>().user?.about ?? '';
+    if (AboutQuality.junkReason(about) != null) {
+      if (!mounted) return;
+      showAppSnackBar(
+        context,
+        'Сначала напишите о себе — команда увидит это при знакомстве',
+        variant: PrimeToastVariant.error,
+        duration: const Duration(seconds: 5),
+        actionLabel: 'Написать о себе',
+        onAction: () async {
+          final saved = await showAboutBeforeTeamSheet(
+            context,
+            reason: AboutBeforeTeamReason.pairInvite,
+          );
+          if (saved && mounted) {
+            await _performJoin(code);
+          }
+        },
+      );
+      return;
+    }
+
+    await _performJoin(code);
+  }
+
+  Future<void> _performJoin(String code) async {
+    if (_joining || _joined) return;
     setState(() => _joining = true);
     try {
       await context.read<ApiClient>().joinWaitingRoomPair(code);
@@ -305,8 +356,8 @@ class _PairInviteBubbleState extends State<_PairInviteBubble> {
             const SizedBox(height: AppSpacing.xxs),
             Text(
               widget.isMine
-                  ? 'Ожидаем, пока друг присоединится. Ему нужно быть в поиске по этой привычке.'
-                  : 'Чтобы присоединиться, сначала встаньте в поиск по этой привычке — затем нажмите кнопку.',
+                  ? 'Приглашение отправлено. Ожидаем, пока друг нажмёт «Присоединиться».'
+                  : 'Нажмите «Присоединиться» — вы автоматически встанете в поиск и попадёте в пару.',
               style: AppTypography.bodySecondary,
             ),
             if (!widget.isMine) ...[

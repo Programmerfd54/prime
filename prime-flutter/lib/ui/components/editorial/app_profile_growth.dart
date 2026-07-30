@@ -431,47 +431,58 @@ class _MomentumConsistencyPanel extends StatelessWidget {
     );
 
     return _EditorialDarkCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final stacked = MediaQuery.textScalerOf(context).scale(1) >= 1.5 ||
+              constraints.maxWidth < 360;
+          final metrics = [
+            _VizMetric(
+              label: 'Моментум',
+              value: momentum.score,
+              hint: momentum.trendDelta >= 0
+                  ? 'Ритм держится или растёт'
+                  : 'Ритм слабеет — самое время вернуться',
+            ),
+            _VizMetric(
+              label: 'Стабильность · 7д',
+              value: consistency7.percent,
+              hint: '${consistency7.metCount}/${consistency7.windowSize} дней',
+            ),
+            _VizMetric(
+              label: 'Стабильность · 30д',
+              value: consistency30.percent,
+              hint:
+                  '${consistency30.metCount}/${consistency30.windowSize} дней',
+            ),
+          ];
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Expanded(
-                child: _VizMetric(
-                  label: 'Моментум',
-                  value: momentum.score,
-                  hint: momentum.trendDelta >= 0
-                      ? 'Ритм держится или растёт'
-                      : 'Ритм слабеет — самое время вернуться',
+              if (stacked)
+                for (var i = 0; i < metrics.length; i++) ...[
+                  if (i > 0) const SizedBox(height: AppSpacing.sm),
+                  metrics[i],
+                ]
+              else
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (var i = 0; i < metrics.length; i++) ...[
+                      if (i > 0) const SizedBox(width: AppSpacing.sm),
+                      Expanded(child: metrics[i]),
+                    ],
+                  ],
                 ),
-              ),
-              const SizedBox(width: AppSpacing.sm),
-              Expanded(
-                child: _VizMetric(
-                  label: 'Стабильность · 7д',
-                  value: consistency7.percent,
-                  hint: '${consistency7.metCount}/${consistency7.windowSize} дней',
-                ),
-              ),
-              const SizedBox(width: AppSpacing.sm),
-              Expanded(
-                child: _VizMetric(
-                  label: 'Стабильность · 30д',
-                  value: consistency30.percent,
-                  hint:
-                      '${consistency30.metCount}/${consistency30.windowSize} дней',
-                ),
+              const SizedBox(height: AppSpacing.sm),
+              Text(
+                'Моментум учитывает регулярность недели, динамику к прошлой неделе '
+                'и возвращение после пропуска. Стабильность — доля дней с готовым '
+                'отчётом, а не серия подряд.',
+                style: AppTypography.caption,
               ),
             ],
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          Text(
-            'Моментум учитывает регулярность недели, динамику к прошлой неделе '
-            'и возвращение после пропуска. Стабильность — доля дней с готовым '
-            'отчётом, а не серия подряд.',
-            style: AppTypography.caption,
-          ),
-        ],
+          );
+        },
       ),
     );
   }

@@ -3,6 +3,7 @@ import 'dart:ui';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../prime/prime_glass_v5.dart';
 import '../shapes/prime_squircle.dart';
 import '../theme/prime_theme_context.dart';
 import '../tokens.dart';
@@ -20,8 +21,8 @@ enum LiquidGlassVariant { standard, dock }
 /// Preset tuned for floating navigation docks — stronger blur, tint, and rim.
 abstract final class LiquidGlassDockPreset {
   static const sigma = 56.0;
-  static const fillOpacityDark = 0.06;
-  static const fillOpacityLight = 0.52;
+  static const fillOpacityDark = PrimeGlassV5.dockFillOpacityDark;
+  static const fillOpacityLight = PrimeGlassV5.dockFillOpacityLight;
 
   static double fillOpacityFor(BuildContext context) =>
       context.prime.isDark ? fillOpacityDark : fillOpacityLight;
@@ -221,9 +222,9 @@ class _LiquidLayers extends StatelessWidget {
 
     final fill = switch (tier) {
       LiquidTier.full =>
-        Colors.white.withValues(alpha: isDark ? fillOpacity : 0.55),
-      LiquidTier.lite => surfaceColor.withValues(alpha: isDark ? 0.72 : 0.85),
-      LiquidTier.flat => surfaceColor.withValues(alpha: isDark ? 0.92 : 0.96),
+        prime.surfaceElevated.withValues(alpha: isDark ? 0.55 : 0.72),
+      LiquidTier.lite => surfaceColor.withValues(alpha: isDark ? 0.78 : 0.88),
+      LiquidTier.flat => surfaceColor.withValues(alpha: isDark ? 0.94 : 0.96),
     };
 
     final liteFill = Color.alphaBlend(
@@ -236,8 +237,8 @@ class _LiquidLayers extends StatelessWidget {
 
     final baseColor = switch ((isDock, tier)) {
       (true, LiquidTier.full) => Color.alphaBlend(
-          prime.brandContainer.withValues(alpha: isDark ? 0.07 : 0.05),
-          Colors.white.withValues(alpha: isDark ? fillOpacity : 0.48),
+          prime.brandContainer.withValues(alpha: isDark ? 0.10 : 0.06),
+          prime.surfaceElevated.withValues(alpha: isDark ? 0.58 : 0.72),
         ),
       (true, LiquidTier.lite) =>
         surfaceColor.withValues(alpha: isDark ? 0.62 : 0.78),
@@ -247,9 +248,9 @@ class _LiquidLayers extends StatelessWidget {
           ? Color.alphaBlend(prime.glassTint, liteFill)
           : Color.alphaBlend(prime.glassTint, fill),
     };
-    final topSpecular = isDock ? 0.50 : 1.0;
-    final dockVignette = isDark ? 0.10 : 0.04;
-    final dockTopSpecular = isDark ? 0.40 : 0.45;
+    final topSpecular =
+        isDock ? PrimeGlassV5.dockTopSpecular : 0.35;
+    final dockVignette = isDark ? 0.14 : 0.08;
 
     Widget content = Padding(padding: padding, child: child);
 
@@ -263,32 +264,13 @@ class _LiquidLayers extends StatelessWidget {
               child: DecoratedBox(
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [
-                      highlight.withValues(alpha: topSpecular),
-                      highlight.withValues(alpha: isDock ? 0.06 : 0.02),
-                      Colors.transparent,
-                    ],
-                    stops: const [0.0, 0.35, 0.7],
-                  ),
-                ),
-              ),
-            ),
-          ),
-        if (tier != LiquidTier.flat && isDock)
-          Positioned.fill(
-            child: IgnorePointer(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
                     colors: [
-                      Colors.white.withValues(alpha: dockTopSpecular),
+                      highlight.withValues(alpha: topSpecular * 0.55),
                       Colors.transparent,
                     ],
-                    stops: const [0.0, 0.18],
+                    stops: const [0.0, 0.22],
                   ),
                 ),
               ),
@@ -395,8 +377,14 @@ class _RimLightPainter extends CustomPainter {
         begin: Alignment.topCenter,
         end: Alignment.bottomCenter,
         colors: [
-          (strong ? Colors.white : borderColor)
-              .withValues(alpha: isDark ? (strong ? 0.60 : 0.28) : (strong ? 0.55 : 0.4)),
+          (strong && isDark
+                  ? Colors.white
+                  : borderColor)
+              .withValues(
+            alpha: strong
+                ? (isDark ? 0.12 : PrimeGlassV5.maxTopRimAlpha)
+                : (isDark ? 0.28 : 0.35),
+          ),
           borderColor.withValues(alpha: isDark ? 0.06 : 0.12),
           borderColor.withValues(alpha: isDark ? 0.02 : 0.04),
         ],

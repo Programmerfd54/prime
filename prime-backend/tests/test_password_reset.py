@@ -1,7 +1,7 @@
 from datetime import timedelta
 
 import pytest
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -40,12 +40,17 @@ async def test_forgot_and_reset_password(monkeypatch: pytest.MonkeyPatch) -> Non
         await session.commit()
         await session.refresh(user)
 
+        tasks = BackgroundTasks()
         result = await forgot_password(
             ForgotPasswordRequest(email="reset@example.com"),
             session,
+            background_tasks=tasks,
         )
         assert result["status"] == "ok"
-        token = result["reset_token"]
+        assert "reset_token" not in result
+        assert tasks.tasks
+        text_body = tasks.tasks[0].kwargs["text_body"]
+        token = text_body.split("\n\n", 2)[2].split("\n", 1)[0]
         assert token
 
         await reset_password(

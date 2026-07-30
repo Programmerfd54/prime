@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -12,27 +13,28 @@ import '../core/errors/app_failure.dart';
 import '../core/errors/failure_mapper.dart';
 import '../core/security/password_strength.dart';
 import '../data/api_client.dart';
-import '../design/glass.dart';
 import '../design/routes.dart';
+import '../models/email_verification.dart';
+import '../ui/components/auth/auth_presentation.dart';
+import '../ui/components/app_checkbox.dart';
+import '../ui/components/app_code_field.dart';
 import '../design/haptics.dart';
+import '../design/theme/prime_theme_context.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
-import '../design/visuals/scene_art.dart';
 import '../l10n/copy.dart';
 import '../providers/auth_provider.dart';
-import '../design/visuals/ambient_and_progress.dart';
-import '../ui/components/app_checkbox.dart';
-import '../ui/components/app_inline_error.dart';
 import '../ui/components/app_password_field.dart';
 import '../ui/components/app_primary_button.dart';
 import '../ui/components/app_secondary_button.dart';
 import '../ui/components/app_text_button.dart';
-import '../ui/components/editorial/app_auth_hero.dart';
+import '../ui/components/app_inline_error.dart';
 import '../ui/components/prime_text_field.dart';
-import '../ui/states/app_loading_state.dart';
 import 'forgot_password_screen.dart';
 
 enum _NicknameAvailability { idle, checking, available, taken }
+
+enum _EmailAvailability { idle, checking, available, taken, pendingVerification }
 
 class AuthScreen extends StatefulWidget {
   const AuthScreen({super.key, this.startInLogin = false});
@@ -46,11 +48,19 @@ class AuthScreen extends StatefulWidget {
 }
 
 class _AuthScreenState extends State<AuthScreen> {
+  /// Review + terms step: submitting it creates the account.
+  static const _summaryStep = 2;
+
+  /// Email confirmation step: submitting it starts the session.
+  static const _codeStep = 3;
+  static const _codeLength = 6;
+
   final _formKey = GlobalKey<FormState>();
   final _email = TextEditingController();
   final _password = TextEditingController();
   final _name = TextEditingController();
   final _nickname = TextEditingController();
+  final _code = TextEditingController();
   final _emailFocus = FocusNode();
   final _emailRegex = RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$');
   final _nicknameRegex = RegExp(r'^[a-z0-9_][a-z0-9_.-]{2,31}$');
@@ -60,9 +70,23 @@ class _AuthScreenState extends State<AuthScreen> {
   int _registerStep = 0;
   bool _agreed = false;
   String? _error;
+  String? _notice;
   bool _offerSwitchToLogin = false;
   _NicknameAvailability _nicknameStatus = _NicknameAvailability.idle;
   Timer? _nicknameDebounce;
+  _EmailAvailability _emailStatus = _EmailAvailability.idle;
+  Timer? _emailDebounce;
+
+  /// Address the confirmation code was sent to.
+  String? _pendingEmail;
+  int _resendSeconds = 0;
+  Timer? _resendTimer;
+  bool _submittingCode = false;
+  /// Dev hint when the backend did not return [verification_code].
+  String? _devCodeNotice;
+  /// True after the first successful `register` in this wizard session.
+  bool _registrationPending = false;
+  bool _offerContinueVerification = false;
   late final TapGestureRecognizer _termsRecognizer;
   late final TapGestureRecognizer _privacyRecognizer;
 
@@ -71,9 +95,10 @@ class _AuthScreenState extends State<AuthScreen> {
     super.initState();
     _isLogin = widget.startInLogin;
     _nickname.addListener(_onNicknameChanged);
-    _email.addListener(_onFormChanged);
+    _email.addListener(_onEmailChanged);
     _password.addListener(_onFormChanged);
     _name.addListener(_onFormChanged);
+    _code.addListener(_onFormChanged);
     _termsRecognizer = TapGestureRecognizer()
       ..onTap = () => _openUrl('https://inpr1me.ru/terms');
     _privacyRecognizer = TapGestureRecognizer()
@@ -86,14 +111,18 @@ class _AuthScreenState extends State<AuthScreen> {
   @override
   void dispose() {
     _nicknameDebounce?.cancel();
+    _emailDebounce?.cancel();
+    _resendTimer?.cancel();
     _nickname.removeListener(_onNicknameChanged);
-    _email.removeListener(_onFormChanged);
+    _email.removeListener(_onEmailChanged);
     _password.removeListener(_onFormChanged);
     _name.removeListener(_onFormChanged);
+    _code.removeListener(_onFormChanged);
     _email.dispose();
     _password.dispose();
     _name.dispose();
     _nickname.dispose();
+    _code.dispose();
     _emailFocus.dispose();
     _termsRecognizer.dispose();
     _privacyRecognizer.dispose();
@@ -102,6 +131,26 @@ class _AuthScreenState extends State<AuthScreen> {
 
   void _onFormChanged() {
     if (mounted) setState(() {});
+  }
+
+  void _onEmailChanged() {
+    _onFormChanged();
+    if (_isLogin || _registerStep != 1) {
+      if (_emailStatus != _EmailAvailability.idle) {
+        setState(() => _emailStatus = _EmailAvailability.idle);
+      }
+      return;
+    }
+    _emailDebounce?.cancel();
+    final email = _email.text.trim().toLowerCase();
+    if (_validateEmail(email) != null) {
+      setState(() => _emailStatus = _EmailAvailability.idle);
+      return;
+    }
+    setState(() => _emailStatus = _EmailAvailability.checking);
+    _emailDebounce = Timer(const Duration(milliseconds: 400), () {
+      unawaited(_checkEmail(email));
+    });
   }
 
   Future<void> _openUrl(String url) async {
@@ -124,24 +173,47 @@ class _AuthScreenState extends State<AuthScreen> {
 
   Future<void> _checkNickname(String nickname) async {
     try {
-      await context.read<ApiClient>().findUserByNickname(nickname);
+      final available =
+          await context.read<ApiClient>().checkNicknameAvailable(nickname);
       if (!mounted || _normalizedNickname != nickname) return;
-      setState(() => _nicknameStatus = _NicknameAvailability.taken);
-    } on DioException catch (e) {
-      if (!mounted || _normalizedNickname != nickname) return;
-      if (e.response?.statusCode == 404) {
-        setState(() => _nicknameStatus = _NicknameAvailability.available);
-      } else {
-        setState(() => _nicknameStatus = _NicknameAvailability.idle);
-      }
+      setState(
+        () => _nicknameStatus = available
+            ? _NicknameAvailability.available
+            : _NicknameAvailability.taken,
+      );
     } catch (_) {
       if (!mounted || _normalizedNickname != nickname) return;
       setState(() => _nicknameStatus = _NicknameAvailability.idle);
     }
   }
 
+  Future<void> _checkEmail(String email) async {
+    try {
+      final result =
+          await context.read<ApiClient>().checkEmailAvailable(email);
+      if (!mounted || _email.text.trim().toLowerCase() != email) return;
+      setState(() {
+        if (result.available) {
+          _emailStatus = _EmailAvailability.available;
+        } else if (result.pendingVerification) {
+          _emailStatus = _EmailAvailability.pendingVerification;
+        } else {
+          _emailStatus = _EmailAvailability.taken;
+        }
+      });
+    } catch (_) {
+      if (!mounted || _email.text.trim().toLowerCase() != email) return;
+      setState(() => _emailStatus = _EmailAvailability.idle);
+    }
+  }
+
   Future<void> _submit() async {
-    if (!_isLogin && _registerStep < 2) {
+    if (!_isLogin && _registerStep == _codeStep) {
+      await _submitCode();
+      return;
+    }
+
+    if (!_isLogin && _registerStep < _summaryStep) {
       if (!_validateRegisterStep(_registerStep)) return;
       await AppHaptics.selection();
       setState(() {
@@ -179,22 +251,254 @@ class _AuthScreenState extends State<AuthScreen> {
     try {
       if (_isLogin) {
         await auth.login(email, _password.text);
+        Analytics.instance.authSuccess(register: false);
       } else {
-        await auth.register(
+        // Going back and tapping "Создать аккаунт" again must not hit register
+        // twice — the account may already exist, waiting for the code.
+        if (_registrationPending && _pendingEmail == email) {
+          await _continuePendingRegistration(email);
+          return;
+        }
+        final ticket = await auth.register(
           email,
           _password.text,
           name: _name.text.trim(),
           nickname: _normalizedNickname,
         );
+        if (!mounted) return;
+        _openCodeStep(email: email, ticket: ticket);
       }
-      Analytics.instance.authSuccess(register: register);
+    } catch (e) {
+      if (!mounted) return;
+      final failure = FailureMapper.from(e);
+      if (failure is EmailNotVerifiedFailure) {
+        await _resumeUnconfirmedSignup(email);
+        return;
+      }
+      if (!_isLogin && failure is ConflictFailure) {
+        final isNicknameConflict =
+            failure.message.toLowerCase().contains('никнейм');
+        if (isNicknameConflict) {
+          setState(() {
+            _error = AppCopy.nicknameTaken;
+            _registerStep = 0;
+            _nicknameStatus = _NicknameAvailability.taken;
+            _offerSwitchToLogin = false;
+            _offerContinueVerification = false;
+          });
+          return;
+        }
+        final resumed = await _tryResumePendingRegistration(email);
+        if (resumed) return;
+      }
+      setState(() {
+        _error = _authErrorMessage(failure, isLogin: _isLogin);
+        _offerSwitchToLogin = !_isLogin && failure is ConflictFailure;
+        _offerContinueVerification = false;
+      });
+    }
+  }
+
+  /// User went back from the code step and tapped "Создать аккаунт" again.
+  Future<void> _continuePendingRegistration(String email) async {
+    await AppHaptics.light();
+    setState(() {
+      _error = null;
+      _offerSwitchToLogin = false;
+      _offerContinueVerification = false;
+    });
+    await _resumeUnconfirmedSignup(
+      email,
+      notice: AppCopy.emailVerificationResumePending,
+    );
+  }
+
+  /// Register returned 409 — often an unverified account from an earlier attempt.
+  Future<bool> _tryResumePendingRegistration(String email) async {
+    try {
+      await _resumeUnconfirmedSignup(
+        email,
+        notice: AppCopy.emailVerificationResumePending,
+      );
+      return true;
+    } catch (_) {
+      // Stale API without resend/verify — the account may still exist.
+    }
+
+    final auth = context.read<AuthProvider>();
+    try {
+      await auth.login(email, _password.text);
+      Analytics.instance.authSuccess(register: false);
+      return true;
+    } catch (e) {
+      final failure = FailureMapper.from(e);
+      if (failure is EmailNotVerifiedFailure) {
+        setState(() {
+          _registrationPending = true;
+          _pendingEmail = email;
+          _registerStep = _codeStep;
+          _isLogin = false;
+          _error = null;
+          _notice = AppCopy.emailNotVerified;
+          _offerSwitchToLogin = false;
+          _offerContinueVerification = true;
+        });
+        Analytics.instance.registerStepViewed(_codeStep);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void _openCodeStep({
+    required String email,
+    required EmailVerificationTicket ticket,
+  }) {
+    _code.clear();
+    final prefilled = _applyDevVerificationCode(ticket);
+    setState(() {
+      _pendingEmail = email;
+      _registerStep = _codeStep;
+      _registrationPending = true;
+      _error = null;
+      _notice = null;
+      _offerSwitchToLogin = false;
+      _offerContinueVerification = false;
+    });
+    Analytics.instance.registerStepViewed(_codeStep);
+    _startResendCountdown(ticket.resendAvailableInSeconds);
+    _scheduleDevAutoSubmit(prefilledFromTicket: prefilled, ticket: ticket);
+  }
+
+  /// Dev/profile builds: backend returns [verification_code] for local QA.
+  bool _applyDevVerificationCode(EmailVerificationTicket ticket) {
+    if (kReleaseMode) return false;
+    final code = ticket.devCode?.trim();
+    if (code == null || code.length != _codeLength) {
+      _devCodeNotice = code == null
+          ? (ticket.resendAvailableInSeconds > 0
+              ? 'Dev: новый код можно запросить через '
+                  '${ticket.resendAvailableInSeconds} с'
+              : 'Dev: бэкенд не вернул код. В .env включите '
+                  'EMAIL_VERIFICATION_EXPOSE_CODE=true и пересоздайте '
+                  'контейнер prime-api.')
+          : null;
+      return false;
+    }
+    _devCodeNotice = null;
+    _code.value = TextEditingValue(
+      text: code,
+      selection: TextSelection.collapsed(offset: code.length),
+    );
+    return true;
+  }
+
+  void _scheduleDevAutoSubmit({
+    required bool prefilledFromTicket,
+    EmailVerificationTicket? ticket,
+  }) {
+    if (kReleaseMode || !prefilledFromTicket) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _registerStep != _codeStep || _submittingCode) return;
+      if (ticket != null) {
+        _applyDevVerificationCode(ticket);
+      }
+      if (_code.text.length != _codeLength) return;
+      unawaited(_submitCode());
+    });
+  }
+
+  /// Login found a correct password on an account that was never confirmed.
+  Future<void> _resumeUnconfirmedSignup(
+    String email, {
+    String? notice,
+  }) async {
+    _code.clear();
+    setState(() {
+      _isLogin = false;
+      _registerStep = _codeStep;
+      _pendingEmail = email;
+      _registrationPending = true;
+      _error = null;
+      _notice = notice ?? AppCopy.emailNotVerified;
+      _offerSwitchToLogin = false;
+      _offerContinueVerification = false;
+    });
+    Analytics.instance.registerStepViewed(_codeStep);
+    await _resendCode();
+  }
+
+  void _startResendCountdown(int seconds) {
+    _resendTimer?.cancel();
+    setState(() => _resendSeconds = seconds > 0 ? seconds : 0);
+    if (_resendSeconds <= 0) return;
+    _resendTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      setState(() {
+        _resendSeconds -= 1;
+        if (_resendSeconds <= 0) {
+          _resendSeconds = 0;
+          timer.cancel();
+        }
+      });
+    });
+  }
+
+  Future<void> _submitCode() async {
+    if (_submittingCode) return;
+    final email = _pendingEmail ?? _email.text.trim().toLowerCase();
+    final code = _code.text.trim();
+    if (code.length != _codeLength) {
+      setState(() => _error = AppCopy.emailVerificationCodeLength);
+      return;
+    }
+
+    final auth = context.read<AuthProvider>();
+    await AppHaptics.light();
+    setState(() {
+      _submittingCode = true;
+      _error = null;
+      _notice = null;
+    });
+    try {
+      await auth.verifyEmail(email: email, code: code);
+      Analytics.instance.authSuccess(register: true);
     } catch (e) {
       if (!mounted) return;
       final failure = FailureMapper.from(e);
       setState(() {
-        _error = _authErrorMessage(failure, isLogin: _isLogin);
-        _offerSwitchToLogin = !_isLogin && failure is ConflictFailure;
+        _code.clear();
+        _error = failure is ConflictFailure
+            ? AppCopy.emailAlreadyVerified
+            : failure.message;
+        _offerSwitchToLogin = failure is ConflictFailure;
       });
+    } finally {
+      if (mounted) setState(() => _submittingCode = false);
+    }
+  }
+
+  Future<void> _resendCode() async {
+    if (_resendSeconds > 0) return;
+    final email = _pendingEmail ?? _email.text.trim().toLowerCase();
+    setState(() {
+      _error = null;
+      _notice = null;
+    });
+    try {
+      final ticket =
+          await context.read<AuthProvider>().resendVerification(email);
+      if (!mounted) return;
+      final prefilled = _applyDevVerificationCode(ticket);
+      setState(() => _notice = AppCopy.emailVerificationResent);
+      _startResendCountdown(ticket.resendAvailableInSeconds);
+      _scheduleDevAutoSubmit(prefilledFromTicket: prefilled, ticket: ticket);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = FailureMapper.from(e).message);
     }
   }
 
@@ -226,7 +530,10 @@ class _AuthScreenState extends State<AuthScreen> {
             _nicknameStatus != _NicknameAvailability.taken;
       case 1:
         return _validateEmail(_email.text) == null &&
-            _validatePassword(_password.text) == null;
+            _validatePassword(_password.text) == null &&
+            _emailStatus != _EmailAvailability.checking &&
+            _emailStatus != _EmailAvailability.taken &&
+            _emailStatus != _EmailAvailability.pendingVerification;
       default:
         return true;
     }
@@ -236,16 +543,26 @@ class _AuthScreenState extends State<AuthScreen> {
     if (_isLogin) return 'Войти';
     return switch (_registerStep) {
       0 || 1 => AppCopy.continueLabel,
-      _ => 'Создать аккаунт',
+      _summaryStep => 'Создать аккаунт',
+      _ => 'Подтвердить',
     };
   }
+
+  /// Only the wizard path collects name and nickname, so only it can step
+  /// back from the code screen to fix them.
+  bool get _canEditRegistrationData =>
+      _validateName(_name.text) == null &&
+      _validateNickname(_nickname.text) == null;
 
   bool get _canSubmit {
     if (_isLogin) {
       return _validateEmail(_email.text) == null &&
           _validatePassword(_password.text) == null;
     }
-    if (_registerStep < 2) return _validateRegisterStep(_registerStep);
+    if (_registerStep == _codeStep) {
+      return _code.text.trim().length == _codeLength && !_submittingCode;
+    }
+    if (_registerStep < _summaryStep) return _validateRegisterStep(_registerStep);
     if (!_agreed) return false;
     if (_validateName(_name.text) != null) return false;
     if (_validateNickname(_nickname.text) != null) return false;
@@ -253,6 +570,11 @@ class _AuthScreenState extends State<AuthScreen> {
     if (_validatePassword(_password.text) != null) return false;
     if (_nicknameStatus == _NicknameAvailability.checking ||
         _nicknameStatus == _NicknameAvailability.taken) {
+      return false;
+    }
+    if (_emailStatus == _EmailAvailability.checking ||
+        _emailStatus == _EmailAvailability.taken ||
+        _emailStatus == _EmailAvailability.pendingVerification) {
       return false;
     }
     return true;
@@ -265,6 +587,12 @@ class _AuthScreenState extends State<AuthScreen> {
     final email = value?.trim().toLowerCase() ?? '';
     if (email.isEmpty) return 'Введите email';
     if (!_emailRegex.hasMatch(email)) return 'Введите корректный email';
+    if (!_isLogin && _emailStatus == _EmailAvailability.taken) {
+      return AppCopy.emailAlreadyRegistered;
+    }
+    if (!_isLogin && _emailStatus == _EmailAvailability.pendingVerification) {
+      return AppCopy.emailPendingVerification;
+    }
     return null;
   }
 
@@ -294,25 +622,70 @@ class _AuthScreenState extends State<AuthScreen> {
   }
 
   void _toggleMode() {
+    _resendTimer?.cancel();
     setState(() {
       _isLogin = !_isLogin;
       _registerStep = 0;
       _error = null;
+      _notice = null;
       _offerSwitchToLogin = false;
+      _offerContinueVerification = false;
       _agreed = false;
+      _resendSeconds = 0;
+      _code.clear();
+      _registrationPending = false;
+      _pendingEmail = null;
       _nicknameStatus = _NicknameAvailability.idle;
+      _emailStatus = _EmailAvailability.idle;
     });
   }
 
   void _switchToLoginPreservingEmail() {
+    _resendTimer?.cancel();
     setState(() {
       _isLogin = true;
+      _registerStep = 0;
       _error = null;
+      _notice = null;
       _offerSwitchToLogin = false;
+      _offerContinueVerification = false;
       _agreed = false;
+      _resendSeconds = 0;
+      _code.clear();
+      _registrationPending = false;
+      _pendingEmail = null;
       _nicknameStatus = _NicknameAvailability.idle;
+      _emailStatus = _EmailAvailability.idle;
     });
   }
+
+  Future<void> _continueEmailVerificationFromRegister() async {
+    final email = _email.text.trim().toLowerCase();
+    if (_validateEmail(email) != null) return;
+    await _resumeUnconfirmedSignup(
+      email,
+      notice: AppCopy.emailPendingVerification,
+    );
+  }
+
+  String? get _emailHelper {
+    if (_isLogin || _registerStep != 1) return null;
+    return switch (_emailStatus) {
+      _EmailAvailability.checking => 'Проверяем email…',
+      _EmailAvailability.available => 'Email свободен',
+      _EmailAvailability.taken => AppCopy.emailAlreadyRegistered,
+      _EmailAvailability.pendingVerification => AppCopy.emailPendingVerification,
+      _EmailAvailability.idle => null,
+    };
+  }
+
+  AuthFieldHintTone get _emailHintTone => switch (_emailStatus) {
+        _EmailAvailability.checking => AuthFieldHintTone.loading,
+        _EmailAvailability.available => AuthFieldHintTone.positive,
+        _EmailAvailability.taken => AuthFieldHintTone.negative,
+        _EmailAvailability.pendingVerification => AuthFieldHintTone.neutral,
+        _EmailAvailability.idle => AuthFieldHintTone.neutral,
+      };
 
   String? get _nicknameHelper {
     if (_isLogin) return null;
@@ -324,304 +697,338 @@ class _AuthScreenState extends State<AuthScreen> {
     };
   }
 
+  AuthFieldHintTone get _nicknameHintTone => switch (_nicknameStatus) {
+        _NicknameAvailability.checking => AuthFieldHintTone.loading,
+        _NicknameAvailability.available => AuthFieldHintTone.positive,
+        _NicknameAvailability.taken => AuthFieldHintTone.negative,
+        _NicknameAvailability.idle => AuthFieldHintTone.neutral,
+      };
+
+  String get _heroTitle {
+    if (_isLogin) return 'С возвращением';
+    return switch (_registerStep) {
+      0 => 'Как вас представить',
+      1 => 'Контакты и доступ',
+      _summaryStep => 'Почти готово',
+      _ => 'Подтвердите почту',
+    };
+  }
+
+  String get _heroSubtitle {
+    if (_isLogin) {
+      return 'Продолжите привычки и общение в команде.';
+    }
+    return switch (_registerStep) {
+      0 => 'Имя видно команде. Никнейм уникален — по нему найдут друзья.',
+      1 => 'Email для входа. Пароль проверим на силу — слабый не пропустим.',
+      _summaryStep =>
+        'Проверьте данные и примите условия — затем отправим код на почту.',
+      _ => 'Отправили код из 6 цифр на ${_pendingEmail ?? 'вашу почту'}. '
+          'Введите его — так мы убедимся, что почта ваша.',
+    };
+  }
+
   @override
   Widget build(BuildContext context) {
     final loading = context.watch<AuthProvider>().loading;
-    final maxWidth = AppBreakpoints.maxContentWidth;
 
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      resizeToAvoidBottomInset: true,
-      body: SafeArea(
-        child: loading
-            ? const AppLoadingState(label: 'Подключаем PRIME…')
-            : AmbientCanvas(
-                child: Center(
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(maxWidth: maxWidth),
-                    child: SingleChildScrollView(
-                      padding: const EdgeInsets.fromLTRB(
-                        AppSpacing.lg,
-                        AppSpacing.xl,
-                        AppSpacing.lg,
-                        AppSpacing.lg,
+    return AuthPageShell(
+      loading: loading,
+      child: AutofillGroup(
+        child: Form(
+          key: _formKey,
+          autovalidateMode: AutovalidateMode.disabled,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              AuthHeroBanner(
+                compact: _isLogin,
+                title: _heroTitle,
+                subtitle: _heroSubtitle,
+                badge: _isLogin ? null : 'Регистрация',
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              if (!_isLogin) ...[
+                AuthRegisterStepper(step: _registerStep),
+                const SizedBox(height: AppSpacing.lg),
+              ],
+              AuthFormCard(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (!_isLogin && _registerStep == 0) ...[
+                      PrimeTextField(
+                        key: const ValueKey('auth-register-name'),
+                        controller: _name,
+                        label: 'Имя',
+                        icon: Icons.person_outline,
+                        textInputAction: TextInputAction.next,
+                        autofillHints: const [AutofillHints.name],
+                        validator: _validateName,
                       ),
-                      child: AutofillGroup(
-                        child: Form(
-                          key: _formKey,
-                          autovalidateMode: AutovalidateMode.disabled,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              AppAuthHero(
-                                compact: _isLogin,
-                                title: _isLogin
-                                    ? 'С возвращением'
-                                    : switch (_registerStep) {
-                                        0 => 'Как вас представить',
-                                        1 => 'Контакты и доступ',
-                                        _ => 'Создайте аккаунт',
-                                      },
-                                subtitle: _isLogin
-                                    ? 'Продолжите привычки и общение в команде.'
-                                    : switch (_registerStep) {
-                                        0 =>
-                                          'Имя видно команде. Никнейм уникален — по нему найдут друзья.',
-                                        1 =>
-                                          'Email для входа. Пароль проверим на силу — слабый не пропустим.',
-                                        _ =>
-                                          'Примите условия — и начните поиск команды.',
-                                      },
-                              ),
-                              if (!_isLogin) ...[
-                                const SizedBox(height: AppSpacing.md),
-                                _RegisterStepBar(step: _registerStep),
-                              ],
-                              const SizedBox(height: AppSpacing.xl),
-                              GlassContainer(
-                                borderRadius:
-                                    BorderRadius.circular(AppRadius.xl),
-                                glow: AppGlow.violet(opacity: 0.12),
-                                fillOpacity: 0.05,
-                                padding: const EdgeInsets.all(AppSpacing.lg),
-                                child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.stretch,
-                                  children: [
-                      if (!_isLogin && _registerStep == 0) ...[
-                        PrimeTextField(
-                          key: const ValueKey('auth-register-name'),
-                          controller: _name,
-                          label: 'Имя',
-                          icon: Icons.person_outline,
-                          textInputAction: TextInputAction.next,
-                          autofillHints: const [AutofillHints.name],
-                          validator: _validateName,
-                        ),
-                        const SizedBox(height: AppSpacing.md),
-                        PrimeTextField(
-                          key: const ValueKey('auth-register-nickname'),
-                          controller: _nickname,
-                          label: 'Никнейм',
-                          icon: Icons.alternate_email,
-                          hint: _nicknameHelper,
-                          keyboardType: TextInputType.visiblePassword,
-                          textInputAction: TextInputAction.next,
-                          autofillHints: const [AutofillHints.username],
-                          autocorrect: false,
-                          enableSuggestions: false,
-                          inputFormatters: [
-                            FilteringTextInputFormatter.deny(RegExp(r'\s')),
-                          ],
-                          validator: _validateNickname,
+                      const SizedBox(height: AppSpacing.md),
+                      PrimeTextField(
+                        key: const ValueKey('auth-register-nickname'),
+                        controller: _nickname,
+                        label: 'Никнейм',
+                        icon: Icons.alternate_email,
+                        keyboardType: TextInputType.visiblePassword,
+                        textInputAction: TextInputAction.next,
+                        autofillHints: const [AutofillHints.username],
+                        autocorrect: false,
+                        enableSuggestions: false,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.deny(RegExp(r'\s')),
+                        ],
+                        validator: _validateNickname,
+                      ),
+                      if (_nicknameHelper != null) ...[
+                        AuthFieldHint(
+                          text: _nicknameHelper!,
+                          tone: _nicknameHintTone,
                         ),
                       ],
-                      if (!_isLogin && _registerStep == 1) ...[
-                        PrimeTextField(
-                          key: const ValueKey('auth-register-email'),
-                          controller: _email,
-                          focusNode: _emailFocus,
-                          label: 'Email',
-                          icon: Icons.mail_outline,
-                          keyboardType: TextInputType.emailAddress,
-                          textInputAction: TextInputAction.next,
-                          autofillHints: const [AutofillHints.newUsername],
-                          autocorrect: false,
-                          enableSuggestions: false,
-                          inputFormatters: [
-                            FilteringTextInputFormatter.deny(RegExp(r'\s')),
-                          ],
-                          validator: _validateEmail,
-                        ),
-                        const SizedBox(height: AppSpacing.md),
-                        AppPasswordField(
-                          key: const ValueKey('auth-register-password'),
-                          controller: _password,
-                          textInputAction: TextInputAction.done,
-                          autofillHints: const [AutofillHints.newPassword],
-                          showRequirements: true,
-                          validator: _validatePassword,
+                    ],
+                    if (!_isLogin && _registerStep == 1) ...[
+                      PrimeTextField(
+                        key: const ValueKey('auth-register-email'),
+                        controller: _email,
+                        focusNode: _emailFocus,
+                        label: 'Email',
+                        icon: Icons.mail_outline,
+                        keyboardType: TextInputType.emailAddress,
+                        textInputAction: TextInputAction.next,
+                        autofillHints: const [AutofillHints.newUsername],
+                        autocorrect: false,
+                        enableSuggestions: false,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.deny(RegExp(r'\s')),
+                        ],
+                        validator: _validateEmail,
+                      ),
+                      if (_emailHelper != null) ...[
+                        const SizedBox(height: AppSpacing.sm),
+                        AuthFieldHint(
+                          text: _emailHelper!,
+                          tone: _emailHintTone,
                         ),
                       ],
-                      if (_isLogin) ...[
-                        const Center(
-                          child: SceneArt(kind: SceneKind.welcome, size: 88),
-                        ),
-                        const SizedBox(height: AppSpacing.md),
-                        PrimeTextField(
-                          key: const ValueKey('auth-login-email'),
-                          controller: _email,
-                          focusNode: _emailFocus,
-                          label: 'Email',
-                          icon: Icons.mail_outline,
-                          keyboardType: TextInputType.emailAddress,
-                          textInputAction: TextInputAction.next,
-                          autofillHints: const [AutofillHints.email],
-                          autocorrect: false,
-                          enableSuggestions: false,
-                          inputFormatters: [
-                            FilteringTextInputFormatter.deny(RegExp(r'\s')),
-                          ],
-                          validator: _validateEmail,
-                        ),
-                        const SizedBox(height: AppSpacing.md),
-                        AppPasswordField(
-                          key: const ValueKey('auth-login-password'),
-                          controller: _password,
-                          textInputAction: TextInputAction.done,
-                          autofillHints: const [AutofillHints.password],
-                          showRequirements: false,
-                          validator: _validatePassword,
+                      if (_emailStatus == _EmailAvailability.pendingVerification) ...[
+                        const SizedBox(height: AppSpacing.sm),
+                        AppSecondaryButton(
+                          label: AppCopy.continueEmailVerification,
+                          onPressed: _continueEmailVerificationFromRegister,
                         ),
                       ],
-                      if (_isLogin) ...[
-                        Align(
-                          alignment: Alignment.centerRight,
-                          child: AppTextButton(
-                            label: 'Забыли пароль?',
-                            onPressed: () {
-                              Navigator.of(context).push(
-                                PrimeRoute.sharedAxis(
-                                  builder: (_) => ForgotPasswordScreen(
-                                    initialEmail: _email.text.trim(),
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                        ),
-                      ],
-                      if (!_isLogin && _registerStep == 2) ...[
-                        const SizedBox(height: AppSpacing.md),
-                        AppCheckbox(
-                          value: _agreed,
-                          onChanged: (v) => setState(() {
-                            _agreed = v ?? false;
-                          }),
-                          child: Text.rich(
-                            TextSpan(
-                              style: AppTypography.bodySecondary.copyWith(
-                                fontSize: 13,
-                              ),
-                              children: [
-                                const TextSpan(text: 'Я принимаю '),
-                                TextSpan(
-                                  text: 'пользовательское соглашение',
-                                  style: TextStyle(
-                                    color: AppColors.primarySoft,
-                                    decoration: TextDecoration.underline,
-                                  ),
-                                  recognizer: _termsRecognizer,
-                                ),
-                                const TextSpan(text: ' и '),
-                                TextSpan(
-                                  text: 'политику конфиденциальности',
-                                  style: TextStyle(
-                                    color: AppColors.primarySoft,
-                                    decoration: TextDecoration.underline,
-                                  ),
-                                  recognizer: _privacyRecognizer,
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                      if (_error != null) AppInlineError(message: _error!),
-                      if (_offerSwitchToLogin) ...[
+                      if (_emailStatus == _EmailAvailability.taken) ...[
                         const SizedBox(height: AppSpacing.sm),
                         AppSecondaryButton(
                           label: AppCopy.switchToLogin,
-                          icon: Icons.login_rounded,
                           onPressed: _switchToLoginPreservingEmail,
                         ),
                       ],
                       const SizedBox(height: AppSpacing.md),
-                      AppPrimaryButton(
-                        label: _primaryActionLabel,
-                        onPressed: _canSubmit ? _submit : null,
+                      AppPasswordField(
+                        key: const ValueKey('auth-register-password'),
+                        controller: _password,
+                        textInputAction: TextInputAction.done,
+                        autofillHints: const [AutofillHints.newPassword],
+                        showRequirements: true,
+                        validator: _validatePassword,
                       ),
-                      if (!_isLogin && _registerStep > 0) ...[
-                        const SizedBox(height: AppSpacing.sm),
-                        Center(
-                          child: AppTextButton(
-                            label: AppCopy.back,
-                            onPressed: () => setState(() {
-                              _registerStep -= 1;
-                              _error = null;
-                            }),
-                          ),
-                        ),
-                      ],
-                      const SizedBox(height: AppSpacing.sm),
-                      Center(
+                    ],
+                    if (_isLogin) ...[
+                      PrimeTextField(
+                        key: const ValueKey('auth-login-email'),
+                        controller: _email,
+                        focusNode: _emailFocus,
+                        label: 'Email',
+                        icon: Icons.mail_outline,
+                        keyboardType: TextInputType.emailAddress,
+                        textInputAction: TextInputAction.next,
+                        autofillHints: const [AutofillHints.email],
+                        autocorrect: false,
+                        enableSuggestions: false,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.deny(RegExp(r'\s')),
+                        ],
+                        validator: _validateEmail,
+                      ),
+                      const SizedBox(height: AppSpacing.md),
+                      AppPasswordField(
+                        key: const ValueKey('auth-login-password'),
+                        controller: _password,
+                        textInputAction: TextInputAction.done,
+                        autofillHints: const [AutofillHints.password],
+                        showRequirements: false,
+                        validator: _validatePassword,
+                      ),
+                      Align(
+                        alignment: Alignment.centerRight,
                         child: AppTextButton(
-                          label: _isLogin
-                              ? 'Создать аккаунт'
-                              : 'Уже есть аккаунт? Войти',
-                          onPressed: _toggleMode,
+                          label: 'Забыли пароль?',
+                          onPressed: () {
+                            Navigator.of(context).push(
+                              PrimeRoute.sharedAxis(
+                                builder: (_) => ForgotPasswordScreen(
+                                  initialEmail: _email.text.trim(),
+                                ),
+                              ),
+                            );
+                          },
                         ),
                       ),
-                                  ],
+                    ],
+                    if (!_isLogin && _registerStep == _summaryStep) ...[
+                      AuthRegisterSummary(
+                        name: _name.text.trim(),
+                        nickname: _normalizedNickname,
+                        email: _email.text.trim().toLowerCase(),
+                      ),
+                      const SizedBox(height: AppSpacing.md),
+                      AppCheckbox(
+                        value: _agreed,
+                        onChanged: (v) => setState(() {
+                          _agreed = v ?? false;
+                        }),
+                        child: Text.rich(
+                          TextSpan(
+                            style: AppTypography.bodySecondary.copyWith(
+                              fontSize: 13,
+                              color: context.prime.inkSecondary,
+                            ),
+                            children: [
+                              const TextSpan(text: 'Я принимаю '),
+                              TextSpan(
+                                text: 'пользовательское соглашение',
+                                style: TextStyle(
+                                  color: context.prime.brandSoft,
+                                  decoration: TextDecoration.underline,
                                 ),
+                                recognizer: _termsRecognizer,
+                              ),
+                              const TextSpan(text: ' и '),
+                              TextSpan(
+                                text: 'политику конфиденциальности',
+                                style: TextStyle(
+                                  color: context.prime.brandSoft,
+                                  decoration: TextDecoration.underline,
+                                ),
+                                recognizer: _privacyRecognizer,
                               ),
                             ],
                           ),
                         ),
                       ),
+                    ],
+                    if (!_isLogin && _registerStep == _codeStep) ...[
+                      AppCodeField(
+                        key: const ValueKey('auth-register-code'),
+                        controller: _code,
+                        length: _codeLength,
+                        onCompleted: (_) => unawaited(_submitCode()),
+                      ),
+                      if (!kReleaseMode && _devCodeNotice != null) ...[
+                        const SizedBox(height: AppSpacing.sm),
+                        AuthFieldHint(
+                          text: _devCodeNotice!,
+                          tone: AuthFieldHintTone.neutral,
+                        ),
+                      ],
+                      if (!kReleaseMode &&
+                          _devCodeNotice == null &&
+                          _code.text.length == _codeLength) ...[
+                        const SizedBox(height: AppSpacing.sm),
+                        AuthFieldHint(
+                          text: 'Dev: код подставлен автоматически',
+                          tone: AuthFieldHintTone.positive,
+                        ),
+                      ],
+                      const SizedBox(height: AppSpacing.sm),
+                      AuthFieldHint(
+                        text: _resendSeconds > 0
+                            ? AppCopy.emailVerificationResendIn(_resendSeconds)
+                            : 'Письма нет? Проверьте папку «Спам» '
+                                'или отправьте код снова.',
+                        tone: _resendSeconds > 0
+                            ? AuthFieldHintTone.loading
+                            : AuthFieldHintTone.neutral,
+                      ),
+                      if (_resendSeconds == 0) ...[
+                        const SizedBox(height: AppSpacing.sm),
+                        AppSecondaryButton(
+                          label: 'Отправить код снова',
+                          icon: Icons.refresh_rounded,
+                          onPressed: _resendCode,
+                        ),
+                      ],
+                    ],
+                    if (_notice != null) ...[
+                      const SizedBox(height: AppSpacing.sm),
+                      AuthFieldHint(
+                        text: _notice!,
+                        tone: AuthFieldHintTone.positive,
+                      ),
+                    ],
+                    if (_error != null) ...[
+                      const SizedBox(height: AppSpacing.sm),
+                      AppInlineError(message: _error!),
+                    ],
+                    if (_offerSwitchToLogin) ...[
+                      const SizedBox(height: AppSpacing.sm),
+                      AppSecondaryButton(
+                        label: AppCopy.switchToLogin,
+                        icon: Icons.login_rounded,
+                        onPressed: _switchToLoginPreservingEmail,
+                      ),
+                    ],
+                    if (_offerContinueVerification) ...[
+                      const SizedBox(height: AppSpacing.sm),
+                      AppSecondaryButton(
+                        label: AppCopy.continueVerification,
+                        icon: Icons.mark_email_read_outlined,
+                        onPressed: () => unawaited(
+                          _resumeUnconfirmedSignup(
+                            _pendingEmail ?? _email.text.trim().toLowerCase(),
+                          ),
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: AppSpacing.md),
+                    AppPrimaryButton(
+                      label: _primaryActionLabel,
+                      onPressed: _canSubmit ? _submit : null,
                     ),
-                  ),
+                    if (!_isLogin &&
+                        _registerStep > 0 &&
+                        (_registerStep != _codeStep ||
+                            _canEditRegistrationData)) ...[
+                      const SizedBox(height: AppSpacing.sm),
+                      AuthFooterLink(
+                        label: _registerStep == _codeStep
+                            ? 'Изменить данные'
+                            : AppCopy.back,
+                        onPressed: () => setState(() {
+                          _registerStep -= 1;
+                          _error = null;
+                          _notice = null;
+                        }),
+                      ),
+                    ],
+                  ],
                 ),
               ),
-      ),
-    );
-  }
-}
-
-class _RegisterStepBar extends StatelessWidget {
-  const _RegisterStepBar({required this.step});
-
-  final int step;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Шаг ${step + 1} из 3',
-          style: AppTypography.caption.copyWith(color: AppColors.primarySoft),
-        ),
-        const SizedBox(height: AppSpacing.xs),
-        Row(
-          children: [
-            for (var i = 0; i < 3; i++) ...[
-              if (i > 0) const SizedBox(width: 6),
-              Expanded(
-                child: AnimatedContainer(
-                  duration: AppDurations.fast,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(AppRadius.pill),
-                    color: i <= step
-                        ? AppColors.primary
-                        : AppColors.primaryContainer.withValues(alpha: 0.45),
-                    boxShadow: i <= step
-                        ? [
-                            ...AppGlow.violet(
-                              opacity: i == step ? 0.55 : 0.22,
-                            ),
-                            if (i == step)
-                              ...AppGlow.magenta(opacity: 0.2),
-                          ]
-                        : null,
-                  ),
-                ),
+              const SizedBox(height: AppSpacing.sm),
+              AuthFooterLink(
+                label: _isLogin
+                    ? 'Нет аккаунта? Создать'
+                    : 'Уже есть аккаунт? Войти',
+                onPressed: _toggleMode,
               ),
             ],
-          ],
+          ),
         ),
-      ],
+      ),
     );
   }
 }

@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/metrics/calendar_metrics.dart';
-import '../../../design/glass.dart';
 import '../../../design/motion.dart';
+import '../../../design/theme/prime_theme_context.dart';
 import '../../../design/tokens.dart';
 import '../../../design/typography.dart';
 import '../../../design/visuals/charts/charts.dart';
@@ -11,6 +11,7 @@ import '../../../design/visuals/habit_art.dart';
 import '../../../design/visuals/scene_art.dart';
 import '../app_hero_button.dart';
 import '../app_secondary_button.dart';
+import '../../kit/components/prime_content_card.dart';
 import 'editorial_title_text.dart';
 
 /// Full-width hero module — a purple editorial glass surface with an
@@ -186,13 +187,7 @@ class AppHeroModule extends StatelessWidget {
             ),
           ],
         ),
-        child: GlassContainer(
-          width: double.infinity,
-          allowBlurOnWeb: true,
-          sigma: 24,
-          fillOpacity: 0.10,
-          glow: AppGlow.violet(opacity: 0.20),
-          borderRadius: BorderRadius.circular(AppRadius.xl),
+        child: Padding(
           padding: const EdgeInsets.all(AppSpacing.lg),
           child: LayoutBuilder(
             builder: (context, constraints) {
@@ -283,6 +278,7 @@ class AppBentoMetrics extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = context.prime;
     final isEmpty = streak == 0 && primes == 0 && successDays == 0;
     final dayInCycle =
         cycleDay ?? (successDays == 0 ? 0 : ((successDays - 1) % 30) + 1);
@@ -298,14 +294,12 @@ class AppBentoMetrics extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        GlassContainer(
-          width: double.infinity,
-          glow: AppGlow.violet(opacity: 0.14),
+        PrimeContentCard(
           child: Column(
             children: [
               Text(
                 isEmpty ? 'Сегодняшний темп' : 'Ваш темп',
-                style: AppTypography.titleSerif,
+                style: AppTypography.titleSerif.copyWith(color: p.ink),
               ),
               const SizedBox(height: AppSpacing.md),
               PrimeSegmentedArc(
@@ -319,7 +313,7 @@ class AppBentoMetrics extends StatelessWidget {
                 Text(
                   'После первого отчёта здесь появятся день цикла, серия и Праймы',
                   textAlign: TextAlign.center,
-                  style: AppTypography.bodySecondary,
+                  style: AppTypography.bodySecondary.copyWith(color: p.inkSecondary),
                 )
               else
                 LayoutBuilder(
@@ -368,13 +362,7 @@ class AppBentoMetrics extends StatelessWidget {
           ),
         ),
         const SizedBox(height: AppSpacing.md),
-        Container(
-          padding: const EdgeInsets.all(AppSpacing.md),
-          decoration: BoxDecoration(
-            color: AppColors.surfaceSoft.withValues(alpha: 0.55),
-            borderRadius: BorderRadius.circular(AppRadius.xl),
-            border: Border.all(color: AppColors.border),
-          ),
+        PrimeContentCard(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -383,7 +371,10 @@ class AppBentoMetrics extends StatelessWidget {
                   Flexible(
                     child: Text(
                       'Неделя',
-                      style: AppTypography.titleSerif.copyWith(fontSize: 16),
+                      style: AppTypography.titleSerif.copyWith(
+                        fontSize: 16,
+                        color: p.ink,
+                      ),
                     ),
                   ),
                   const SizedBox(width: AppSpacing.sm),
@@ -437,8 +428,9 @@ class _GlassStat extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = context.prime;
     return Material(
-      color: AppColors.elevatedSurface.withValues(alpha: 0.72),
+      color: p.surfaceSoft,
       borderRadius: BorderRadius.circular(AppRadius.bentoInner),
       child: InkWell(
         onTap: onTap,
@@ -450,15 +442,21 @@ class _GlassStat extends StatelessWidget {
             children: [
               PrimeAnimatedNumber(
                 value: value,
-                style: AppTypography.numericSm,
+                style: AppTypography.numericSm.copyWith(color: p.ink),
               ),
-              Text(label, style: AppTypography.caption),
+              Text(
+                label,
+                style: AppTypography.caption.copyWith(color: p.inkMuted),
+              ),
               if (hint != null)
                 Text(
                   hint!,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: AppTypography.caption.copyWith(fontSize: 10),
+                  style: AppTypography.caption.copyWith(
+                    fontSize: 10,
+                    color: p.inkMuted,
+                  ),
                 ),
             ],
           ),

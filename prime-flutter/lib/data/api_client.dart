@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -13,6 +14,22 @@ import 'regions.dart';
 class ApiClient {
   static const _cachePrefix = 'prime_api_cache_v1:';
 
+  static const inboxCacheTtl = Duration(seconds: 45);
+  static const messagesCacheTtl = Duration(seconds: 30);
+  static const groupsCacheTtl = Duration(minutes: 5);
+  static const friendsCacheTtl = Duration(minutes: 5);
+  static const nicknameLookupCacheTtl = Duration(seconds: 45);
+
+  static final _chatOptions = Options(
+    connectTimeout: Duration(seconds: 8),
+    sendTimeout: Duration(seconds: 15),
+    receiveTimeout: Duration(seconds: 15),
+  );
+
+  static final _socialOptions = _chatOptions;
+
+  final Map<String, _MemoryCacheEntry> _memoryCache = {};
+
   /// Default HTTP timeouts — chat endpoints may use [chatDioOptions].
   static const defaultConnectTimeout = Duration(seconds: 25);
   static const defaultSendTimeout = Duration(seconds: 30);
@@ -22,6 +39,8 @@ class ApiClient {
 
   /// Called once when a mid-session 401 is observed (not login/register).
   void Function()? onUnauthorized;
+  Future<bool> Function()? onTokenRefresh;
+  Future<bool>? _refreshFuture;
 
   bool _handlingUnauthorized = false;
 
@@ -37,11 +56,35 @@ class ApiClient {
     );
     dio.interceptors.add(
       InterceptorsWrapper(
-        onError: (error, handler) {
+        onError: (error, handler) async {
           final status = error.response?.statusCode;
           final path = error.requestOptions.path;
           // Never treat public auth endpoints as mid-session expiry.
           final isAuthEndpoint = path.contains('/auth/');
+          final skipRefresh =
+              error.requestOptions.extra['skipAuthRefresh'] == true;
+          if (status == 401 &&
+              !isAuthEndpoint &&
+              !skipRefresh &&
+              onTokenRefresh != null) {
+            _refreshFuture ??= onTokenRefresh!().whenComplete(() {
+              _refreshFuture = null;
+            });
+            final refreshed = await _refreshFuture!;
+            if (refreshed) {
+              try {
+                final request = error.requestOptions;
+                request.extra['skipAuthRefresh'] = true;
+                request.headers['Authorization'] =
+                    dio.options.headers['Authorization'];
+                final response = await dio.fetch(request);
+                handler.resolve(response);
+                return;
+              } catch (_) {
+                // The refreshed request failed; clear the local session below.
+              }
+            }
+          }
           if (status == 401 && !isAuthEndpoint && !_handlingUnauthorized) {
             _handlingUnauthorized = true;
             onUnauthorized?.call();
@@ -96,8 +139,20 @@ class ApiClient {
 
   String _cacheKey(String path, Map<String, dynamic>? queryParameters) {
     final auth = dio.options.headers['Authorization']?.toString() ?? '';
-    final userScope =
-        auth.length > 18 ? auth.substring(auth.length - 18) : auth;
+    var userScope = 'anonymous';
+    final token = auth.startsWith('Bearer ') ? auth.substring(7) : '';
+    final parts = token.split('.');
+    if (parts.length == 3) {
+      try {
+        final normalized = base64Url.normalize(parts[1]);
+        final claims = jsonDecode(utf8.decode(base64Url.decode(normalized)));
+        if (claims is Map && claims['sub'] is String) {
+          userScope = 'user:${claims['sub']}';
+        }
+      } catch (_) {
+        // Keep anonymous namespace when a legacy/non-JWT token is present.
+      }
+    }
     final sortedQuery = <String, dynamic>{};
     final query = queryParameters ?? const <String, dynamic>{};
     for (final key in query.keys.toList()..sort()) {
@@ -131,6 +186,7 @@ class ApiClient {
     try {
       final r = await dio.get(path, queryParameters: queryParameters);
       await _saveCache(key, r.data);
+      _memoryCache[key] = _MemoryCacheEntry(r.data, DateTime.now());
       return r.data;
     } on DioException catch (error) {
       if (isUnauthorized(error) || !isNetworkError(error)) rethrow;
@@ -140,7 +196,144 @@ class ApiClient {
     }
   }
 
+  /// Stale-while-revalidate: return cached data immediately, refresh in background.
+  Future<dynamic> _getCachedSWR(
+    String path, {
+    Map<String, dynamic>? queryParameters,
+    Duration ttl = inboxCacheTtl,
+    bool forceRefresh = false,
+  }) async {
+    final key = _cacheKey(path, queryParameters);
+
+    if (!forceRefresh) {
+      final mem = _memoryCache[key];
+      if (mem != null) {
+        if (DateTime.now().difference(mem.fetchedAt) > ttl) {
+          unawaited(_refreshInBackground(key, path, queryParameters));
+        }
+        return mem.data;
+      }
+      final disk = await _readCache(key);
+      if (disk != null) {
+        _memoryCache[key] = _MemoryCacheEntry(
+          disk,
+          DateTime.now().subtract(ttl),
+        );
+        unawaited(_refreshInBackground(key, path, queryParameters));
+        return disk;
+      }
+    }
+
+    try {
+      return await _fetchAndCache(key, path, queryParameters: queryParameters);
+    } on DioException catch (error) {
+      if (isUnauthorized(error) || !isNetworkError(error)) rethrow;
+      final disk = await _readCache(key);
+      if (disk != null) {
+        _memoryCache[key] = _MemoryCacheEntry(
+          disk,
+          DateTime.now().subtract(ttl),
+        );
+        return disk;
+      }
+      rethrow;
+    }
+  }
+
+  Future<void> _refreshInBackground(
+    String key,
+    String path,
+    Map<String, dynamic>? queryParameters,
+  ) async {
+    try {
+      await _fetchAndCache(key, path, queryParameters: queryParameters);
+    } catch (_) {
+      // Keep serving stale cache.
+    }
+  }
+
+  Future<dynamic> _fetchAndCache(
+    String key,
+    String path, {
+    Map<String, dynamic>? queryParameters,
+  }) async {
+    final r = await dio.get(
+      path,
+      queryParameters: queryParameters,
+      options: _optionsForPath(path),
+    );
+    await _saveCache(key, r.data);
+    _memoryCache[key] = _MemoryCacheEntry(r.data, DateTime.now());
+    return r.data;
+  }
+
+  Options? _optionsForPath(String path) {
+    if (path.startsWith('/direct-chats') ||
+        path.startsWith('/friends') ||
+        path.startsWith('/notifications') ||
+        path.startsWith('/users/by-nickname')) {
+      return _chatOptions;
+    }
+    return null;
+  }
+
+  /// In-memory cache only — safe to call synchronously on the UI thread.
+  dynamic peekMemoryCacheSync(
+    String path, {
+    Map<String, dynamic>? queryParameters,
+  }) {
+    return _memoryCache[_cacheKey(path, queryParameters)]?.data;
+  }
+
+  Map<String, dynamic>? peekCalendarAllCacheSync() {
+    final raw = peekMemoryCacheSync('/reports/calendar/all');
+    if (raw is Map) return Map<String, dynamic>.from(raw);
+    return null;
+  }
+
+  List<dynamic>? peekGroupsCacheSync() {
+    final raw = peekMemoryCacheSync('/groups');
+    if (raw is List) return List<dynamic>.from(raw);
+    return null;
+  }
+
+  Future<Map<String, dynamic>?> peekCalendarAllCache() async {
+    final raw = await peekCache('/reports/calendar/all');
+    if (raw is Map) return Map<String, dynamic>.from(raw);
+    return null;
+  }
+
+  Future<List<dynamic>?> peekGroupsCache() async {
+    final raw = await peekCache('/groups');
+    if (raw is List) return List<dynamic>.from(raw);
+    return null;
+  }
+
+  /// In-memory cache only — safe to call synchronously on the UI thread.
+  Map<String, dynamic>? peekDirectMessagesCacheSync(String friendId) {
+    final path = '/direct-chats/$friendId/messages';
+    const query = {'limit': 50};
+    final key = _cacheKey(path, query);
+    final mem = _memoryCache[key];
+    if (mem?.data is Map) {
+      return Map<String, dynamic>.from(mem!.data as Map);
+    }
+    return null;
+  }
+
+  /// Read cached response without network (memory → disk).
+  Future<dynamic> peekCache(
+    String path, {
+    Map<String, dynamic>? queryParameters,
+  }) async {
+    final key = _cacheKey(path, queryParameters);
+    final mem = _memoryCache[key];
+    if (mem != null) return mem.data;
+    return _readCache(key);
+  }
+
   Future<void> clearResponseCache() async {
+    _memoryCache.clear();
     final prefs = await SharedPreferences.getInstance();
     final keys = prefs.getKeys().where((key) => key.startsWith(_cachePrefix));
     for (final key in keys) {
@@ -164,6 +357,26 @@ class ApiClient {
     return r.data as Map<String, dynamic>;
   }
 
+  Future<bool> checkNicknameAvailable(String nickname) async {
+    final normalized = nickname.trim().replaceFirst(RegExp(r'^@'), '');
+    final r = await dio.get('/auth/nickname-available/$normalized');
+    return (r.data as Map<String, dynamic>)['available'] as bool? ?? false;
+  }
+
+  Future<({bool available, bool pendingVerification})> checkEmailAvailable(
+    String email,
+  ) async {
+    final r = await dio.get(
+      '/auth/email-available',
+      queryParameters: {'email': email.trim().toLowerCase()},
+    );
+    final data = r.data as Map<String, dynamic>;
+    return (
+      available: data['available'] as bool? ?? false,
+      pendingVerification: data['pending_verification'] as bool? ?? false,
+    );
+  }
+
   Future<Map<String, dynamic>> login(
     String email,
     String password, {
@@ -173,6 +386,39 @@ class ApiClient {
       'email': email,
       if (password.isNotEmpty) 'password': password,
       'developer_mode': developerMode,
+    });
+    return r.data as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> refreshSession(String refreshToken) async {
+    final r = await dio.post('/auth/refresh', data: {
+      'refresh_token': refreshToken,
+    });
+    return r.data as Map<String, dynamic>;
+  }
+
+  Future<void> logoutSession() async {
+    await dio.post(
+      '/auth/logout',
+      options: Options(extra: {'skipAuthRefresh': true}),
+    );
+  }
+
+  /// Confirms the signup code and returns the first access token.
+  Future<Map<String, dynamic>> verifyEmail({
+    required String email,
+    required String code,
+  }) async {
+    final r = await dio.post('/auth/verify-email', data: {
+      'email': email.trim().toLowerCase(),
+      'code': code.trim(),
+    });
+    return r.data as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> resendVerification(String email) async {
+    final r = await dio.post('/auth/resend-verification', data: {
+      'email': email.trim().toLowerCase(),
     });
     return r.data as Map<String, dynamic>;
   }
@@ -200,8 +446,38 @@ class ApiClient {
     return r.data as Map<String, dynamic>;
   }
 
+  Future<void> _invalidatePathCache(
+    String path, {
+    Map<String, dynamic>? queryParameters,
+  }) async {
+    final key = _cacheKey(path, queryParameters);
+    _memoryCache.remove(key);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(key);
+  }
+
+  void _invalidateAllNicknameLookups() {
+    _memoryCache.removeWhere((key, _) => key.startsWith('nickname_lookup:'));
+  }
+
+  Future<void> _invalidateProfileCaches() async {
+    await Future.wait([
+      _invalidatePathCache('/friends'),
+      _invalidatePathCache('/groups'),
+      _invalidatePathCache('/direct-chats'),
+    ]);
+    _invalidateAllNicknameLookups();
+  }
+
   Future<Map<String, dynamic>> updateMe(Map<String, dynamic> data) async {
     final r = await dio.patch('/users/me', data: data);
+    await _invalidateProfileCaches();
+    return r.data as Map<String, dynamic>;
+  }
+
+  /// Lightweight about save — skips heavy cache invalidation for faster UX.
+  Future<Map<String, dynamic>> updateAbout(String about) async {
+    final r = await dio.patch('/users/me', data: {'about': about});
     return r.data as Map<String, dynamic>;
   }
 
@@ -359,6 +635,16 @@ class ApiClient {
     return r.data as Map<String, dynamic>;
   }
 
+  Future<void> invalidateWaitingRoomCache({String? skillId}) async {
+    await _invalidatePathCache(
+      '/groups/waiting-room',
+      queryParameters: {if (skillId != null) 'skill_id': skillId},
+    );
+    await _invalidatePathCache('/groups/waiting-room');
+  }
+
+  Future<void> invalidateGroupsCache() => _invalidatePathCache('/groups');
+
   Future<void> leaveWaitingRoom({String? skillId}) async => await dio.delete(
         '/groups/waiting-room',
         queryParameters: {if (skillId != null) 'skill_id': skillId},
@@ -407,17 +693,35 @@ class ApiClient {
     final r = await dio.post('/groups/waiting-room/pair-join', data: {
       'invite_code': inviteCode,
     });
+    await invalidateWaitingRoomCache();
     return r.data as Map<String, dynamic>;
   }
+
+  Future<Map<String, dynamic>> confirmEarlyStart({String? skillId}) async {
+    final r = await dio.post('/groups/waiting-room/early-start', data: {
+      if (skillId != null && skillId.isNotEmpty) 'skill_id': skillId,
+    });
+    await invalidateWaitingRoomCache(skillId: skillId);
+    await invalidateGroupsCache();
+    return r.data as Map<String, dynamic>;
+  }
+
+  /// @deprecated Use [confirmEarlyStart]
+  Future<Map<String, dynamic>> confirmPairStart({String? skillId}) =>
+      confirmEarlyStart(skillId: skillId);
 
   Future<Map<String, dynamic>> nudgeGroup(String groupId) async {
     final r = await dio.post('/groups/$groupId/nudge');
     return r.data as Map<String, dynamic>;
   }
 
-  Future<List<dynamic>> listGroups() async {
-    final r = await dio.get('/groups');
-    return r.data as List<dynamic>;
+  Future<List<dynamic>> listGroups({bool forceRefresh = false}) async {
+    final data = await _getCachedSWR(
+      '/groups',
+      ttl: groupsCacheTtl,
+      forceRefresh: forceRefresh,
+    );
+    return data as List<dynamic>;
   }
 
   Future<Map<String, dynamic>?> currentGroup() async {
@@ -487,9 +791,13 @@ class ApiClient {
     return r.data as Map<String, dynamic>;
   }
 
-  Future<Map<String, dynamic>> calendarAll() async {
-    final r = await dio.get('/reports/calendar/all');
-    return r.data as Map<String, dynamic>;
+  Future<Map<String, dynamic>> calendarAll({bool forceRefresh = false}) async {
+    final data = await _getCachedSWR(
+      '/reports/calendar/all',
+      ttl: groupsCacheTtl,
+      forceRefresh: forceRefresh,
+    );
+    return Map<String, dynamic>.from(data as Map);
   }
 
   // ------------------------------------------------------------------ achievements
@@ -498,9 +806,53 @@ class ApiClient {
   }
 
   // ------------------------------------------------------------------ friends
-  Future<Map<String, dynamic>> findUserByNickname(String nickname) async {
+  String _nicknameCacheKey(String nickname) {
     final normalized = nickname.trim().replaceFirst(RegExp(r'^@'), '');
-    final r = await dio.get('/users/by-nickname/$normalized');
+    return 'nickname_lookup:$normalized';
+  }
+
+  void _invalidateNicknameLookup(String nickname) {
+    _memoryCache.remove(_nicknameCacheKey(nickname));
+  }
+
+  Future<Map<String, dynamic>> findUserByNickname(
+    String nickname, {
+    bool forceRefresh = false,
+  }) async {
+    final normalized = nickname.trim().replaceFirst(RegExp(r'^@'), '');
+    final cacheKey = _nicknameCacheKey(normalized);
+    if (!forceRefresh) {
+      final cached = _memoryCache[cacheKey];
+      if (cached != null &&
+          DateTime.now().difference(cached.fetchedAt) <=
+              nicknameLookupCacheTtl) {
+        return Map<String, dynamic>.from(cached.data as Map);
+      }
+    }
+    final r = await dio.get(
+      '/users/by-nickname/$normalized',
+      options: _socialOptions,
+    );
+    final data = r.data as Map<String, dynamic>;
+    _memoryCache[cacheKey] = _MemoryCacheEntry(data, DateTime.now());
+    return data;
+  }
+
+  Future<Map<String, dynamic>> discoverUsers({
+    String? regionCode,
+    String? cursor,
+    int limit = 30,
+  }) async {
+    final r = await dio.get(
+      '/users/discover',
+      queryParameters: {
+        if (regionCode != null && regionCode.isNotEmpty)
+          'region_code': regionCode,
+        if (cursor != null && cursor.isNotEmpty) 'cursor': cursor,
+        'limit': limit,
+      },
+      options: _socialOptions,
+    );
     return r.data as Map<String, dynamic>;
   }
 
@@ -508,11 +860,20 @@ class ApiClient {
     String nickname,
   ) async {
     final normalized = nickname.trim().replaceFirst(RegExp(r'^@'), '');
-    final r = await dio.post('/friends/requests', data: {
-      'nickname': normalized,
-    });
+    final r = await dio.post(
+      '/friends/requests',
+      data: {
+        'nickname': normalized,
+      },
+      options: _socialOptions,
+    );
+    _invalidateNicknameLookup(normalized);
+    await _invalidateProfileCaches();
     return r.data as Map<String, dynamic>;
   }
+
+  /// Clears cached friends, groups, direct chats, and nickname lookups.
+  Future<void> invalidateSocialCaches() => _invalidateProfileCaches();
 
   Future<Map<String, dynamic>> listFriendRequests() async {
     final r = await dio.get('/friends/requests');
@@ -523,9 +884,16 @@ class ApiClient {
     String requestId,
     bool accept,
   ) async {
-    final r = await dio.post('/friends/requests/$requestId/respond', data: {
-      'accept': accept,
-    });
+    final r = await dio.post(
+      '/friends/requests/$requestId/respond',
+      data: {
+        'accept': accept,
+      },
+      options: _socialOptions,
+    );
+    if (accept) {
+      await invalidateSocialCaches();
+    }
     return r.data as Map<String, dynamic>;
   }
 
@@ -534,15 +902,28 @@ class ApiClient {
     return r.data as Map<String, dynamic>;
   }
 
-  Future<List<dynamic>> listFriends() async {
-    final r = await dio.get('/friends');
-    final data = r.data as Map<String, dynamic>;
+  Future<List<dynamic>> listFriends({bool forceRefresh = false}) async {
+    final data = await _getCachedSWR(
+      '/friends',
+      ttl: friendsCacheTtl,
+      forceRefresh: forceRefresh,
+    ) as Map<String, dynamic>;
     return data['friends'] as List<dynamic>? ?? [];
   }
 
   // ----------------------------------------------------------- notifications
-  Future<Map<String, dynamic>> listNotifications() async {
-    final r = await dio.get('/notifications');
+  Future<Map<String, dynamic>> listNotifications({
+    String? before,
+    int limit = 50,
+  }) async {
+    final r = await dio.get(
+      '/notifications',
+      queryParameters: {
+        if (before != null) 'before': before,
+        'limit': limit,
+      },
+      options: _socialOptions,
+    );
     return r.data as Map<String, dynamic>;
   }
 
@@ -564,20 +945,38 @@ class ApiClient {
     });
   }
 
-  Future<List<dynamic>> listDirectChats() async {
-    final data = await _getCached('/direct-chats') as Map<String, dynamic>;
+  Future<List<dynamic>> listDirectChats({bool forceRefresh = false}) async {
+    final data = await _getCachedSWR(
+      '/direct-chats',
+      ttl: inboxCacheTtl,
+      forceRefresh: forceRefresh,
+    ) as Map<String, dynamic>;
     return data['chats'] as List<dynamic>? ?? [];
   }
 
   Future<Map<String, dynamic>> markDirectChatRead(String friendId) async {
-    final r = await dio.post('/direct-chats/$friendId/read');
+    final r = await dio.post(
+      '/direct-chats/$friendId/read',
+      options: _chatOptions,
+    );
+    await _invalidatePathCache('/direct-chats');
+    await invalidateDirectMessagesCache(friendId);
     return r.data as Map<String, dynamic>;
+  }
+
+  /// Drop cached thread history so the next sync sees live messages/read state.
+  Future<void> invalidateDirectMessagesCache(String friendId) async {
+    await _invalidatePathCache(
+      '/direct-chats/$friendId/messages',
+      queryParameters: const {'limit': 50},
+    );
   }
 
   Future<Map<String, dynamic>> directMessages(
     String friendId, {
     String? before,
     int limit = 50,
+    bool forceRefresh = false,
   }) async {
     final path = '/direct-chats/$friendId/messages';
     final query = {
@@ -585,11 +984,51 @@ class ApiClient {
       'limit': limit,
     };
     if (before == null) {
-      final data = await _getCached(path, queryParameters: query);
+      final data = await _getCachedSWR(
+        path,
+        queryParameters: query,
+        ttl: messagesCacheTtl,
+        forceRefresh: forceRefresh,
+      );
       return Map<String, dynamic>.from(data as Map);
     }
-    final r = await dio.get(path, queryParameters: query);
+    final r = await dio.get(
+      path,
+      queryParameters: query,
+      options: _chatOptions,
+    );
     return r.data as Map<String, dynamic>;
+  }
+
+  /// Cached messages for instant chat paint (no network).
+  Future<Map<String, dynamic>?> peekDirectMessagesCache(String friendId) async {
+    final path = '/direct-chats/$friendId/messages';
+    const query = {'limit': 50};
+    final raw = await peekCache(path, queryParameters: query);
+    if (raw is! Map) return null;
+    return Map<String, dynamic>.from(raw);
+  }
+
+  /// Prefetch thread history into memory/disk cache before opening the chat.
+  Future<void> warmDirectMessagesCache(String friendId) async {
+    if (peekDirectMessagesCacheSync(friendId) != null) return;
+    try {
+      await directMessages(friendId);
+    } catch (_) {
+      // Best-effort warm-up.
+    }
+  }
+
+  /// Prefetch recent threads shown in the inbox list.
+  Future<void> prefetchDirectMessageCaches(Iterable<String> friendIds) async {
+    for (final friendId in friendIds) {
+      if (peekDirectMessagesCacheSync(friendId) != null) continue;
+      try {
+        await directMessages(friendId);
+      } catch (_) {
+        // Continue warming other threads.
+      }
+    }
   }
 
   Future<Map<String, dynamic>> sendDirectMessage(
@@ -603,16 +1042,21 @@ class ApiClient {
     String? replyToId,
     String? clientId,
   }) async {
-    final r = await dio.post('/direct-chats/$friendId/messages', data: {
-      'body': body,
-      if (msgtype != 'm.text') 'msgtype': msgtype,
-      if (url != null) 'url': url,
-      if (filename != null) 'filename': filename,
-      if (contentType != null) 'content_type': contentType,
-      if (sizeBytes != null) 'size_bytes': sizeBytes,
-      if (replyToId != null) 'reply_to_id': replyToId,
-      if (clientId != null) 'client_id': clientId,
-    });
+    final r = await dio.post(
+      '/direct-chats/$friendId/messages',
+      data: {
+        'body': body,
+        if (msgtype != 'm.text') 'msgtype': msgtype,
+        if (url != null) 'url': url,
+        if (filename != null) 'filename': filename,
+        if (contentType != null) 'content_type': contentType,
+        if (sizeBytes != null) 'size_bytes': sizeBytes,
+        if (replyToId != null) 'reply_to_id': replyToId,
+        if (clientId != null) 'client_id': clientId,
+      },
+      options: _chatOptions,
+    );
+    await invalidateDirectMessagesCache(friendId);
     return r.data as Map<String, dynamic>;
   }
 
@@ -620,7 +1064,8 @@ class ApiClient {
     String messageId,
     String emoji,
   ) async {
-    final r = await dio.post('/direct-chats/messages/$messageId/reactions', data: {
+    final r =
+        await dio.post('/direct-chats/messages/$messageId/reactions', data: {
       'emoji': emoji,
     });
     return r.data as Map<String, dynamic>;
@@ -669,11 +1114,12 @@ class ApiClient {
     return r.data as Map<String, dynamic>;
   }
 
-  Future<Map<String, dynamic>> chatSendMessage(
-    String groupId,
-    String body,
-  ) async {
-    final r = await dio.post('/chat/$groupId/messages', data: {'body': body});
+  Future<Map<String, dynamic>> chatSendMessage(String groupId, String body,
+      {String? clientId}) async {
+    final r = await dio.post('/chat/$groupId/messages', data: {
+      'body': body,
+      if (clientId != null) 'client_id': clientId,
+    });
     return r.data as Map<String, dynamic>;
   }
 
@@ -756,4 +1202,11 @@ class ApiClient {
     );
     return r.data as Map<String, dynamic>;
   }
+}
+
+class _MemoryCacheEntry {
+  const _MemoryCacheEntry(this.data, this.fetchedAt);
+
+  final dynamic data;
+  final DateTime fetchedAt;
 }

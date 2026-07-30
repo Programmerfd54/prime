@@ -38,6 +38,8 @@ abstract final class PrimeTheme {
 
     return ThemeData(
       useMaterial3: true,
+      fontFamily: AppTypography.family,
+      fontFamilyFallback: AppTypography.fallback,
       brightness: c.brightness,
       colorScheme: colorScheme,
       scaffoldBackgroundColor: c.canvas,
@@ -74,14 +76,30 @@ abstract final class PrimeTheme {
           disabledForegroundColor: c.inkMuted,
           elevation: 0,
           padding: const EdgeInsets.symmetric(
-            vertical: AppSpacing.md,
+            vertical: AppSpacing.sm,
             horizontal: AppSpacing.lg,
           ),
-          minimumSize: const Size.fromHeight(AppControlHeights.button),
+          minimumSize: const Size.fromHeight(52),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(AppRadius.md),
+            borderRadius: BorderRadius.circular(15),
           ),
           textStyle: AppTypography.button.copyWith(color: c.inkOnBrand),
+        ),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          backgroundColor: const Color(0xFF6D28D9),
+          foregroundColor: c.inkOnBrand,
+          minimumSize: const Size.fromHeight(52),
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(15),
+          ),
+          textStyle: AppTypography.button.copyWith(
+            fontSize: 15,
+            fontWeight: FontWeight.w600,
+            color: c.inkOnBrand,
+          ),
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
@@ -93,9 +111,9 @@ abstract final class PrimeTheme {
             horizontal: AppSpacing.lg,
             vertical: AppSpacing.md,
           ),
-          minimumSize: const Size.fromHeight(AppControlHeights.button),
+          minimumSize: const Size.fromHeight(48),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(AppRadius.md),
+            borderRadius: BorderRadius.circular(15),
           ),
           textStyle: AppTypography.button.copyWith(color: c.ink),
         ),
@@ -187,7 +205,7 @@ abstract final class PrimeTheme {
         backgroundColor: c.surface,
         surfaceTintColor: Colors.transparent,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(AppRadius.xl),
+          borderRadius: BorderRadius.circular(18),
         ),
         titleTextStyle: AppTypography.title1.copyWith(color: c.ink),
         contentTextStyle:
@@ -198,7 +216,7 @@ abstract final class PrimeTheme {
         surfaceTintColor: Colors.transparent,
         shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(
-            top: Radius.circular(AppRadius.sheet),
+            top: Radius.circular(22),
           ),
         ),
         showDragHandle: true,
@@ -224,7 +242,27 @@ abstract final class PrimeTheme {
         labelStyle: AppTypography.caption.copyWith(color: c.ink),
         side: BorderSide(color: c.hairline),
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(AppRadius.pill),
+          borderRadius: BorderRadius.circular(14),
+        ),
+      ),
+      tooltipTheme: TooltipThemeData(
+        textStyle: AppTypography.caption.copyWith(color: c.inkOnBrand),
+        decoration: BoxDecoration(
+          color: c.surfaceElevated,
+          borderRadius: BorderRadius.circular(12),
+        ),
+      ),
+      popupMenuTheme: PopupMenuThemeData(
+        color: c.surfaceElevated.withValues(alpha: 0.96),
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.lg),
+          side: BorderSide(color: c.hairline),
+        ),
+        textStyle: AppTypography.body.copyWith(color: c.ink),
+        labelTextStyle: WidgetStatePropertyAll(
+          AppTypography.body.copyWith(color: c.ink),
         ),
       ),
     );

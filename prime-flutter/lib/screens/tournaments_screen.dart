@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 
-import '../design/glass.dart';
+import '../design/theme/prime_theme_context.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
 import '../design/visuals/ambient_and_progress.dart';
 import '../design/visuals/habit_art.dart';
+import '../ui/kit/components/prime_content_card.dart';
 
 class TournamentsScreen extends StatelessWidget {
   final VoidCallback onShowMessage;
@@ -24,11 +25,13 @@ class TournamentsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = context.prime;
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: p.canvas,
       appBar: AppBar(
-        title: const Text('Турниры'),
-        backgroundColor: AppColors.background,
+        title: Text('Турниры', style: TextStyle(color: p.ink)),
+        backgroundColor: p.canvas,
+        surfaceTintColor: Colors.transparent,
       ),
       body: AmbientCanvas(
         child: ListView(
@@ -41,60 +44,58 @@ class TournamentsScreen extends StatelessWidget {
           children: [
             Text(
               'Турниры',
-              style: AppTypography.largeTitle.copyWith(fontSize: 28),
+              style: AppTypography.largeTitle.copyWith(
+                fontSize: 28,
+                color: p.ink,
+              ),
             ),
             const SizedBox(height: AppSpacing.lg),
-            GlassContainer(
-              padding: const EdgeInsets.all(AppSpacing.lg),
-              borderRadius: BorderRadius.circular(AppRadius.bentoOuter),
-              fillOpacity: 0.06,
-              glow: AppGlow.violet(opacity: 0.15),
+            PrimeContentCard(
               child: Column(
                 children: [
                   const HabitArtObject(kind: HabitArtKind.generic, size: 96),
                   const SizedBox(height: AppSpacing.md),
-                  const Text(
+                  Text(
                     'Сезон «Весенний ритм»',
-                    style: AppTypography.title1,
+                    style: AppTypography.title1.copyWith(color: p.ink),
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: AppSpacing.xs),
-                  const Text(
+                  Text(
                     'Рейтинг по Праймам за 30 дней — без токсичного соревнования.',
                     textAlign: TextAlign.center,
-                    style: AppTypography.bodySecondary,
+                    style: AppTypography.bodySecondary.copyWith(color: p.inkSecondary),
                   ),
                 ],
               ),
             ),
             const SizedBox(height: AppSpacing.lg),
-            Text('Лидерборд (демо)', style: AppTypography.title2),
+            Text('Лидерборд (демо)', style: AppTypography.title2.copyWith(color: p.ink)),
             const SizedBox(height: AppSpacing.sm),
             for (var i = 0; i < _mockLeaderboard.length; i++)
-              GlassContainer(
+              PrimeContentCard(
                 margin: const EdgeInsets.only(bottom: AppSpacing.sm),
-                padding: const EdgeInsets.all(AppSpacing.md),
-                borderRadius: BorderRadius.circular(AppRadius.lg),
-                fillOpacity: i == 2 ? 0.08 : 0.04,
-                glow: i == 2 ? AppGlow.violet(opacity: 0.12) : null,
                 child: Row(
                   children: [
                     Text(
                       '${i + 1}',
                       style: AppTypography.title2.copyWith(
-                        color: AppColors.primarySoft,
+                        color: i == 2 ? p.brandSoft : p.inkMuted,
                       ),
                     ),
                     const SizedBox(width: AppSpacing.md),
                     Expanded(
                       child: Text(
                         _mockLeaderboard[i].$1,
-                        style: AppTypography.body,
+                        style: AppTypography.body.copyWith(
+                          color: i == 2 ? p.ink : p.inkSecondary,
+                          fontWeight: i == 2 ? FontWeight.w700 : FontWeight.w500,
+                        ),
                       ),
                     ),
                     Text(
-                      '${_mockLeaderboard[i].$2} ⭐',
-                      style: AppTypography.caption,
+                      '${_mockLeaderboard[i].$2}',
+                      style: AppTypography.title2.copyWith(color: p.brandSoft),
                     ),
                   ],
                 ),
@@ -102,6 +103,11 @@ class TournamentsScreen extends StatelessWidget {
             const SizedBox(height: AppSpacing.md),
             OutlinedButton(
               onPressed: onShowMessage,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: p.brand,
+                side: BorderSide(color: p.hairlineStrong),
+                minimumSize: const Size.fromHeight(AppControlHeights.button),
+              ),
               child: const Text('Уведомить о старте'),
             ),
           ],

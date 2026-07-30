@@ -18,6 +18,7 @@
 | X-Request-ID correlation | done | middleware + CORS `expose_headers` |
 | DM inbox last message / unread | done | `GET /direct-chats`, `POST /direct-chats/{id}/read`, `DirectConversationRead` |
 | Password reset | done | `POST /auth/forgot-password`, `POST /auth/reset-password` (+ local expose token) |
+| Email verify при регистрации | done | `POST /auth/verify-email`, `POST /auth/resend-verification`; `register` не выдаёт токен, `login` → 403 до подтверждения |
 | Cancel outgoing friend request | done | `DELETE /friends/requests/{id}` + pending_direction in by-nickname |
 
 ## Требуется backend (клиент не имитирует)
@@ -29,7 +30,6 @@
 | Nickname availability | debounce без 404-хака | `GET /users/nickname-available?nick=` | `by-nickname` 404 = free |
 | Push (FCM/APNs) | team ready / messages в фоне | register device + send | local prefs toggle only |
 | Delivery / read receipts | статусы в чате | поля `delivered_at` / `read_at` | только sending/sent/failed |
-| Email verify | подтверждение почты | `/auth/verify` | нет |
 | Block / report user | безопасность | `/users/{id}/block`, `/reports/abuse` | нет UI-API |
 | Delete account | GDPR / settings | `DELETE /users/me` | нет |
 | Logout all devices | безопасность | revoke all refresh/access | нет |

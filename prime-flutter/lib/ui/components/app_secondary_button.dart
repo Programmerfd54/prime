@@ -33,16 +33,16 @@ class AppSecondaryButton extends StatelessWidget {
               onPressed!();
             }
           : null,
-      borderRadius: BorderRadius.circular(AppRadius.md),
+      borderRadius: BorderRadius.circular(AppRadius.button),
       child: AnimatedContainer(
         duration: AppDurations.fast,
         width: double.infinity,
         height: AppControlHeights.button,
         decoration: BoxDecoration(
           color: AppColors.elevatedSurface,
-          borderRadius: BorderRadius.circular(AppRadius.md),
+          borderRadius: BorderRadius.circular(AppRadius.button),
           border: Border.all(color: AppColors.borderStrong),
-          boxShadow: enabled ? AppGlow.violet(opacity: 0.12) : AppElevation.none,
+          boxShadow: enabled ? AppElevation.lifted : AppElevation.none,
         ),
         child: Center(
           child: loading

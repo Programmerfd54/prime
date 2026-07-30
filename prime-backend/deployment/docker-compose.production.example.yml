@@ -1,0 +1,51 @@
+services:
+  prime-postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?set in the deployment environment}
+      POSTGRES_USER: ${POSTGRES_USER:?set in the deployment environment}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in the deployment environment}
+    volumes:
+      - prime_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  prime-api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:?set}:${POSTGRES_PASSWORD:?set}@prime-postgres:5432/${POSTGRES_DB:?set}
+    depends_on:
+      prime-postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ../logs:/app/logs
+      - ../uploads:/app/uploads
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  matrix-synapse:
+    # Pin this value in the real deployment; latest is intentionally not used.
+    image: ${SYNAPSE_IMAGE:?set a reviewed Matrix Synapse image tag}
+    restart: unless-stopped
+    environment:
+      SYNAPSE_CONFIG_DIR: /data
+      SYNAPSE_CONFIG_PATH: /data/homeserver.yaml
+    volumes:
+      - ../matrix:/data
+
+volumes:
+  prime_postgres_data:

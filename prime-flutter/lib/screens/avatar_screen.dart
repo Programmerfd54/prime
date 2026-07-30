@@ -6,7 +6,7 @@ import 'package:provider/provider.dart';
 
 import '../core/media/avatar_upload.dart';
 import '../data/api_client.dart';
-import '../design/glass.dart';
+import '../design/theme/prime_theme_context.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
 import '../providers/auth_provider.dart';
@@ -16,6 +16,8 @@ import '../ui/components/app_header.dart';
 import '../ui/components/app_primary_button.dart';
 import '../ui/components/app_snackbar.dart';
 import '../ui/components/profile/app_avatar.dart';
+import '../ui/kit/components/prime_content_card.dart';
+import '../ui/kit/presentation/profile_surfaces.dart';
 
 class AvatarScreen extends StatefulWidget {
   const AvatarScreen({super.key});
@@ -175,7 +177,7 @@ class _AvatarScreenState extends State<AvatarScreen> {
     final user = context.watch<AuthProvider>().user;
 
     return Scaffold(
-      backgroundColor: AppColors.background,
+      backgroundColor: ProfileSurfaces.canvas,
       appBar: buildAppBackBar(context, title: 'Фото профиля'),
       body: AmbientCanvas(
         child: Padding(
@@ -231,17 +233,13 @@ class _AvatarScreenState extends State<AvatarScreen> {
               ),
             ],
             const SizedBox(height: AppSpacing.lg),
-            GlassContainer(
-              padding: const EdgeInsets.symmetric(
-                horizontal: AppSpacing.md,
-                vertical: AppSpacing.sm,
-              ),
-              borderRadius: BorderRadius.circular(AppRadius.lg),
-              fillOpacity: 0.04,
-              child: const Text(
+            PrimeContentCard(
+              child: Text(
                 'Фото видно в чатах, группах и на главной',
                 textAlign: TextAlign.center,
-                style: AppTypography.bodySecondary,
+                style: AppTypography.bodySecondary.copyWith(
+                  color: context.prime.inkSecondary,
+                ),
               ),
             ),
             const Spacer(),

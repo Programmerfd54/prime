@@ -1,6 +1,6 @@
 from datetime import date, datetime, timezone
 from uuid import uuid4
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Index, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base
 
@@ -33,6 +33,11 @@ class User(Base):
     streak_shields: Mapped[int] = mapped_column(Integer, default=0)
     shield_pending: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # NULL means the signup was never confirmed: such accounts cannot log in.
+    email_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     privacy_settings: Mapped[str] = mapped_column(Text, default="{}")
     onboarding_preferences: Mapped[str] = mapped_column(Text, default="{}")
     matrix_user_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -63,6 +68,8 @@ class WaitingRoomEntry(Base):
     __tablename__ = "waiting_room_entries"
     __table_args__ = (
         UniqueConstraint("user_id", "skill_id", name="uq_waiting_user_skill"),
+        Index("ix_waiting_skill_region_created", "skill_id", "region_code", "created_at"),
+        Index("ix_waiting_skill_expand_created", "skill_id", "allow_other_regions", "created_at"),
     )
 
     id: Mapped[str] = mapped_column(
@@ -76,6 +83,10 @@ class WaitingRoomEntry(Base):
     allow_other_regions: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     expansion_offered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     pair_code: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    pair_start_confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -112,6 +123,8 @@ class GroupMember(Base):
     __tablename__ = "group_members"
     __table_args__ = (
         UniqueConstraint("group_id", "user_id", name="uq_group_member"),
+        Index("ix_group_members_user_active_group", "user_id", "active", "group_id"),
+        Index("ix_group_members_group_active_created", "group_id", "active", "created_at"),
     )
 
     id: Mapped[str] = mapped_column(
@@ -135,6 +148,10 @@ class GroupMember(Base):
 
 class ChatMessage(Base):
     __tablename__ = "chat_messages"
+    __table_args__ = (
+        UniqueConstraint("sender_user_id", "client_id", name="uq_chat_message_sender_client_id"),
+        Index("ix_chat_messages_group_created_id", "group_id", "created_at", "id"),
+    )
 
     id: Mapped[str] = mapped_column(
         String(36),
@@ -153,6 +170,7 @@ class ChatMessage(Base):
     size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     thumbnail_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    client_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -262,6 +280,24 @@ class PasswordResetToken(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class EmailVerificationCode(Base):
+    __tablename__ = "email_verification_codes"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_id: Mapped[str] = mapped_column(String(36), index=True)
+    # HMAC over user id + code, so a leaked table cannot be brute-forced
+    # offline without the app secret.
+    code_hash: Mapped[str] = mapped_column(String(64))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+        server_default=func.now(),
+    )
+
+
 class FriendRequest(Base):
     __tablename__ = "friend_requests"
     __table_args__ = (
@@ -290,6 +326,9 @@ class Friendship(Base):
 
 class DirectMessage(Base):
     __tablename__ = "direct_messages"
+    __table_args__ = (
+        Index("ix_direct_messages_conversation_created_id", "conversation_key", "created_at", "id"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     conversation_key: Mapped[str] = mapped_column(String(73), index=True)
@@ -384,6 +423,10 @@ class UserSkillFavorite(Base):
 
 class Notification(Base):
     __tablename__ = "notifications"
+    __table_args__ = (
+        Index("ix_notifications_user_created_id", "user_id", "created_at", "id"),
+        Index("ix_notifications_user_read_created", "user_id", "read_at", "created_at"),
+    )
 
     id: Mapped[str] = mapped_column(
         String(36),
@@ -461,3 +504,84 @@ class PrimeEvent(Base):
         DateTime(timezone=True),
         server_default=func.now(),
     )
+
+
+class AuthSession(Base):
+    """Server-side session state for short-lived access JWTs."""
+
+    __tablename__ = "auth_sessions"
+    __table_args__ = (
+        Index("ix_auth_sessions_user_active", "user_id", "revoked_at", "expires_at"),
+        Index("ix_auth_sessions_refresh_hash", "refresh_token_hash"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_id: Mapped[str] = mapped_column(String(36), index=True)
+    refresh_token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class RateLimitBucket(Base):
+    """Database-backed abuse counter shared by all API workers."""
+
+    __tablename__ = "rate_limit_buckets"
+
+    key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    window_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class AuditEvent(Base):
+    __tablename__ = "audit_events"
+    __table_args__ = (
+        Index("ix_audit_events_user_created", "user_id", "created_at"),
+        Index("ix_audit_events_action_created", "action", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    action: Mapped[str] = mapped_column(String(80), index=True)
+    request_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class OutboxEvent(Base):
+    __tablename__ = "outbox_events"
+    __table_args__ = (
+        Index("ix_outbox_events_pending", "processed_at", "available_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    topic: Mapped[str] = mapped_column(String(80), index=True)
+    aggregate_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    payload: Mapped[str] = mapped_column(Text, default="{}")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class LocalMediaAsset(Base):
+    __tablename__ = "local_media_assets"
+    __table_args__ = (
+        Index("ix_local_media_assets_owner_created", "owner_user_id", "created_at"),
+        Index("ix_local_media_assets_storage_key", "storage_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    owner_user_id: Mapped[str] = mapped_column(String(36), index=True)
+    storage_key: Mapped[str] = mapped_column(String(128), unique=True)
+    content_type: Mapped[str] = mapped_column(String(160), default="application/octet-stream")
+    filename: Mapped[str] = mapped_column(String(500), default="")
+    size_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    scope_type: Mapped[str] = mapped_column(String(32), default="owner")
+    scope_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

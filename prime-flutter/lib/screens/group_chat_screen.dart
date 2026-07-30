@@ -11,9 +11,9 @@ import '../core/errors/failure_mapper.dart';
 import '../core/media/media_validation.dart';
 import '../core/sync/chat_sync_controller.dart';
 import '../data/api_client.dart';
-import '../design/glass.dart';
 import '../design/haptics.dart';
 import '../design/routes.dart';
+import '../design/theme/prime_theme_context.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
 import '../design/visuals/ambient_and_progress.dart';
@@ -25,12 +25,14 @@ import '../ui/components/app_chat_date_separator.dart';
 import '../ui/components/app_compact_button.dart';
 import '../ui/components/app_header.dart';
 import '../ui/components/app_snackbar.dart';
+import '../ui/components/chat/app_chat_shell.dart';
 import '../ui/components/chat/app_chat_composer.dart';
 import '../ui/components/chat/app_group_chat_message.dart';
 import '../ui/components/editorial/app_group_editorial.dart';
 import '../ui/states/app_connection_banner.dart';
 import '../ui/states/app_error_state.dart';
 import '../ui/states/app_loading_state.dart';
+import '../ui/kit/presentation/profile_surfaces.dart';
 import 'group_detail_screen.dart';
 
 class GroupChatScreen extends StatefulWidget {
@@ -505,24 +507,27 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
         (currentUserIdCompact != null && sender.contains(currentUserIdCompact));
   }
 
+  Widget _opaqueChatStrip({
+    required Widget child,
+    VoidCallback? onTap,
+    Color? backgroundColor,
+  }) {
+    return AppChatHeaderStrip(onTap: onTap, child: child);
+  }
+
   Widget _cycleHeader() {
+    final p = context.prime;
     final group = _group;
     final cycleDay = AppGroupActiveCycleHero.cycleDayFromStart(group?.cycleStartAt);
     final label = cycleDay != null ? 'День $cycleDay из 30 · правила' : 'День — из 30 · правила';
-    return GlassContainer(
-      borderRadius: BorderRadius.zero,
-      fillOpacity: 0.06,
+    return _opaqueChatStrip(
       onTap: _showRulesDialog,
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.md,
-        vertical: AppSpacing.sm,
-      ),
       child: Row(
         children: [
           Icon(
             Icons.calendar_today_outlined,
             size: 16,
-            color: AppColors.primarySoft,
+            color: p.brandSoft,
           ),
           const SizedBox(width: AppSpacing.xs),
           Expanded(
@@ -530,10 +535,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
               label,
               style: AppTypography.caption.copyWith(
                 fontWeight: FontWeight.w600,
+                color: p.ink,
               ),
             ),
           ),
-          Icon(Icons.chevron_right_rounded, color: AppColors.textMuted),
+          Icon(Icons.chevron_right_rounded, color: p.inkMuted),
         ],
       ),
     );
@@ -555,6 +561,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
   }
 
   Widget _dayStatusBar() {
+    final p = context.prime;
     final group = _group;
     if (group == null) return const SizedBox.shrink();
     final teamDay = group.teamDay;
@@ -584,31 +591,23 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
             ? '${AppCopy.waitingReports(remaining)}: $waitingNames'
             : '${AppCopy.waitingReports(remaining)} · $ready/$total';
 
-    return GlassContainer(
-      borderRadius: BorderRadius.zero,
-      fillOpacity: complete ? 0.1 : 0.07,
-      glow: complete
-          ? AppGlow.mint(opacity: 0.2)
-          : AppGlow.violet(opacity: 0.1),
-      padding: const EdgeInsets.fromLTRB(
-        AppSpacing.md,
-        AppSpacing.sm,
-        AppSpacing.md,
-        AppSpacing.sm,
-      ),
+    return _opaqueChatStrip(
+      backgroundColor: complete
+          ? p.mint.withValues(alpha: 0.12)
+          : p.surface.withValues(alpha: 0.96),
       child: Row(
         children: [
           Icon(
             complete ? Icons.check_circle_outline : Icons.groups_outlined,
             size: 18,
-            color: complete ? AppColors.success : AppColors.primarySoft,
+            color: complete ? p.mint : p.brandSoft,
           ),
           const SizedBox(width: AppSpacing.xs),
           Expanded(
             child: Text(
               statusText,
               style: AppTypography.caption.copyWith(
-                color: complete ? AppColors.success : AppColors.textSecondary,
+                color: complete ? p.mint : p.inkSecondary,
                 fontWeight: FontWeight.w600,
               ),
               maxLines: 2,
@@ -662,7 +661,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
             Text(
               'Поздоровайтесь и напишите, во сколько делаете действие',
               textAlign: TextAlign.center,
-              style: AppTypography.bodySecondary,
+              style: AppTypography.bodySecondary.copyWith(
+                color: context.prime.inkSecondary,
+              ),
             ),
           ],
         ),
@@ -673,6 +674,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
   @override
   Widget build(BuildContext context) {
     final currentUser = context.read<AuthProvider>().user;
+    final p = context.prime;
     final currentMatrixId = currentUser?.matrixUserId;
     final currentUserIdCompact = currentUser?.id.replaceAll('-', '');
     final sync = _syncCtrl;
@@ -682,18 +684,16 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     final messages = sync?.messages ?? const <Map<String, dynamic>>[];
     final items = _buildItems(messages);
 
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      resizeToAvoidBottomInset: true,
+    return AppChatShell(
       appBar: AppChatAppBar(
         title: widget.groupName,
         avatar: CircleAvatar(
           radius: 18,
-          backgroundColor: AppColors.surfaceSoft,
+          backgroundColor: p.surfaceSoft,
           child: Text(
             widget.groupName.isEmpty ? '?' : widget.groupName[0].toUpperCase(),
             style: AppTypography.caption.copyWith(
-              color: AppColors.textSecondary,
+              color: p.inkSecondary,
               fontWeight: FontWeight.w600,
             ),
           ),
@@ -701,112 +701,96 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
         actions: [
           IconButton(
             tooltip: 'Обновить',
-            icon: Icon(Icons.refresh_rounded, size: AppIconSizes.md, color: AppColors.textPrimary),
+            icon: Icon(Icons.refresh_rounded, size: AppIconSizes.md, color: p.ink),
             onPressed: _sync,
           ),
         ],
       ),
-      body: AmbientCanvas(
-        child: Stack(
-          children: [
-            Column(
-              children: [
-                AppConnectionBanner(visible: offline, onRetry: _sync),
-                _cycleHeader(),
-                _dayStatusBar(),
-                Expanded(
-                  child: loading
-                      ? const AppLoadingState(label: 'Загрузка чата…')
-                      : error != null && messages.isEmpty
-                          ? AppErrorState(
-                              message: error,
-                              correlationId: sync.errorCorrelationId,
-                              onRetry: _sync,
-                            )
-                          : messages.isEmpty
-                              ? _emptyState()
-                              : ListView.builder(
-                                  controller: _scrollController,
-                                  padding: const EdgeInsets.fromLTRB(
-                                    AppSpacing.md,
-                                    AppSpacing.md,
-                                    AppSpacing.md,
-                                    AppSpacing.xs,
-                                  ),
-                                  itemCount: items.length + (_loadingOlder ? 1 : 0),
-                                  itemBuilder: (context, index) {
-                                    if (_loadingOlder && index == 0) {
-                                      return Padding(
-                                        padding: EdgeInsets.only(bottom: AppSpacing.sm),
-                                        child: Center(
-                                          child: SizedBox.square(
-                                            dimension: 20,
-                                            child: CircularProgressIndicator(
-                                              strokeWidth: 2,
-                                              color: AppColors.primary,
-                                            ),
-                                          ),
-                                        ),
-                                      );
-                                    }
-                                    final itemIndex = _loadingOlder ? index - 1 : index;
-                                    final item = items[itemIndex];
-                                    if (item.isSeparator) {
-                                      return AppChatDateSeparator(label: item.separatorLabel!);
-                                    }
-                                    final msg = item.message!;
-                                    final failed = msg['_status'] == 'failed';
-                                    final clientId = msg['client_id']?.toString();
-                                    return AppGroupChatMessage(
-                                      message: msg,
-                                      isOwn: _isOwnMessage(
-                                        msg,
-                                        currentUser?.id,
-                                        currentMatrixId,
-                                        currentUserIdCompact,
-                                      ),
-                                      timeLabel: _timeLabel(_messageDate(msg)),
-                                      onReact: (emoji) => _toggleReaction(msg, emoji),
-                                      failed: failed,
-                                      onRetry: (!failed || clientId == null || clientId.isEmpty)
-                                          ? null
-                                          : () {
-                                              final me = context.read<AuthProvider>().user?.id;
-                                              if (me != null) {
-                                                sync.retryFailed(clientId, senderUserId: me);
-                                              }
-                                            },
-                                    );
-                                  },
-                                ),
-                ),
-                AppChatComposer(
-                  controller: _controller,
-                  onSend: _send,
-                  onAttach: _showAttachmentMenu,
-                  pending: _pending,
-                  onRemovePending: () => setState(() => _pending = null),
-                  uploading: _uploading || _sending,
-                  uploadProgress: _uploadProgress,
-                  onCancelUpload: _cancelUpload,
-                ),
-              ],
-            ),
-            if (_showScrollToBottom && messages.isNotEmpty)
-              Positioned(
-                right: AppSpacing.md,
-                bottom: 88,
-                child: FloatingActionButton.small(
-                  heroTag: 'group_scroll_bottom',
-                  backgroundColor: AppColors.surfaceSoft,
-                  foregroundColor: AppColors.primarySoft,
-                  onPressed: _scrollToBottom,
-                  child: const Icon(Icons.keyboard_arrow_down_rounded),
-                ),
-              ),
-          ],
-        ),
+      banner: AppConnectionBanner(visible: offline, onRetry: _sync),
+      header: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _cycleHeader(),
+          _dayStatusBar(),
+        ],
       ),
+      messageArea: loading
+          ? const AppLoadingState(label: 'Загрузка чата…')
+          : error != null && messages.isEmpty
+              ? AppErrorState(
+                  message: error,
+                  correlationId: sync.errorCorrelationId,
+                  onRetry: _sync,
+                )
+              : messages.isEmpty
+                  ? _emptyState()
+                  : ListView.builder(
+                      controller: _scrollController,
+                      padding: const EdgeInsets.fromLTRB(
+                        AppSpacing.md,
+                        AppSpacing.md,
+                        AppSpacing.md,
+                        AppSpacing.xs,
+                      ),
+                      itemCount: items.length + (_loadingOlder ? 1 : 0),
+                      itemBuilder: (context, index) {
+                        if (_loadingOlder && index == 0) {
+                          return Padding(
+                            padding: EdgeInsets.only(bottom: AppSpacing.sm),
+                            child: Center(
+                              child: SizedBox.square(
+                                dimension: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: AppColors.primary,
+                                ),
+                              ),
+                            ),
+                          );
+                        }
+                        final itemIndex = _loadingOlder ? index - 1 : index;
+                        final item = items[itemIndex];
+                        if (item.isSeparator) {
+                          return AppChatDateSeparator(label: item.separatorLabel!);
+                        }
+                        final msg = item.message!;
+                        final failed = msg['_status'] == 'failed';
+                        final clientId = msg['client_id']?.toString();
+                        return AppGroupChatMessage(
+                          message: msg,
+                          isOwn: _isOwnMessage(
+                            msg,
+                            currentUser?.id,
+                            currentMatrixId,
+                            currentUserIdCompact,
+                          ),
+                          timeLabel: _timeLabel(_messageDate(msg)),
+                          onReact: (emoji) => _toggleReaction(msg, emoji),
+                          failed: failed,
+                          onRetry: (!failed || clientId == null || clientId.isEmpty)
+                              ? null
+                              : () {
+                                  final me = context.read<AuthProvider>().user?.id;
+                                  if (me != null) {
+                                    sync.retryFailed(clientId, senderUserId: me);
+                                  }
+                                },
+                        );
+                      },
+                    ),
+      composer: AppChatComposer(
+        controller: _controller,
+        onSend: _send,
+        onAttach: _showAttachmentMenu,
+        pending: _pending,
+        onRemovePending: () => setState(() => _pending = null),
+        uploading: _uploading || _sending,
+        uploadProgress: _uploadProgress,
+        onCancelUpload: _cancelUpload,
+      ),
+      showScrollToBottom: _showScrollToBottom && messages.isNotEmpty,
+      onScrollToBottom: _scrollToBottom,
+      scrollHeroTag: 'group_scroll_bottom',
     );
   }
 }

@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/mood/mood_state.dart';
-import '../../../design/liquid/liquid_glass.dart';
 import '../../../design/motion.dart';
 import '../../../design/tokens.dart';
 import '../../../design/typography.dart';
 import '../../../models/report.dart';
+import '../../kit/components/prime_content_card.dart';
 
 String _dayKey(DateTime d) =>
     '${d.year.toString().padLeft(4, '0')}-'
@@ -28,8 +28,7 @@ class MoodCompletionChart extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (moodLog.isEmpty) {
-      return LiquidGlass(
-        padding: const EdgeInsets.all(AppSpacing.md),
+      return PrimeContentCard(
         child: Text(
           'Отмечайте настроение — здесь появится связь с выполнением.',
           style: AppTypography.bodySecondary,
@@ -50,8 +49,7 @@ class MoodCompletionChart extends StatelessWidget {
       }
     }
 
-    return LiquidGlass(
-      padding: const EdgeInsets.all(AppSpacing.md),
+    return PrimeContentCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
