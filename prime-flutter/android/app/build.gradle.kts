@@ -20,7 +20,9 @@ if (keystorePropertiesFile.exists()) {
 
 android {
     namespace = "com.prime.prime"
-    compileSdk = flutter.compileSdkVersion
+    // Current Android plugins require API 36 metadata at compile time. This
+    // does not change minSdk or the set of devices that can install the app.
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

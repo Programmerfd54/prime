@@ -165,7 +165,7 @@ class RealtimeClient extends ChangeNotifier {
     _useSse = true;
     unawaited(_connectSse());
     unawaited(refresh());
-    _pollTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+    _pollTimer = Timer.periodic(const Duration(seconds: 15), (_) {
       if (!_useSse) unawaited(refresh());
     });
   }

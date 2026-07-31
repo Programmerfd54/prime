@@ -16,6 +16,8 @@ from .rate_limit_middleware import global_rate_limit_middleware
 from .matrix import migrate_legacy_tokens
 from .outbox_worker import run_outbox_worker
 from .media_pipeline.worker import run_media_worker
+from .redis_client import close_redis
+from .direct_message_events import close_direct_message_hub
 from .routers import auth, catalog, chat, email, groups, moderation, mfa, notifications, ops, reports, social, users, waiting_room
 
 
@@ -45,21 +47,29 @@ def _validate_production_settings() -> None:
 async def lifespan(app: FastAPI):
     _validate_production_settings()
     logger.info("starting_prime_api")
-    await create_db_schema()
+    if settings.run_db_migrations:
+        await create_db_schema()
     async with SessionLocal() as session:
         migrated = await migrate_legacy_tokens(session)
         if migrated:
             logger.info("matrix_tokens_encrypted", extra={"count": migrated})
     stop_event = asyncio.Event()
-    worker = asyncio.create_task(run_outbox_worker(stop_event))
-    media_worker = asyncio.create_task(run_media_worker(stop_event))
+    workers = []
+    if settings.run_background_workers:
+        workers = [
+            asyncio.create_task(run_outbox_worker(stop_event)),
+            asyncio.create_task(run_media_worker(stop_event)),
+        ]
     try:
         yield
     finally:
         stop_event.set()
-        worker.cancel()
-        media_worker.cancel()
-        await asyncio.gather(worker, media_worker, return_exceptions=True)
+        for worker in workers:
+            worker.cancel()
+        if workers:
+            await asyncio.gather(*workers, return_exceptions=True)
+        await close_direct_message_hub()
+        await close_redis()
     logger.info("stopping_prime_api")
 
 

@@ -290,7 +290,7 @@ async def notify_unlocked_milestones(
             session,
             group_id=group.id,
             type="milestone",
-            title=group.skill_name or group.name,
+            title=skill_name(group.skill_id) or group.name,
             body=f"Открыта веха: {title}",
             payload={"milestone_id": milestone_id},
         )

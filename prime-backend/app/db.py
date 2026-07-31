@@ -20,6 +20,11 @@ if not settings.database_url.startswith("sqlite"):
         pool_timeout=settings.db_pool_timeout_seconds,
         pool_recycle=settings.db_pool_recycle_seconds,
     )
+    if settings.database_use_pgbouncer:
+        _engine_options["connect_args"] = {
+            "statement_cache_size": 0,
+            "prepared_statement_cache_size": 0,
+        }
 engine = create_async_engine(settings.database_url, **_engine_options)
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
@@ -303,7 +308,10 @@ async def create_db_schema() -> None:
             # Grandfather historical ready reports as complete team days so
             # existing users keep primes/streaks under the new rule.
             """
-            INSERT INTO group_days (id, group_id, day_date, status, ready_count, member_count, completed_at)
+            INSERT INTO group_days (
+                id, group_id, day_date, status, ready_count, member_count,
+                completed_at, created_at, updated_at
+            )
             SELECT
                 md5(hr.group_id || ':' || hr.report_date::text),
                 hr.group_id,
@@ -317,7 +325,9 @@ async def create_db_schema() -> None:
                         WHERE gm.group_id = hr.group_id AND gm.active IS TRUE
                     ), 0)
                 ),
-                (hr.report_date::timestamp AT TIME ZONE 'UTC')
+                (hr.report_date::timestamp AT TIME ZONE 'UTC'),
+                now(),
+                now()
             FROM habit_reports hr
             WHERE hr.status = 'ready'
               AND NOT EXISTS (

@@ -12,6 +12,7 @@ import '../core/chat/chat_system_grouping.dart';
 import '../core/errors/failure_mapper.dart';
 import '../core/media/media_validation.dart';
 import '../core/sync/chat_sync_controller.dart';
+import '../core/sync/realtime_client.dart';
 import '../data/api_client.dart';
 import '../design/haptics.dart';
 import '../design/routes.dart';
@@ -51,6 +52,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
   final _scrollController = ScrollController();
   final _picker = ImagePicker();
   ChatSyncController? _syncCtrl;
+  RealtimeClient? _realtime;
   GroupModel? _group;
   bool _started = false;
   bool _sending = false;
@@ -76,6 +78,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     _syncCtrl = ChatSyncController(context.read<ApiClient>())
       ..addListener(_onSyncChanged)
       ..start(kind: ChatChannelKind.group, channelId: widget.groupId);
+    _realtime = context.read<RealtimeClient>()
+      ..addGroupChatUpdateListener(_onGroupChatUpdate);
     unawaited(context.read<SocialRestrictionProvider>().refresh());
     _loadGroup();
   }
@@ -90,6 +94,11 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
   void _onSyncChanged() {
     if (!mounted) return;
     setState(() {});
+  }
+
+  void _onGroupChatUpdate(GroupChatUpdatePush push) {
+    if (push.groupId != widget.groupId) return;
+    unawaited(_syncCtrl?.sync(forceRefresh: true));
   }
 
   void _onScroll() {
@@ -125,6 +134,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _realtime?.removeGroupChatUpdateListener(_onGroupChatUpdate);
     _syncCtrl
       ?..removeListener(_onSyncChanged)
       ..dispose();

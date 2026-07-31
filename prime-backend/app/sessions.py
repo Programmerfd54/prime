@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .config import get_settings
 from .models import AuthSession, User, utcnow
 from .security import create_access_token
+from .direct_message_events import SessionRevokedPush, direct_message_hub
 
 
 def hash_refresh_token(token: str) -> str:
@@ -41,6 +42,10 @@ async def revoke_session(session: AsyncSession, auth_session: AuthSession) -> No
     auth_session.revoked_at = utcnow()
     session.add(auth_session)
     await session.flush()
+    direct_message_hub.publish_session_revoked(
+        auth_session.user_id,
+        SessionRevokedPush(session_id=auth_session.id),
+    )
 
 
 async def revoke_user_sessions(session: AsyncSession, user_id: str) -> None:
@@ -48,4 +53,8 @@ async def revoke_user_sessions(session: AsyncSession, user_id: str) -> None:
         update(AuthSession)
         .where(AuthSession.user_id == user_id, AuthSession.revoked_at.is_(None))
         .values(revoked_at=utcnow())
+    )
+    direct_message_hub.publish_session_revoked(
+        user_id,
+        SessionRevokedPush(session_id="*"),
     )

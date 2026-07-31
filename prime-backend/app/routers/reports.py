@@ -523,7 +523,7 @@ async def create_report(
             session,
             group_id=group.id,
             type="team_report",
-            title=group.skill_name or group.name,
+            title=skill_name(group.skill_id) or group.name,
             body=body_text,
             exclude_user_id=user.id,
         )

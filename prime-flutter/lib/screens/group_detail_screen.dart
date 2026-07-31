@@ -130,8 +130,8 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     // Keep polling during prep even when SSE is connected — mobile reconnects
     // and missed group_update events are common while waiting on others.
     final interval = _realtime?.isSseConnected == true
-        ? const Duration(seconds: 4)
-        : const Duration(seconds: 3);
+        ? const Duration(seconds: 15)
+        : const Duration(seconds: 10);
     _prepPollTimer = Timer.periodic(interval, (_) {
       if (mounted) unawaited(_refreshGroup(silent: true));
     });

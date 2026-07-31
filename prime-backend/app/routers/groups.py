@@ -549,7 +549,7 @@ async def intro_continue(
             session,
             group_id=group.id,
             type="team_activity",
-            title=group.skill_name or group.name,
+            title=skill_name(group.skill_id) or group.name,
             body=f"@{user.nickname} подтвердил участие",
             exclude_user_id=user.id,
         )
@@ -695,7 +695,7 @@ async def rules_accept(
             session,
             group_id=group.id,
             type="team_activity",
-            title=group.skill_name or group.name,
+            title=skill_name(group.skill_id) or group.name,
             body=f"@{user.nickname} принял командный договор",
             exclude_user_id=user.id,
         )

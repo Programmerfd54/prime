@@ -17,6 +17,7 @@ from ..direct_message_events import (
     GroupChatUpdatePush,
     GroupUpdatePush,
     NotificationPush,
+    SessionRevokedPush,
     WaitingRoomUpdatePush,
     direct_message_hub,
 )
@@ -262,12 +263,17 @@ async def _notification_stream(user_id: str, auth_session_id: str):
     seen_ids: set[str] | None = None
     last_heartbeat = time.monotonic()
     last_direct_message_at: datetime | None = None
+    last_reconcile = time.monotonic() - 60
     queue = direct_message_hub.subscribe(user_id)
 
     try:
         while True:
             try:
-                push = await asyncio.wait_for(queue.get(), timeout=1.0)
+                push = await asyncio.wait_for(queue.get(), timeout=15.0)
+                if isinstance(push, SessionRevokedPush):
+                    if push.session_id in {"*", auth_session_id}:
+                        break
+                    continue
                 if isinstance(push, NotificationPush):
                     data = json.dumps(push.notification, ensure_ascii=False)
                     yield f"event: notification\ndata: {data}\n\n"
@@ -332,6 +338,14 @@ async def _notification_stream(user_id: str, auth_session_id: str):
                 continue
             except asyncio.TimeoutError:
                 pass
+
+            now = time.monotonic()
+            if now - last_reconcile < 60:
+                if now - last_heartbeat >= 15:
+                    yield ": heartbeat\n\n"
+                    last_heartbeat = now
+                continue
+            last_reconcile = now
 
             try:
                 async with SessionLocal() as session:

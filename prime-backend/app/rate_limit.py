@@ -12,6 +12,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import RateLimitBucket, utcnow
+from .redis_client import get_redis
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -72,6 +73,13 @@ async def record_failure(
     *,
     window_seconds: int,
 ) -> None:
+    redis = await get_redis()
+    if redis is not None:
+        key = f"prime:rate-limit:{bucket_key(raw_key)}"
+        attempts = await redis.incr(key)
+        if attempts == 1:
+            await redis.expire(key, window_seconds)
+        return
     key = bucket_key(raw_key)
     now = utcnow()
     row = await session.scalar(select(RateLimitBucket).where(RateLimitBucket.key == key))
@@ -92,6 +100,12 @@ async def enforce(
     window_seconds: int,
     detail: str,
 ) -> None:
+    redis = await get_redis()
+    if redis is not None:
+        attempts = int(await redis.get(f"prime:rate-limit:{bucket_key(raw_key)}") or 0)
+        if attempts >= limit:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=detail)
+        return
     key = bucket_key(raw_key)
     now = utcnow()
     row = await session.scalar(select(RateLimitBucket).where(RateLimitBucket.key == key))

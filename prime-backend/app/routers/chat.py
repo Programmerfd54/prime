@@ -262,7 +262,7 @@ async def chat_send_message_new(
             session,
             group_id=group.id,
             type="group_chat",
-            title=group.skill_name or group.name,
+            title=skill_name(group.skill_id) or group.name,
             body=f"@{user.nickname}: {chat_message_preview(body, msgtype)}",
             payload={"message_id": message.id},
             exclude_user_id=user.id,

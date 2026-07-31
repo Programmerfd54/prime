@@ -15,12 +15,12 @@ SkillModel _skill(String id, {String name = 'Test'}) => SkillModel(
 void main() {
   group('HabitFitEngine.score', () {
     test('perfect match on goal, time, difficulty and time-of-day scores 100', () {
-      // morning-focus: 15 min, Утро, Средняя difficulty.
+      // morning-focus: 40 min, Утро, Средняя difficulty.
       final result = HabitFitEngine.score(
         _skill('morning-focus'),
         const HabitFitInput(
           goals: [OnboardingGoal.betterMorning],
-          availableMinutes: 15,
+          availableMinutes: 40,
           preferredTimeOfDay: PreferredTimeOfDay.morning,
           difficultyPreference: DifficultyPreference.medium,
         ),
@@ -60,12 +60,12 @@ void main() {
 
     test('time budget far outside the program duration scores low time fit', () {
       final closeFit = HabitFitEngine.score(
-        _skill('morning-focus'), // 15 min
-        const HabitFitInput(availableMinutes: 15),
+        _skill('morning-focus'), // 40 min
+        const HabitFitInput(availableMinutes: 40),
       );
       final farFit = HabitFitEngine.score(
         _skill('morning-focus'),
-        const HabitFitInput(availableMinutes: 60),
+        const HabitFitInput(availableMinutes: 90),
       );
       expect(closeFit.reasons, contains('fits_available_time'));
       expect(farFit.reasons, contains('time_budget_mismatch'));
@@ -130,7 +130,7 @@ void main() {
         ],
         const HabitFitInput(
           goals: [OnboardingGoal.betterMorning],
-          availableMinutes: 15,
+          availableMinutes: 40,
           preferredTimeOfDay: PreferredTimeOfDay.morning,
         ),
       );

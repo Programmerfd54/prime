@@ -3,8 +3,20 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+import json
+import logging
+import os
+from dataclasses import asdict, dataclass
 from typing import Any, Union
+from uuid import uuid4
+
+from .config import get_settings
+from .redis_client import get_redis
+
+
+logger = logging.getLogger("prime.realtime")
+REDIS_CHANNEL = "prime:sse:v1"
+PROCESS_ID = f"{os.getpid()}:{uuid4().hex}"
 
 
 @dataclass(frozen=True)
@@ -56,6 +68,13 @@ class GroupChatUpdatePush:
     group_id: str
 
 
+@dataclass(frozen=True)
+class SessionRevokedPush:
+    """Close matching live streams immediately after logout/revocation."""
+
+    session_id: str
+
+
 RealtimePush = Union[
     DirectMessagePush,
     DirectChatReadPush,
@@ -63,16 +82,19 @@ RealtimePush = Union[
     WaitingRoomUpdatePush,
     GroupUpdatePush,
     GroupChatUpdatePush,
+    SessionRevokedPush,
 ]
 
 
 class DirectMessageEventHub:
     def __init__(self) -> None:
         self._queues: dict[str, list[asyncio.Queue[RealtimePush]]] = {}
+        self._redis_task: asyncio.Task | None = None
 
     def subscribe(self, user_id: str) -> asyncio.Queue[RealtimePush]:
         queue: asyncio.Queue[RealtimePush] = asyncio.Queue(maxsize=64)
         self._queues.setdefault(user_id, []).append(queue)
+        self._ensure_redis_listener()
         return queue
 
     @property
@@ -130,7 +152,20 @@ class DirectMessageEventHub:
     ) -> None:
         self._enqueue(recipient_user_id, push)
 
-    def _enqueue(self, recipient_user_id: str, push: RealtimePush) -> None:
+    def publish_session_revoked(
+        self,
+        recipient_user_id: str,
+        push: SessionRevokedPush,
+    ) -> None:
+        self._enqueue(recipient_user_id, push)
+
+    def _enqueue(
+        self,
+        recipient_user_id: str,
+        push: RealtimePush,
+        *,
+        broadcast: bool = True,
+    ) -> None:
         for queue in self._queues.get(recipient_user_id, []):
             try:
                 queue.put_nowait(push)
@@ -144,9 +179,90 @@ class DirectMessageEventHub:
                     queue.put_nowait(push)
                 except asyncio.QueueFull:
                     pass
+        if broadcast and get_settings().redis_url:
+            asyncio.create_task(self._broadcast(recipient_user_id, push))
+
+    def _ensure_redis_listener(self) -> None:
+        if not get_settings().redis_url:
+            return
+        if self._redis_task is None or self._redis_task.done():
+            self._redis_task = asyncio.create_task(self._redis_listener())
+
+    async def _broadcast(self, recipient_user_id: str, push: RealtimePush) -> None:
+        redis = await get_redis()
+        if redis is None:
+            return
+        event = {
+            "origin": PROCESS_ID,
+            "recipient_user_id": recipient_user_id,
+            "kind": type(push).__name__,
+            "payload": asdict(push),
+        }
+        try:
+            await redis.publish(REDIS_CHANNEL, json.dumps(event, ensure_ascii=False))
+        except Exception:
+            logger.warning("sse_redis_publish_failed", exc_info=True)
+
+    async def _redis_listener(self) -> None:
+        push_types = {
+            item.__name__: item
+            for item in (
+                DirectMessagePush,
+                DirectChatReadPush,
+                NotificationPush,
+                WaitingRoomUpdatePush,
+                GroupUpdatePush,
+                GroupChatUpdatePush,
+                SessionRevokedPush,
+            )
+        }
+        while True:
+            redis = await get_redis()
+            if redis is None:
+                await asyncio.sleep(2)
+                continue
+            pubsub = None
+            try:
+                pubsub = redis.pubsub(ignore_subscribe_messages=True)
+                await pubsub.subscribe(REDIS_CHANNEL)
+                async for message in pubsub.listen():
+                    raw = message.get("data")
+                    if not isinstance(raw, str):
+                        continue
+                    event = json.loads(raw)
+                    if event.get("origin") == PROCESS_ID:
+                        continue
+                    cls = push_types.get(str(event.get("kind") or ""))
+                    recipient = str(event.get("recipient_user_id") or "")
+                    payload = event.get("payload")
+                    if cls is None or not recipient or not isinstance(payload, dict):
+                        continue
+                    self._enqueue(recipient, cls(**payload), broadcast=False)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning("sse_redis_listener_failed", exc_info=True)
+                await asyncio.sleep(2)
+            finally:
+                if pubsub is not None:
+                    try:
+                        await pubsub.aclose()
+                    except Exception:
+                        pass
+
+    async def close(self) -> None:
+        task = self._redis_task
+        self._redis_task = None
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
 
 direct_message_hub = DirectMessageEventHub()
+
+
+async def close_direct_message_hub() -> None:
+    await direct_message_hub.close()
 
 __all__ = [
     "DirectChatReadPush",
@@ -155,7 +271,9 @@ __all__ = [
     "GroupChatUpdatePush",
     "GroupUpdatePush",
     "NotificationPush",
+    "SessionRevokedPush",
     "RealtimePush",
     "WaitingRoomUpdatePush",
     "direct_message_hub",
+    "close_direct_message_hub",
 ]

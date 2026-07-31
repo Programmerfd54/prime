@@ -44,7 +44,7 @@ class ChatSyncController extends ChangeNotifier {
   bool _needsFreshSync = true;
   bool _syncQueued = false;
   bool _queuedForceRefresh = false;
-  Duration pollInterval = const Duration(seconds: 1);
+  Duration pollInterval = const Duration(seconds: 15);
 
   void start({
     required ChatChannelKind kind,
@@ -139,8 +139,8 @@ class ChatSyncController extends ChangeNotifier {
       _queuedForceRefresh = _queuedForceRefresh || forceRefresh;
       return;
     }
-    // Open direct threads poll every second — always bypass SWR cache so live
-    // delivery works even when SSE carries only message_id (no payload).
+    // Open threads use SSE for immediate delivery and periodic HTTP only as a
+    // reconciliation fallback. Always bypass SWR cache for direct messages.
     final refresh = forceRefresh ||
         _needsFreshSync ||
         _queuedForceRefresh ||
