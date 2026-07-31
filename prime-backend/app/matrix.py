@@ -15,7 +15,6 @@ from .config import get_settings
 from .models import LocalMediaAsset, User
 from .secret_box import decrypt_secret, encrypt_secret
 
-
 logger = logging.getLogger("prime.matrix")
 _matrix_semaphore = asyncio.Semaphore(1)
 _matrix_retry_attempts = 3
@@ -116,16 +115,19 @@ async def _store_local_media(
         size_bytes=len(data),
         scope_type=scope_type,
         scope_id=scope_id,
+        processing_status="QUARANTINE",
     )
     session.add(asset)
     await session.flush()
-    return f"local://{asset.id}"
+    return f"pending://{asset.id}"
 
 
 def mxc_to_http(mxc_url: str | None) -> str | None:
     if not mxc_url or not mxc_url.startswith("mxc://"):
         if mxc_url and mxc_url.startswith("local://"):
             return f"/api/v1/local-media/{quote(mxc_url.removeprefix('local://'), safe='')}"
+        if mxc_url and mxc_url.startswith("pending://"):
+            return f"/api/v1/media/assets/{quote(mxc_url.removeprefix('pending://'), safe='')}/status"
         return mxc_url
     server_media = mxc_url.removeprefix("mxc://")
     if "/" not in server_media:
@@ -384,9 +386,11 @@ async def upload_media(
     scope_type: str = "owner",
     scope_id: str | None = None,
 ) -> str:
+    from .media_scope import record_media_upload
+
     user_token = _access_token(user)
     if not matrix_available() or not user_token:
-        return await _store_local_media(
+        media_url = await _store_local_media(
             user,
             session,
             filename,
@@ -395,6 +399,14 @@ async def upload_media(
             scope_type,
             scope_id,
         )
+        await record_media_upload(
+            session,
+            owner=user,
+            media_url=media_url,
+            scope_type=scope_type,
+            scope_id=scope_id,
+        )
+        return media_url
 
     settings = _settings()
     try:
@@ -412,13 +424,13 @@ async def upload_media(
                 content=data,
             )
             response.raise_for_status()
-            return response.json()["content_uri"]
+            media_url = response.json()["content_uri"]
     except Exception:
         logger.exception(
             "matrix_media_upload_failed_using_local_storage",
             extra={"user_id": user.id},
         )
-        return await _store_local_media(
+        media_url = await _store_local_media(
             user,
             session,
             filename,
@@ -427,3 +439,11 @@ async def upload_media(
             scope_type,
             scope_id,
         )
+    await record_media_upload(
+        session,
+        owner=user,
+        media_url=media_url,
+        scope_type=scope_type,
+        scope_id=scope_id,
+    )
+    return media_url

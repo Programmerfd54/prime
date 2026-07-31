@@ -6,16 +6,22 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
+import 'package:shared_preferences/shared_preferences.dart';
+
 import '../core/analytics/analytics.dart';
+import '../core/groups/group_member_today_status.dart';
+import '../core/groups/group_prep_state.dart';
+import '../ui/components/phase_celebration.dart';
+import '../core/habits/habit_program_metadata.dart';
 import '../core/errors/failure_mapper.dart';
 import '../core/pending/report_queue.dart';
 import '../core/sync/realtime_client.dart';
+import '../core/sync/waiting_room_poller.dart';
 import '../data/api_client.dart';
 import '../design/routes.dart';
 import '../design/theme/prime_theme_context.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
-import '../l10n/copy.dart';
 import '../models/group.dart';
 import '../models/report.dart';
 import '../providers/auth_provider.dart';
@@ -23,11 +29,12 @@ import '../design/visuals/ambient_and_progress.dart';
 import '../ui/kit/components/prime_content_card.dart';
 import '../ui/kit/presentation/profile_surfaces.dart';
 import '../ui/components/app_dialog.dart';
+import '../ui/components/editorial/app_habit_coach_panel.dart';
 import '../ui/components/editorial/app_group_prep_chat.dart';
 import '../ui/components/editorial/app_group_editorial.dart';
 import '../ui/components/editorial/app_weekly_team_challenge.dart';
-import '../ui/components/editorial/app_group_pulse.dart';
 import '../ui/components/editorial/app_group_recap.dart';
+import '../ui/components/editorial/app_group_today_hub.dart';
 import '../ui/components/app_header.dart';
 import '../ui/components/app_primary_button.dart';
 import '../ui/components/app_secondary_button.dart';
@@ -35,6 +42,7 @@ import '../ui/components/app_snackbar.dart';
 import '../ui/components/app_textarea.dart';
 import '../ui/states/app_loading_state.dart';
 import '../widgets/async_error_view.dart';
+import 'cycle_transformation_screen.dart';
 import 'group_chat_screen.dart';
 import 'public_profile_screen.dart';
 
@@ -55,16 +63,18 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
   bool _checkInSending = false;
   String? _error;
   String? _errorCorrelationId;
-  String? _actionWindow;
   bool _cycleCompletedEmitted = false;
+  String? _lastPrepPhaseKey;
   final _reportCtrl = TextEditingController();
   RealtimeClient? _realtime;
   Timer? _prepPollTimer;
+  _ActiveGroupTab _activeTab = _ActiveGroupTab.today;
 
   @override
   void dispose() {
     _prepPollTimer?.cancel();
     _realtime?.removeGroupUpdateListener(_onGroupUpdate);
+    _realtime?.removeListener(_onRealtimeStateChanged);
     _reportCtrl.dispose();
     super.dispose();
   }
@@ -78,13 +88,36 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
       if (!mounted) return;
       _realtime = context.read<RealtimeClient>();
       _realtime!.addGroupUpdateListener(_onGroupUpdate);
+      _realtime!.addListener(_onRealtimeStateChanged);
+      _syncPrepPoll(_group);
     });
     _loadInitial();
   }
 
   void _onGroupUpdate(GroupUpdatePush push) {
     if (push.groupId != widget.groupId || !mounted) return;
+    if (push.reason == 'milestone_unlocked' && push.milestoneId != null) {
+      unawaited(_showMilestoneCelebration(push.milestoneId!));
+    }
+    final local = _group;
+    final phaseAdvanced = push.phase == 'active' &&
+        local != null &&
+        local.status != GroupStatus.active;
+    final revisionNewer = local == null ||
+        push.revision <= 0 ||
+        push.revision > local.revision;
+    if (!phaseAdvanced &&
+        !revisionNewer &&
+        push.reason != 'milestone_unlocked' &&
+        push.reason != 'cycle_started') {
+      return;
+    }
     unawaited(_refreshGroup(silent: true));
+  }
+
+  void _onRealtimeStateChanged() {
+    if (!mounted) return;
+    _syncPrepPoll(_group);
   }
 
   void _syncPrepPoll(GroupModel? group) {
@@ -94,7 +127,12 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
             group.status != GroupStatus.rulesPending)) {
       return;
     }
-    _prepPollTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+    // Keep polling during prep even when SSE is connected — mobile reconnects
+    // and missed group_update events are common while waiting on others.
+    final interval = _realtime?.isSseConnected == true
+        ? const Duration(seconds: 4)
+        : const Duration(seconds: 3);
+    _prepPollTimer = Timer.periodic(interval, (_) {
       if (mounted) unawaited(_refreshGroup(silent: true));
     });
   }
@@ -113,24 +151,17 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     unawaited(ReportQueue.instance.flush(api));
     try {
       final group = GroupModel.fromJson(await api.getGroup(widget.groupId));
-      CalendarDay? todayReport;
-      if (group.status == GroupStatus.active) {
-        final calendar =
-            CalendarOut.fromJson(await api.calendar(widget.groupId));
-        for (final day in calendar.days) {
-          if (_sameDate(day.date, calendar.today)) {
-            todayReport = day;
-            break;
-          }
-        }
-      }
+      final todayReport = group.myTodayReport;
       if (mounted) {
+        final previous = _group;
         setState(() {
           _group = group;
           _todayReport = todayReport;
           if (!silent) _loading = false;
         });
+        _maybeCelebratePhaseTransition(previous, group);
         _syncPrepPoll(group);
+        unawaited(_maybeOpenCycleTransformation(group));
       } else {
         _group = group;
         _todayReport = todayReport;
@@ -141,16 +172,6 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
           groupId: group.id,
           skillId: group.skillId,
         );
-      }
-      try {
-        final prefs = await api.getPreferences();
-        if (mounted) {
-          setState(() => _actionWindow = prefs['preferred_action_window'] as String?);
-        } else {
-          _actionWindow = prefs['preferred_action_window'] as String?;
-        }
-      } catch (_) {
-        if (mounted) setState(() => _actionWindow = null);
       }
     } catch (e) {
       if (mounted) {
@@ -166,21 +187,36 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
 
   Future<void> _load() => _refreshGroup(silent: false);
 
-  void _applyGroupJson(Map<String, dynamic> json) {
-    if (!mounted) return;
-    setState(() {
-      _group = GroupModel.fromJson(json);
-    });
-    _syncPrepPoll(_group);
+  DateTime? _supportCooldownUntil;
+
+  void _maybeCelebratePhaseTransition(GroupModel? before, GroupModel after) {
+    if (before == null) return;
+    final key = '${after.status.name}:${after.revision}';
+    if (_lastPrepPhaseKey == key) return;
+    final introToRules = before.status == GroupStatus.introduction &&
+        after.status == GroupStatus.rulesPending;
+    final rulesToActive = before.status == GroupStatus.rulesPending &&
+        after.status == GroupStatus.active;
+    if ((introToRules || rulesToActive) && mounted) {
+      unawaited(
+        showPhaseCelebration(
+          context,
+          kind: introToRules
+              ? PhaseCelebrationKind.introToRules
+              : PhaseCelebrationKind.rulesToActive,
+        ),
+      );
+    }
+    _lastPrepPhaseKey = key;
   }
 
-  MemberModel? _myMember(GroupModel group) {
-    final userId = context.read<AuthProvider>().user?.id;
-    if (userId == null) return null;
-    for (final member in group.members) {
-      if (member.userId == userId) return member;
-    }
-    return null;
+  void _applyGroupJson(Map<String, dynamic> json) {
+    if (!mounted) return;
+    final previous = _group;
+    final next = GroupModel.fromJson(json);
+    setState(() => _group = next);
+    _maybeCelebratePhaseTransition(previous, next);
+    _syncPrepPoll(_group);
   }
 
   GroupModel _optimisticConfirm(GroupModel group, {required bool rules}) {
@@ -195,9 +231,6 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     }).toList();
     return group.copyWith(members: members);
   }
-
-  bool _sameDate(DateTime a, DateTime b) =>
-      a.year == b.year && a.month == b.month && a.day == b.day;
 
   Future<void> _confirm() async {
     final previous = _group;
@@ -223,15 +256,47 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
   }
 
   Future<void> _changeGroup() async {
-    await _runAction(
-      () => context.read<ApiClient>().changeIntroGroup(widget.groupId),
+    final agreed = await showAppConfirmDialog(
+      context: context,
+      title: 'Сменить команду?',
+      body: 'Вы выйдете из этой команды, а поиск по привычке начнётся заново. '
+          'Остальным участникам сразу покажем, что ищем замену.',
+      confirmLabel: 'Сменить команду',
+      cancelLabel: 'Остаться',
+      destructive: true,
     );
-    if (mounted) Navigator.of(context).pop();
+    if (agreed != true || !mounted || _actionInProgress) return;
+    setState(() => _actionInProgress = true);
+    try {
+      final payload =
+          await context.read<ApiClient>().changeIntroGroup(widget.groupId);
+      if (!mounted) return;
+      final waiting = WaitingRoomStatus.fromJson(payload);
+      final poller = context.read<WaitingRoomPoller>();
+      poller.applySnapshot(waiting);
+      poller.start(immediate: false);
+      showAppSnackBar(context, 'Новый поиск уже начался');
+      Navigator.of(context).pop(true);
+    } catch (e) {
+      if (mounted) {
+        showAppSnackBar(context, FailureMapper.from(e).message);
+      }
+    } finally {
+      if (mounted) setState(() => _actionInProgress = false);
+    }
   }
 
   Future<void> _vote(String choice) async {
-    await _runAction(
+    final confirmation = switch (choice) {
+      'continue_together' => 'Вы выбрали продолжить этой командой',
+      'new_skill' => 'Вы выбрали новую привычку',
+      'harder' => 'Вы выбрали более сложный цикл',
+      'recovery' => 'Неделя восстановления выбрана',
+      _ => 'Выбор сохранён',
+    };
+    await _runGroupAction(
       () => context.read<ApiClient>().vote(widget.groupId, choice),
+      onSuccess: () => showAppSnackBar(context, confirmation),
     );
   }
 
@@ -239,8 +304,9 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     if (_checkInSending) return;
     setState(() => _checkInSending = true);
     try {
-      await context.read<ApiClient>().groupCheckIn(widget.groupId, kind);
-      await _refreshGroup(silent: true);
+      final payload =
+          await context.read<ApiClient>().groupCheckIn(widget.groupId, kind);
+      _applyGroupJson(payload);
     } catch (e) {
       if (ApiClient.isNetworkError(e)) {
         await ReportQueue.instance.enqueueCheckIn(
@@ -248,7 +314,8 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
           kind: kind,
         );
         if (mounted) {
-          showAppSnackBar(context, 'Нет сети — отправим отметку при подключении');
+          showAppSnackBar(
+              context, 'Нет сети — отправим отметку при подключении');
         }
       } else if (mounted) {
         showAppSnackBar(context, FailureMapper.from(e).message);
@@ -256,6 +323,107 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
     } finally {
       if (mounted) setState(() => _checkInSending = false);
     }
+  }
+
+  Future<void> _support(MemberModel member) async {
+    if (_actionInProgress) return;
+    if (_supportCooldownUntil != null &&
+        DateTime.now().isBefore(_supportCooldownUntil!)) {
+      final minutes = _supportCooldownUntil!.difference(DateTime.now()).inMinutes;
+      if (mounted) {
+        showAppSnackBar(
+          context,
+          'Поддержку можно отправить через ${minutes.clamp(1, 10)} мин',
+        );
+      }
+      return;
+    }
+    setState(() => _actionInProgress = true);
+    try {
+      final payload = await context.read<ApiClient>().supportGroupMember(
+            groupId: widget.groupId,
+            targetUserId: member.userId,
+          );
+      _applyGroupJson(payload);
+      if (mounted) {
+        final nickname = member.profile?.nickname ?? '';
+        showAppSnackBar(
+          context,
+          nickname.isEmpty
+              ? 'Поддержка отправлена'
+              : 'Поддержка для @$nickname отправлена',
+        );
+      }
+    } catch (e) {
+      final failure = FailureMapper.from(e);
+      if (failure.statusCode == 429 && mounted) {
+        setState(
+          () => _supportCooldownUntil =
+              DateTime.now().add(const Duration(minutes: 10)),
+        );
+      }
+      if (mounted) showAppSnackBar(context, failure.message);
+    } finally {
+      if (mounted) setState(() => _actionInProgress = false);
+    }
+  }
+
+  Future<void> _reactToReport(String messageId, String emoji) async {
+    try {
+      await context.read<ApiClient>().chatToggleReaction(messageId, emoji);
+      if (mounted) showAppSnackBar(context, 'Реакция отправлена');
+    } catch (e) {
+      if (mounted) showAppSnackBar(context, FailureMapper.from(e).message);
+    }
+  }
+
+  Future<void> _maybeOpenCycleTransformation(GroupModel group) async {
+    if (group.status != GroupStatus.voting &&
+        group.status != GroupStatus.completed) {
+      return;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    final key = 'cycle_transform_seen_${group.id}';
+    if (prefs.getBool(key) == true || !mounted) return;
+    await prefs.setBool(key, true);
+    if (!mounted) return;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (_) => CycleTransformationScreen(
+          group: group,
+          onContinueTogether: () {
+            Navigator.of(context).pop();
+            unawaited(_vote('continue_together'));
+          },
+          onNewSkill: () {
+            Navigator.of(context).pop();
+            unawaited(_vote('new_skill'));
+          },
+          onHarder: () {
+            Navigator.of(context).pop();
+            unawaited(_vote('harder'));
+          },
+          onRecovery: () {
+            Navigator.of(context).pop();
+            unawaited(_vote('recovery'));
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showMilestoneCelebration(String milestoneId) async {
+    if (!mounted) return;
+    final prefs = await SharedPreferences.getInstance();
+    final key = 'milestone_seen_${widget.groupId}_$milestoneId';
+    if (prefs.getBool(key) == true) return;
+    await prefs.setBool(key, true);
+    if (!mounted) return;
+    await showPhaseCelebration(
+      context,
+      kind: PhaseCelebrationKind.teamDayClosed,
+    );
   }
 
   Future<void> _runGroupAction(
@@ -273,25 +441,6 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
       if (rollback != null && mounted) {
         setState(() => _group = rollback);
       }
-      if (mounted) {
-        showAppSnackBar(context, FailureMapper.from(e).message);
-      }
-    } finally {
-      if (mounted) setState(() => _actionInProgress = false);
-    }
-  }
-
-  Future<void> _runAction(
-    Future<Object?> Function() action, {
-    VoidCallback? onSuccess,
-  }) async {
-    if (_actionInProgress) return;
-    setState(() => _actionInProgress = true);
-    try {
-      await action();
-      await _refreshGroup(silent: true);
-      onSuccess?.call();
-    } catch (e) {
       if (mounted) {
         showAppSnackBar(context, FailureMapper.from(e).message);
       }
@@ -360,6 +509,7 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
       context: context,
       child: _ReportSheet(
         groupId: widget.groupId,
+        skillId: _group?.skillId,
         controller: _reportCtrl,
         editing: editing,
         initialAttachments: editing
@@ -439,10 +589,12 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
         ),
       );
     }
-    final myMember = _myMember(g);
-    final confirmedCount =
-        g.members.where((m) => m.confirmedParticipation).length;
-    final acceptedCount = g.members.where((m) => m.acceptedRules).length;
+    final currentUserId = context.watch<AuthProvider>().user?.id;
+    final prep = GroupPrepStateResolver.resolve(
+      group: g,
+      currentUserId: currentUserId,
+      onOpenChat: () => _openChat(g),
+    );
     final showPrepChat = g.status == GroupStatus.introduction ||
         g.status == GroupStatus.rulesPending;
     final memberStatusPhase = g.status == GroupStatus.rulesPending
@@ -486,137 +638,216 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
                         },
                       ),
                       const SizedBox(height: AppSpacing.sm),
-                      if (myMember?.confirmedParticipation != true) ...[
-                        Text(
-                          AppCopy.teamReadyConfirm,
-                          textAlign: TextAlign.center,
-                          style: AppTypography.caption.copyWith(
-                            color: AppColors.success,
-                          ),
+                      Text(
+                        prep.title,
+                        textAlign: TextAlign.center,
+                        style: AppTypography.title2,
+                      ),
+                      const SizedBox(height: AppSpacing.xxs),
+                      Text(
+                        prep.subtitle,
+                        textAlign: TextAlign.center,
+                        style: AppTypography.caption.copyWith(
+                          color: AppColors.success,
                         ),
-                        const SizedBox(height: AppSpacing.sm),
-                        AppPrimaryButton(
-                          label: AppCopy.confirmParticipation,
-                          icon: Icons.check_circle_outline,
-                          loading: _actionInProgress,
-                          success: true,
-                          onPressed: _actionInProgress ? null : _confirm,
-                        ),
-                      ] else ...[
-                        Text(
-                          'Вы подтвердили · ждём ${g.maxMembers - confirmedCount} из ${g.maxMembers}',
-                          textAlign: TextAlign.center,
-                          style: AppTypography.caption.copyWith(
-                            color: AppColors.success,
-                          ),
-                        ),
-                        const SizedBox(height: AppSpacing.sm),
-                        AppPrimaryButton(
-                          label: 'Участие подтверждено',
-                          icon: Icons.check_circle,
-                          success: true,
-                          onPressed: null,
+                      ),
+                      const SizedBox(height: AppSpacing.sm),
+                      AppPrimaryButton(
+                        label: prep.primaryLabel,
+                        icon: Icons.check_circle_outline,
+                        loading: _actionInProgress,
+                        success:
+                            prep.phase == GroupPrepPhase.waitingOthersConfirm,
+                        onPressed: prep.primaryEnabled &&
+                                !_actionInProgress &&
+                                prep.phase == GroupPrepPhase.teamGathered
+                            ? _confirm
+                            : null,
+                      ),
+                      if (prep.showSecondaryChangeGroup) ...[
+                        const SizedBox(height: AppSpacing.xs),
+                        AppSecondaryButton(
+                          label: 'Сменить группу',
+                          onPressed: _actionInProgress ? null : _changeGroup,
                         ),
                       ],
-                      const SizedBox(height: AppSpacing.xs),
-                      AppSecondaryButton(
-                        label: 'Сменить группу',
-                        onPressed: _actionInProgress ? null : _changeGroup,
-                      ),
+                      if (prep.secondaryLabel != null &&
+                          prep.onSecondary != null) ...[
+                        const SizedBox(height: AppSpacing.xs),
+                        AppSecondaryButton(
+                          label: prep.secondaryLabel!,
+                          icon: Icons.chat_bubble_outline_rounded,
+                          onPressed: prep.onSecondary,
+                        ),
+                      ],
                       const SizedBox(height: AppSpacing.md),
                     ],
                     if (g.status == GroupStatus.rulesPending) ...[
                       const AppGroupRulesPanel(),
                       const SizedBox(height: AppSpacing.sm),
-                      if (myMember?.acceptedRules != true) ...[
-                        AppPrimaryButton(
-                          label: AppCopy.teamPactTitle,
-                          icon: Icons.verified_user_outlined,
-                          loading: _actionInProgress,
-                          onPressed: _actionInProgress ? null : _acceptRules,
+                      Text(
+                        prep.title,
+                        textAlign: TextAlign.center,
+                        style: AppTypography.title2,
+                      ),
+                      const SizedBox(height: AppSpacing.xxs),
+                      Text(
+                        prep.subtitle,
+                        textAlign: TextAlign.center,
+                        style: AppTypography.caption.copyWith(
+                          color: AppColors.success,
                         ),
-                      ] else ...[
-                        Text(
-                          'Вы приняли договор · ждём ${g.maxMembers - acceptedCount} из ${g.maxMembers}',
-                          textAlign: TextAlign.center,
-                          style: AppTypography.caption.copyWith(
-                            color: AppColors.success,
-                          ),
+                      ),
+                      const SizedBox(height: AppSpacing.sm),
+                      AppPrimaryButton(
+                        label: prep.primaryLabel,
+                        icon: Icons.verified_user_outlined,
+                        loading: _actionInProgress,
+                        success: prep.phase == GroupPrepPhase.waitingOthersPact,
+                        onPressed: prep.primaryEnabled &&
+                                !_actionInProgress &&
+                                prep.phase == GroupPrepPhase.readyForPact
+                            ? _acceptRules
+                            : null,
+                      ),
+                      if (prep.showSecondaryChangeGroup) ...[
+                        const SizedBox(height: AppSpacing.xs),
+                        AppSecondaryButton(
+                          label: 'Сменить группу',
+                          onPressed: _actionInProgress ? null : _changeGroup,
                         ),
-                        const SizedBox(height: AppSpacing.sm),
-                        AppPrimaryButton(
-                          label: 'Договор принят',
-                          icon: Icons.verified_user,
-                          onPressed: null,
+                      ],
+                      if (prep.secondaryLabel != null &&
+                          prep.onSecondary != null) ...[
+                        const SizedBox(height: AppSpacing.xs),
+                        AppSecondaryButton(
+                          label: prep.secondaryLabel!,
+                          icon: Icons.chat_bubble_outline_rounded,
+                          onPressed: prep.onSecondary,
                         ),
                       ],
                       const SizedBox(height: AppSpacing.md),
                     ],
-            if (g.status == GroupStatus.active) ...[
-              AppGroupDailyActions(
-                reportSending: _sendingReport,
-                reportAlreadySent: _todayReport?.reported == true,
-                canOpenChat: g.matrixRoomId != null,
-                onReport: _showReportSheet,
-                onChat: () => _openChat(g),
-              ),
-              const SizedBox(height: AppSpacing.md),
-              AppWeeklyTeamChallengeCard(group: g),
-              const SizedBox(height: AppSpacing.md),
-              if (g.teamPulse != null)
-                AppGroupPulsePanel(
-                  pulse: g.teamPulse!,
-                  sending: _checkInSending,
-                  onCheckIn: _checkIn,
-                  actionWindow: _actionWindow,
-                ),
-              if (g.teamPulse != null) const SizedBox(height: AppSpacing.md),
-              if (g.teamRecap != null) ...[
-                AppGroupRecapPanel(recap: g.teamRecap!),
-                const SizedBox(height: AppSpacing.md),
-              ],
-              if (g.teamMilestones != null &&
-                  g.teamMilestones!.items.isNotEmpty) ...[
-                AppGroupMilestonesPanel(milestones: g.teamMilestones!),
-                const SizedBox(height: AppSpacing.md),
-              ],
-            ],
-            if (g.status == GroupStatus.completed) ...[
-              AppGroupCycleCompletionPanel(group: g),
-              const SizedBox(height: AppSpacing.md),
-            ],
-            if (g.status == GroupStatus.voting) ...[
-              AppGroupVotingPanel(
-                onContinueTogether: () => _vote('continue_together'),
-                onNewSkill: () => _vote('new_skill'),
-              ),
-              const SizedBox(height: AppSpacing.md),
-            ],
-            Text(
-              'Участники (${g.membersCount}/${g.maxMembers})',
-              style: AppTypography.titleSerif,
-            ),
-            const SizedBox(height: AppSpacing.xs),
-            ...g.members.map(
-              (m) => Padding(
-                padding: const EdgeInsets.only(bottom: AppSpacing.xs),
-                child: AppGroupMemberRow(
-                  member: m,
-                  statusPhase: showPrepChat ? memberStatusPhase : null,
-                  onTap: m.profile == null
-                      ? null
-                      : () => Navigator.of(context).push(
-                            PrimeRoute.sharedAxis(
-                              builder: (_) => PublicProfileScreen(
-                                profile: m.profile!,
-                                reportStatus: m.reportStatus,
-                                acceptedRules: m.acceptedRules,
-                              ),
-                            ),
+                    if (g.status == GroupStatus.active) ...[
+                      _ActiveGroupTabSwitch(
+                        value: _activeTab,
+                        onChanged: (value) =>
+                            setState(() => _activeTab = value),
+                      ),
+                      const SizedBox(height: AppSpacing.md),
+                      if (_activeTab == _ActiveGroupTab.today) ...[
+                        AppGroupTodayHub(
+                          group: g,
+                          currentUserId: currentUserId,
+                          reportSending: _sendingReport,
+                          checkInSending: _checkInSending,
+                          onReport: _showReportSheet,
+                          onCheckIn: _checkIn,
+                          onSupport: _support,
+                          onOpenChat: () => _openChat(g),
+                          onShowProgress: () => setState(
+                            () => _activeTab = _ActiveGroupTab.progress,
                           ),
-                ),
-              ),
-            ),
+                          onReaction: _reactToReport,
+                        ),
+                        const SizedBox(height: AppSpacing.md),
+                        AppHabitCoachPanel(skillId: g.skillId),
+                      ],
+                      if (_activeTab == _ActiveGroupTab.team) ...[
+                        _ActiveTeamPanel(
+                          group: g,
+                          currentUserId: context.watch<AuthProvider>().user?.id,
+                          onOpenChat: () => _openChat(g),
+                          onOpenProfile: (member) {
+                            final profile = member.profile;
+                            if (profile == null) return;
+                            Navigator.of(context).push(
+                              PrimeRoute.sharedAxis(
+                                builder: (_) => PublicProfileScreen(
+                                  profile: profile,
+                                  reportStatus: member.reportStatus,
+                                  acceptedRules: member.acceptedRules,
+                                ),
+                              ),
+                            );
+                          },
+                          onSupport: _support,
+                        ),
+                      ],
+                      if (_activeTab == _ActiveGroupTab.progress) ...[
+                        if (g.personalResult != null) ...[
+                          AppPersonalImpactPanel(
+                            result: g.personalResult!,
+                          ),
+                          const SizedBox(height: AppSpacing.md),
+                        ],
+                        AppWeeklyTeamChallengeCard(group: g),
+                        if (g.teamRecap != null) ...[
+                          const SizedBox(height: AppSpacing.md),
+                          AppGroupRecapPanel(recap: g.teamRecap!),
+                        ],
+                        if (g.teamMilestones != null &&
+                            g.teamMilestones!.items.isNotEmpty) ...[
+                          const SizedBox(height: AppSpacing.md),
+                          AppGroupMilestonesPanel(
+                            milestones: g.teamMilestones!,
+                          ),
+                        ],
+                      ],
+                      const SizedBox(height: AppSpacing.md),
+                    ],
+                    if (g.status == GroupStatus.completed) ...[
+                      AppGroupCycleCompletionPanel(
+                        group: g,
+                        onContinueTogether: () => _vote('continue_together'),
+                        onNewSkill: () => _vote('new_skill'),
+                        onHarder: () => _vote('harder'),
+                        onRecovery: () => _vote('recovery'),
+                      ),
+                      if (g.personalResult != null) ...[
+                        const SizedBox(height: AppSpacing.md),
+                        AppPersonalImpactPanel(result: g.personalResult!),
+                      ],
+                      const SizedBox(height: AppSpacing.md),
+                    ],
+                    if (g.status == GroupStatus.voting) ...[
+                      AppGroupVotingPanel(
+                        onContinueTogether: () => _vote('continue_together'),
+                        onNewSkill: () => _vote('new_skill'),
+                        onHarder: () => _vote('harder'),
+                        onRecovery: () => _vote('recovery'),
+                      ),
+                      const SizedBox(height: AppSpacing.md),
+                    ],
+                    if (g.status != GroupStatus.active &&
+                        g.status != GroupStatus.introduction) ...[
+                      Text(
+                        'Участники (${g.membersCount}/${g.maxMembers})',
+                        style: AppTypography.titleSerif,
+                      ),
+                      const SizedBox(height: AppSpacing.xs),
+                      ...g.members.map(
+                        (m) => Padding(
+                          padding: const EdgeInsets.only(bottom: AppSpacing.xs),
+                          child: AppGroupMemberRow(
+                            member: m,
+                            statusPhase:
+                                showPrepChat ? memberStatusPhase : null,
+                            onTap: m.profile == null
+                                ? null
+                                : () => Navigator.of(context).push(
+                                      PrimeRoute.sharedAxis(
+                                        builder: (_) => PublicProfileScreen(
+                                          profile: m.profile!,
+                                          reportStatus: m.reportStatus,
+                                          acceptedRules: m.acceptedRules,
+                                        ),
+                                      ),
+                                    ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -633,8 +864,187 @@ class _GroupDetailScreenState extends State<GroupDetailScreen> {
   }
 }
 
+enum _ActiveGroupTab { today, team, progress }
+
+class _ActiveGroupTabSwitch extends StatelessWidget {
+  const _ActiveGroupTabSwitch({
+    required this.value,
+    required this.onChanged,
+  });
+
+  final _ActiveGroupTab value;
+  final ValueChanged<_ActiveGroupTab> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceSoft.withValues(alpha: 0.72),
+        borderRadius: BorderRadius.circular(AppRadius.pill),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Row(
+        children: [
+          _ActiveTabButton(
+            label: 'Сегодня',
+            icon: Icons.today_outlined,
+            selected: value == _ActiveGroupTab.today,
+            onTap: () => onChanged(_ActiveGroupTab.today),
+          ),
+          _ActiveTabButton(
+            label: 'Команда',
+            icon: Icons.groups_2_outlined,
+            selected: value == _ActiveGroupTab.team,
+            onTap: () => onChanged(_ActiveGroupTab.team),
+          ),
+          _ActiveTabButton(
+            label: 'Прогресс',
+            icon: Icons.insights_outlined,
+            selected: value == _ActiveGroupTab.progress,
+            onTap: () => onChanged(_ActiveGroupTab.progress),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ActiveTabButton extends StatelessWidget {
+  const _ActiveTabButton({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(AppRadius.pill),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.xs,
+              vertical: AppSpacing.sm,
+            ),
+            decoration: BoxDecoration(
+              color: selected
+                  ? AppColors.primary.withValues(alpha: 0.2)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(AppRadius.pill),
+              border: selected
+                  ? Border.all(
+                      color: AppColors.primarySoft.withValues(alpha: 0.45),
+                    )
+                  : null,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  icon,
+                  size: 18,
+                  color: selected
+                      ? AppColors.primarySoft
+                      : AppColors.textSecondary,
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTypography.caption.copyWith(
+                    color: selected
+                        ? AppColors.textPrimary
+                        : AppColors.textSecondary,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ActiveTeamPanel extends StatelessWidget {
+  const _ActiveTeamPanel({
+    required this.group,
+    required this.currentUserId,
+    required this.onOpenChat,
+    required this.onOpenProfile,
+    required this.onSupport,
+  });
+
+  final GroupModel group;
+  final String? currentUserId;
+  final VoidCallback onOpenChat;
+  final ValueChanged<MemberModel> onOpenProfile;
+  final ValueChanged<MemberModel> onSupport;
+
+  @override
+  Widget build(BuildContext context) {
+    final needsSupport = group.members.where((member) {
+      final status = GroupMemberTodayStatus.resolve(member);
+      return status.needsSupport;
+    });
+    return PrimeContentCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text('Ваша команда сегодня', style: AppTypography.title1),
+          const SizedBox(height: AppSpacing.xxs),
+          const Text(
+            'Статусы обновляются онлайн. Поддержка появляется в общем чате.',
+            style: AppTypography.bodySecondary,
+          ),
+          const SizedBox(height: AppSpacing.md),
+          for (final member in group.members) ...[
+            AppGroupMemberRow(
+              member: member,
+              onTap:
+                  member.profile == null ? null : () => onOpenProfile(member),
+            ),
+            if (member.userId != currentUserId &&
+                needsSupport.contains(member)) ...[
+              const SizedBox(height: AppSpacing.xxs),
+              AppSecondaryButton(
+                label: 'Поддержать @${member.profile?.nickname ?? 'участника'}',
+                icon: Icons.favorite_outline_rounded,
+                onPressed: () => onSupport(member),
+              ),
+            ],
+            if (member != group.members.last)
+              const SizedBox(height: AppSpacing.xs),
+          ],
+          const SizedBox(height: AppSpacing.md),
+          AppPrimaryButton(
+            label: 'Открыть чат команды',
+            icon: Icons.chat_bubble_outline_rounded,
+            onPressed: onOpenChat,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _ReportSheet extends StatefulWidget {
   final String groupId;
+  final String? skillId;
   final TextEditingController controller;
   final bool editing;
   final List<Map<String, dynamic>> initialAttachments;
@@ -643,6 +1053,7 @@ class _ReportSheet extends StatefulWidget {
 
   const _ReportSheet({
     required this.groupId,
+    this.skillId,
     required this.controller,
     required this.editing,
     required this.initialAttachments,
@@ -790,9 +1201,21 @@ class _ReportSheetState extends State<_ReportSheet> {
               ],
             ),
             const SizedBox(height: AppSpacing.md),
+            if (HabitProgramCatalog.metaForId(widget.skillId)
+                case final meta?) ...[
+              Text(
+                'Подсказка: ${meta.reportTips.textTemplate}',
+                style: AppTypography.caption
+                    .copyWith(color: AppColors.textSecondary),
+              ),
+              const SizedBox(height: AppSpacing.sm),
+            ],
             AppTextarea(
               controller: widget.controller,
-              hint: 'Что ты сделал сегодня по этой привычке?',
+              hint: HabitProgramCatalog.metaForId(widget.skillId)
+                      ?.reportTips
+                      .textTemplate ??
+                  'Что ты сделал сегодня по этой привычке?',
               minLines: 4,
               maxLines: 7,
             ),

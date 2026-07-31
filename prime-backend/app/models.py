@@ -25,6 +25,7 @@ class User(Base):
     photo_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     city: Mapped[str | None] = mapped_column(String(120), nullable=True)
     region_code: Mapped[str | None] = mapped_column(String(8), nullable=True, index=True)
+    timezone: Mapped[str | None] = mapped_column(String(64), nullable=True)
     age: Mapped[int | None] = mapped_column(Integer, nullable=True)
     profile_completed: Mapped[bool] = mapped_column(Boolean, default=False)
     prime_points: Mapped[int] = mapped_column(Integer, default=0)
@@ -35,6 +36,11 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     # NULL means the signup was never confirmed: such accounts cannot log in.
     email_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    marketing_emails_opt_in: Mapped[bool] = mapped_column(Boolean, default=True)
+    marketing_emails_unsubscribed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
     )
@@ -87,6 +93,7 @@ class WaitingRoomEntry(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+    revision: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -104,10 +111,12 @@ class Group(Base):
     name: Mapped[str] = mapped_column(String(160), default="")
     skill_id: Mapped[str] = mapped_column(String(120), index=True)
     region_code: Mapped[str | None] = mapped_column(String(8), nullable=True, index=True)
+    reference_timezone: Mapped[str | None] = mapped_column(String(64), nullable=True)
     is_cross_region: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(40), default="introduction", index=True)
     max_members: Mapped[int] = mapped_column(Integer, default=6)
     matrix_room_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -144,6 +153,70 @@ class GroupMember(Base):
         DateTime(timezone=True),
         server_default=func.now(),
     )
+
+
+class GroupMembershipEvent(Base):
+    """Immutable membership history used to explain every team transition."""
+
+    __tablename__ = "group_membership_events"
+    __table_args__ = (
+        Index("ix_membership_events_group_created", "group_id", "created_at"),
+        Index("ix_membership_events_user_created", "user_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    group_id: Mapped[str] = mapped_column(String(36), index=True)
+    user_id: Mapped[str] = mapped_column(String(36), index=True)
+    actor_user_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    event_type: Mapped[str] = mapped_column(String(40), index=True)
+    reason: Mapped[str] = mapped_column(String(80), index=True)
+    from_active: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    to_active: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class GroupContinuationVote(Base):
+    __tablename__ = "group_continuation_votes"
+    __table_args__ = (
+        UniqueConstraint("group_id", "user_id", name="uq_group_continuation_vote"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    group_id: Mapped[str] = mapped_column(String(36), index=True)
+    user_id: Mapped[str] = mapped_column(String(36), index=True)
+    choice: Mapped[str] = mapped_column(String(40))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class EarlyStartRequest(Base):
+    """A time-bounded proposal to form a three-person team."""
+
+    __tablename__ = "early_start_requests"
+    __table_args__ = (
+        Index("ix_early_start_skill_status_expiry", "skill_id", "status", "expires_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    skill_id: Mapped[str] = mapped_column(String(120), index=True)
+    initiator_user_id: Mapped[str] = mapped_column(String(36), index=True)
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class EarlyStartConfirmation(Base):
+    __tablename__ = "early_start_confirmations"
+    __table_args__ = (
+        UniqueConstraint("request_id", "user_id", name="uq_early_start_confirmation"),
+        Index("ix_early_start_confirm_request_created", "request_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    request_id: Mapped[str] = mapped_column(String(36), index=True)
+    user_id: Mapped[str] = mapped_column(String(36), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class ChatMessage(Base):
@@ -197,6 +270,12 @@ class HabitReport(Base):
     __tablename__ = "habit_reports"
     __table_args__ = (
         UniqueConstraint("group_id", "user_id", "report_date", name="uq_daily_report"),
+        Index(
+            "ix_habit_reports_group_date_status",
+            "group_id",
+            "report_date",
+            "status",
+        ),
     )
 
     id: Mapped[str] = mapped_column(
@@ -385,6 +464,11 @@ class GroupCheckIn(Base):
             "check_in_date",
             name="uq_group_check_in_daily",
         ),
+        Index(
+            "ix_group_check_ins_group_date",
+            "group_id",
+            "check_in_date",
+        ),
     )
 
     id: Mapped[str] = mapped_column(
@@ -458,6 +542,7 @@ class DeviceToken(Base):
     )
     user_id: Mapped[str] = mapped_column(String(36), index=True)
     platform: Mapped[str] = mapped_column(String(16))
+    provider: Mapped[str] = mapped_column(String(16), default="fcm")
     token: Mapped[str] = mapped_column(String(512), unique=True, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -584,4 +669,131 @@ class LocalMediaAsset(Base):
     size_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
     scope_type: Mapped[str] = mapped_column(String(32), default="owner")
     scope_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    processing_status: Mapped[str] = mapped_column(String(32), default="QUARANTINE")
+    published_media_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    scan_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_scan_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class MediaUpload(Base):
+    __tablename__ = "media_uploads"
+    __table_args__ = (
+        UniqueConstraint("media_url", name="uq_media_uploads_url"),
+        Index("ix_media_uploads_owner_scope", "owner_user_id", "scope_type", "scope_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    owner_user_id: Mapped[str] = mapped_column(String(36), index=True)
+    media_url: Mapped[str] = mapped_column(String(512))
+    scope_type: Mapped[str] = mapped_column(String(32))
+    scope_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ModerationDecision(Base):
+    __tablename__ = "moderation_decisions"
+    __table_args__ = (
+        Index("ix_moderation_decisions_actor_created", "actor_user_id", "created_at"),
+        Index("ix_moderation_decisions_offense", "offense_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    actor_user_id: Mapped[str] = mapped_column(String(36), index=True)
+    content_type: Mapped[str] = mapped_column(String(32))
+    content_id_or_draft_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    language: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    category: Mapped[str] = mapped_column(String(32))
+    confidence_band: Mapped[str] = mapped_column(String(16))
+    action: Mapped[str] = mapped_column(String(32))
+    policy_version: Mapped[str] = mapped_column(String(16), default="1.0")
+    detector_version: Mapped[str] = mapped_column(String(16), default="1.0")
+    normalized_content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    offense_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    appeal_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    reversed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class UserRestriction(Base):
+    __tablename__ = "user_restrictions"
+    __table_args__ = (
+        UniqueConstraint("source_decision_id", name="uq_user_restrictions_source_decision"),
+        Index("ix_user_restrictions_user_status_expires", "user_id", "status", "expires_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_id: Mapped[str] = mapped_column(String(36), index=True)
+    scope: Mapped[str] = mapped_column(String(32))
+    reason_code: Mapped[str] = mapped_column(String(32))
+    source_decision_id: Mapped[str] = mapped_column(String(36))
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(16), default="ACTIVE")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revocation_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
+class ModerationAppeal(Base):
+    __tablename__ = "moderation_appeals"
+    __table_args__ = (Index("ix_moderation_appeals_user_status", "user_id", "status"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_id: Mapped[str] = mapped_column(String(36), index=True)
+    decision_id: Mapped[str] = mapped_column(String(36), index=True)
+    explanation: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(16), default="PENDING")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    resolution_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
+class ModeratorTotpSecret(Base):
+    __tablename__ = "moderator_totp_secrets"
+
+    user_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    secret_encrypted: Mapped[str] = mapped_column(Text)
+    enabled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ModeratorBackupCode(Base):
+    __tablename__ = "moderator_backup_codes"
+    __table_args__ = (Index("ix_moderator_backup_codes_user", "user_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_id: Mapped[str] = mapped_column(String(36), index=True)
+    code_hash: Mapped[str] = mapped_column(String(64))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class WebAuthnCredential(Base):
+    __tablename__ = "webauthn_credentials"
+    __table_args__ = (
+        UniqueConstraint("credential_id", name="uq_webauthn_credentials_credential_id"),
+        Index("ix_webauthn_credentials_user", "user_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_id: Mapped[str] = mapped_column(String(36), index=True)
+    credential_id: Mapped[str] = mapped_column(Text)
+    public_key: Mapped[str] = mapped_column(Text)
+    sign_count: Mapped[int] = mapped_column(BigInteger, default=0)
+    transports: Mapped[str] = mapped_column(String(255), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ModeratorStepUpSession(Base):
+    __tablename__ = "moderator_step_up_sessions"
+    __table_args__ = (Index("ix_moderator_step_up_auth_session", "auth_session_id", "expires_at"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    auth_session_id: Mapped[str] = mapped_column(String(36), index=True)
+    user_id: Mapped[str] = mapped_column(String(36), index=True)
+    method: Mapped[str] = mapped_column(String(32))
+    verified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

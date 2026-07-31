@@ -1,11 +1,20 @@
+import json
+
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.db import Base
-from app.models import User
+from app.models import DeviceToken, OutboxEvent, User
 from app.notifications import create_notification, notification_payload
-from app.routers.notifications import list_notifications
+from app.routers.notifications import (
+    clear_notifications,
+    delete_notification,
+    list_notifications,
+    register_device,
+    unregister_device,
+)
 
 
 async def make_session():
@@ -155,6 +164,56 @@ async def test_list_notifications_rejects_invalid_cursor() -> None:
 
 
 @pytest.mark.asyncio
+async def test_delete_notification_removes_row() -> None:
+    engine, session = await make_session()
+    try:
+        user = make_user(6)
+        session.add(user)
+        await session.flush()
+        created = await create_notification(
+            session,
+            user.id,
+            "system",
+            "Тест",
+            "Тело",
+            {},
+        )
+        await session.commit()
+
+        await delete_notification(created.id, user=user, session=session)
+        result = await list_notifications(user, session)
+        assert result["items"] == []
+        assert result["unread_count"] == 0
+    finally:
+        await session.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_clear_notifications_removes_all_for_user() -> None:
+    engine, session = await make_session()
+    try:
+        user = make_user(7)
+        other = make_user(8)
+        session.add_all([user, other])
+        await session.flush()
+        await create_notification(session, user.id, "system", "A", "a", {})
+        await create_notification(session, user.id, "system", "B", "b", {})
+        await create_notification(session, other.id, "system", "C", "c", {})
+        await session.commit()
+
+        result = await clear_notifications(user=user, session=session)
+        assert result["deleted"] == 2
+        mine = await list_notifications(user, session)
+        theirs = await list_notifications(other, session)
+        assert mine["items"] == []
+        assert len(theirs["items"]) == 1
+    finally:
+        await session.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_create_notification_publishes_realtime_push() -> None:
     from app.direct_message_events import NotificationPush, direct_message_hub
 
@@ -180,7 +239,51 @@ async def test_create_notification_publishes_realtime_push() -> None:
         assert push.notification["id"] == created.id
         assert push.notification["type"] == "friend_request"
         assert push.notification["payload"]["request_id"] == "req-live"
+        outbox = await session.scalar(
+            select(OutboxEvent).where(OutboxEvent.aggregate_id == created.id)
+        )
+        assert outbox is not None
+        outbox_payload = json.loads(outbox.payload)
+        assert outbox_payload["payload"]["type"] == "friend_request"
     finally:
         direct_message_hub.unsubscribe(user.id, queue)
+        await session.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_device_token_records_provider_and_unregisters_on_logout_path() -> None:
+    engine, session = await make_session()
+    try:
+        user = make_user(5)
+        session.add(user)
+        await session.flush()
+
+        await register_device(
+            {
+                "token": "apns-device-token",
+                "platform": "ios",
+                "provider": "apns",
+            },
+            user=user,
+            session=session,
+        )
+        token = await session.scalar(
+            select(DeviceToken).where(DeviceToken.token == "apns-device-token")
+        )
+        assert token is not None
+        assert token.user_id == user.id
+        assert token.provider == "apns"
+
+        await unregister_device(
+            {"token": "apns-device-token"},
+            user=user,
+            session=session,
+        )
+        removed = await session.scalar(
+            select(DeviceToken).where(DeviceToken.token == "apns-device-token")
+        )
+        assert removed is None
+    finally:
         await session.close()
         await engine.dispose()

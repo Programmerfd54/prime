@@ -1,5 +1,6 @@
 import 'package:prime/core/habits/habit_favorites.dart';
 import 'package:prime/core/onboarding/onboarding_preferences.dart';
+import 'package:prime/core/sync/device_timezone.dart';
 import 'package:prime/data/api_client.dart';
 
 /// Merges onboarding prefs + habit favorites between device and backend.
@@ -31,6 +32,10 @@ class UserPersonalizationSync {
     try {
       if (_prefsDiffer(mergedPrefs, remotePrefs)) {
         await api.updatePreferences(mergedPrefs.toJson());
+      }
+      final localTz = await DeviceTimezone.localIana();
+      if (localTz != null) {
+        await api.updateMe({'timezone': localTz});
       }
       for (final skillId in mergedFavs.difference(remoteFavSet)) {
         await api.addFavoriteSkill(skillId);

@@ -23,6 +23,7 @@ import 'design/theme/prime_theme_context.dart';
 import 'design/tokens.dart';
 import 'providers/auth_provider.dart';
 import 'providers/chats_inbox_provider.dart';
+import 'providers/social_restriction_provider.dart';
 
 void main() {
   // Bindings and runApp must share one zone (avoids Zone mismatch on web).
@@ -93,6 +94,9 @@ class PrimeApp extends StatelessWidget {
             unawaited(inbox.ensureLoaded());
             return inbox;
           },
+        ),
+        ChangeNotifierProvider<SocialRestrictionProvider>(
+          create: (ctx) => SocialRestrictionProvider(ctx.read<ApiClient>()),
         ),
       ],
       child: Consumer<ThemeModeController>(

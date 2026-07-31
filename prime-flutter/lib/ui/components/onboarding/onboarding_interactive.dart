@@ -4,15 +4,16 @@ import '../../../core/habits/habit_program_metadata.dart';
 import '../../../core/onboarding/onboarding_preferences.dart';
 import '../../../design/theme/prime_theme_context.dart';
 import '../../../design/haptics.dart';
-import '../../../design/lottie_registry.dart';
 import '../../../design/motion.dart';
 import '../../../design/tokens.dart';
 import '../../../design/typography.dart';
 import '../../../design/visuals/charts/charts.dart';
-import '../../../design/visuals/gauges/gauges.dart';
+import '../../../design/visuals/gauges/prime_dot_plot.dart';
 import '../../../design/visuals/habit_art.dart';
+import 'onboarding_rhythm_chart.dart';
 import '../../../l10n/copy.dart';
 import '../../../models/skill.dart';
+import '../app_text_button.dart';
 import '../app_chip.dart';
 import '../../kit/components/prime_content_card.dart';
 
@@ -24,6 +25,57 @@ abstract final class OnboardingCopy {
 }
 
 /// Interactive widgets for the 8-step onboarding flow.
+
+/// Typographic hero for onboarding step 1 — no images or Lottie.
+class OnboardingPromiseHero extends StatelessWidget {
+  const OnboardingPromiseHero({super.key, required this.onSignIn});
+
+  final VoidCallback onSignIn;
+
+  @override
+  Widget build(BuildContext context) {
+    final short = MediaQuery.sizeOf(context).height < 700;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        SizedBox(height: short ? AppSpacing.md : AppSpacing.xl),
+        Text(
+          'ПРАЙМ',
+          textAlign: TextAlign.center,
+          style: AppTypography.displayHero.copyWith(
+            fontSize: short ? 36 : 42,
+            letterSpacing: 8,
+            color: AppColors.primarySoft,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        SizedBox(height: short ? AppSpacing.lg : AppSpacing.xl),
+        AppTypography.accentText(
+          'Менять проще,\nкогда рядом есть\nте, кто *поддержат*',
+          textAlign: TextAlign.center,
+          style: AppTypography.display.copyWith(fontSize: short ? 26 : 30),
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 320),
+          child: Text(
+            'Система держит ритм, а не мотивация. Ежедневное действие, команда из 6 и поддержка без давления.',
+            textAlign: TextAlign.center,
+            style: AppTypography.bodySecondary.copyWith(height: 1.45),
+          ),
+        ),
+        const SizedBox(height: AppSpacing.lg),
+        const Center(child: OnboardingProofPills()),
+        const SizedBox(height: AppSpacing.lg),
+        AppTextButton(
+          label: 'Уже есть аккаунт? Войти',
+          onPressed: onSignIn,
+        ),
+        SizedBox(height: short ? AppSpacing.sm : AppSpacing.lg),
+      ],
+    );
+  }
+}
 
 class OnboardingHeroOrb extends StatelessWidget {
   const OnboardingHeroOrb({super.key, this.height = 220});
@@ -71,6 +123,7 @@ class OnboardingProofPills extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Wrap(
+      alignment: WrapAlignment.center,
       spacing: AppSpacing.xs,
       runSpacing: AppSpacing.xs,
       children: [
@@ -80,6 +133,74 @@ class OnboardingProofPills extends StatelessWidget {
             child: AppChip(label: _items[i]),
           ),
       ],
+    );
+  }
+}
+
+class OnboardingExperienceCard extends StatelessWidget {
+  const OnboardingExperienceCard({
+    super.key,
+    required this.attemptCount,
+    required this.quitCount,
+    required this.onAttemptChanged,
+    required this.onQuitChanged,
+  });
+
+  final String attemptCount;
+  final String quitCount;
+  final ValueChanged<String> onAttemptChanged;
+  final ValueChanged<String> onQuitChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return PrimeContentCard(
+      padding: const EdgeInsets.all(AppSpacing.md),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Ваш опыт',
+            style: AppTypography.caption.copyWith(
+              color: AppColors.primarySoft,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          Text('Сколько раз начинали?', style: AppTypography.caption),
+          const SizedBox(height: AppSpacing.xs),
+          Wrap(
+            spacing: AppSpacing.xs,
+            children: [
+              for (final option in ['1', '2-3', '4+'])
+                AppChip(
+                  label: option,
+                  selected: attemptCount == option,
+                  onTap: () {
+                    AppHaptics.selection();
+                    onAttemptChanged(option);
+                  },
+                ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          Text('Сколько раз бросали?', style: AppTypography.caption),
+          const SizedBox(height: AppSpacing.xs),
+          Wrap(
+            spacing: AppSpacing.xs,
+            children: [
+              for (final option in ['1', '2', '3+'])
+                AppChip(
+                  label: option,
+                  selected: quitCount == option,
+                  onTap: () {
+                    AppHaptics.selection();
+                    onQuitChanged(option);
+                  },
+                ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
@@ -106,17 +227,265 @@ class OnboardingInsightCard extends StatelessWidget {
         _ => '2 раза',
       };
 
+  int get _breakDay => OnboardingRhythmChart.breakDayFor(quitCount);
+
   @override
   Widget build(BuildContext context) {
     final p = context.prime;
     return PrimeContentCard(
-      child: Text(
-        'Вы начинали $_attemptLabel и бросали $_quitLabel. '
-        'Обычно ритм ломается на 5–7 день — там и нужна команда.',
-        style: AppTypography.bodySecondary.copyWith(
-          color: p.inkSecondary,
-          height: 1.4,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.2),
+              borderRadius: BorderRadius.circular(AppRadius.sm),
+            ),
+            child: Icon(
+              Icons.timeline_rounded,
+              size: 20,
+              color: AppColors.primarySoft,
+            ),
+          ),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: RichText(
+              text: TextSpan(
+                style: AppTypography.bodySecondary.copyWith(
+                  color: p.inkSecondary,
+                  height: 1.45,
+                ),
+                children: [
+                  TextSpan(text: 'Вы начинали $_attemptLabel и бросали $_quitLabel. '),
+                  const TextSpan(text: 'Обычно ритм ломается на '),
+                  TextSpan(
+                    text: '$_breakDay-й день',
+                    style: TextStyle(
+                      color: AppColors.primarySoft,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const TextSpan(text: ' — там и нужна команда.'),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class OnboardingRhythmMiniStats extends StatelessWidget {
+  const OnboardingRhythmMiniStats({super.key, required this.quitCount});
+
+  final String quitCount;
+
+  int get _breakDay => OnboardingRhythmChart.breakDayFor(quitCount);
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: _MiniStatCard(
+            value: '~$_breakDay день',
+            label: 'типичный срыв',
+            accent: AppColors.coral,
+          ),
         ),
+        const SizedBox(width: AppSpacing.sm),
+        Expanded(
+          child: _MiniStatCard(
+            value: '30 дней',
+            label: 'первый цикл с командой',
+            accent: AppColors.primarySoft,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _MiniStatCard extends StatelessWidget {
+  const _MiniStatCard({
+    required this.value,
+    required this.label,
+    required this.accent,
+  });
+
+  final String value;
+  final String label;
+  final Color accent;
+
+  @override
+  Widget build(BuildContext context) {
+    return PrimeContentCard(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.sm,
+        vertical: AppSpacing.md,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            value,
+            style: AppTypography.title2.copyWith(
+              color: accent,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: AppSpacing.xxs),
+          Text(label, style: AppTypography.caption),
+        ],
+      ),
+    );
+  }
+}
+
+class OnboardingSoftSystemPreview extends StatelessWidget {
+  const OnboardingSoftSystemPreview({super.key, required this.programTitle});
+
+  final String programTitle;
+
+  static const _pillars = [
+    (
+      icon: Icons.bolt_rounded,
+      title: 'Действие',
+      body: 'Короткий шаг каждый день — без марафонов',
+    ),
+    (
+      icon: Icons.groups_2_outlined,
+      title: 'Команда',
+      body: 'Шестеро рядом, когда мотивация пропадает',
+    ),
+    (
+      icon: Icons.chat_bubble_outline_rounded,
+      title: 'Честный отчёт',
+      body: '~30 сек вечером — команда видит, что вы здесь',
+    ),
+  ];
+
+  static const _noPressure = [
+    'Пропуск не выкидывает из команды',
+    'Нет публичных рейтингов и стыда',
+    'Честный отчёт важнее идеальной серии',
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Align(
+          alignment: Alignment.centerLeft,
+          child: AppChip(label: 'Ваша программа: $programTitle', selected: true),
+        ),
+        const SizedBox(height: AppSpacing.md),
+        Text(
+          'Три опоры PRIME',
+          style: AppTypography.caption.copyWith(
+            color: AppColors.primarySoft,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        for (var i = 0; i < _pillars.length; i++) ...[
+          if (i > 0) const SizedBox(height: AppSpacing.xs),
+          _PillarCard(
+            index: i + 1,
+            icon: _pillars[i].icon,
+            title: _pillars[i].title,
+            body: _pillars[i].body,
+          ),
+        ],
+        const SizedBox(height: AppSpacing.md),
+        PrimeContentCard(
+          padding: const EdgeInsets.all(AppSpacing.md),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'Здесь не наказывают за пропуск',
+                style: AppTypography.title2.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              for (final line in _noPressure)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: AppSpacing.xs),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(
+                        Icons.check_circle_rounded,
+                        size: 18,
+                        color: AppColors.mint,
+                      ),
+                      const SizedBox(width: AppSpacing.xs),
+                      Expanded(
+                        child: Text(line, style: AppTypography.bodySecondary),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _PillarCard extends StatelessWidget {
+  const _PillarCard({
+    required this.index,
+    required this.icon,
+    required this.title,
+    required this.body,
+  });
+
+  final int index;
+  final IconData icon;
+  final String title;
+  final String body;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.prime;
+    return PrimeContentCard(
+      padding: const EdgeInsets.all(AppSpacing.sm),
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: p.brand.withValues(alpha: 0.22),
+            ),
+            child: Icon(icon, size: 20, color: AppColors.primarySoft),
+          ),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '$index. $title',
+                  style: AppTypography.caption.copyWith(
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                Text(body, style: AppTypography.caption),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -570,6 +939,7 @@ class _OnboardingTeamRingState extends State<OnboardingTeamRing> {
     (name: 'Мила', asset: 'assets/avatars/demo/a3.jpg'),
     (name: 'Саша', asset: 'assets/avatars/demo/a4.jpg'),
     (name: 'Лена', asset: 'assets/avatars/demo/a5.jpg'),
+    (name: 'Вы', asset: 'assets/avatars/demo/a6.jpg'),
   ];
 
   @override
@@ -595,24 +965,36 @@ class _OnboardingTeamRingState extends State<OnboardingTeamRing> {
           name: _demos[i].name,
           assetPath: _demos[i].asset,
           filled: true,
-          checkedIn: i < _checked,
+          checkedIn: i < _checked && i < _demos.length - 1,
         ),
-      const TeamRingSlot(),
     ];
 
     return Column(
       children: [
-        const PrimeLottie(
-          slot: PrimeLottieSlot.teamSearch,
-          width: 120,
-          height: 120,
-        ),
-        const SizedBox(height: AppSpacing.sm),
         PrimeTeamRing(
           size: 220,
           slots: slots,
           centerLabel: '$_checked из 6',
           centerSubtitle: 'уже отметились',
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        Wrap(
+          alignment: WrapAlignment.center,
+          spacing: AppSpacing.xs,
+          runSpacing: AppSpacing.xxs,
+          children: [
+            for (final demo in _demos)
+              Text(
+                demo.name,
+                style: AppTypography.caption.copyWith(
+                  color: demo.name == 'Вы'
+                      ? AppColors.primarySoft
+                      : AppColors.textMuted,
+                  fontWeight:
+                      demo.name == 'Вы' ? FontWeight.w700 : FontWeight.w500,
+                ),
+              ),
+          ],
         ),
         const SizedBox(height: AppSpacing.md),
         const _WhySixBlock(),
@@ -654,34 +1036,77 @@ class _WhySixBlock extends StatelessWidget {
             fontWeight: FontWeight.w700,
           ),
         ),
-        const SizedBox(height: AppSpacing.xs),
-        for (final item in _items) ...[
+        const SizedBox(height: AppSpacing.sm),
+        for (var i = 0; i < _items.length; i++)
           Padding(
-            padding: const EdgeInsets.only(bottom: AppSpacing.xs),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(item.icon, size: 18, color: AppColors.primarySoft),
-                const SizedBox(width: AppSpacing.xs),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        item.title,
-                        style: AppTypography.caption.copyWith(
-                          color: AppColors.textPrimary,
-                          fontWeight: FontWeight.w600,
-                        ),
+            padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+            child: PrimeContentCard(
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.sm,
+                vertical: AppSpacing.md,
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Container(
+                    width: 48,
+                    height: 52,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(AppRadius.md),
+                      color: AppColors.primary.withValues(alpha: 0.14),
+                      border: Border.all(
+                        color: AppColors.primarySoft.withValues(alpha: 0.22),
                       ),
-                      Text(item.body, style: AppTypography.caption),
-                    ],
+                    ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          '0${i + 1}',
+                          style: AppTypography.caption.copyWith(
+                            color: AppColors.primarySoft,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 12,
+                            height: 1,
+                            letterSpacing: 0.4,
+                          ),
+                        ),
+                        const SizedBox(height: AppSpacing.xxs),
+                        Icon(
+                          _items[i].icon,
+                          size: 18,
+                          color: AppColors.primarySoft,
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-              ],
+                  const SizedBox(width: AppSpacing.sm),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _items[i].title,
+                          style: AppTypography.caption.copyWith(
+                            color: AppColors.textPrimary,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 14,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          _items[i].body,
+                          style: AppTypography.caption.copyWith(
+                            height: 1.35,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
-        ],
       ],
     );
   }
@@ -728,64 +1153,93 @@ class _OnboardingMetricsPreviewState extends State<OnboardingMetricsPreview> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        PrimeRingTrio.metrics(
-          streak: 7 / 30,
-          streakDisplay: '7',
-          primes: 12 / 120,
-          primesDisplay: '120',
-          pace: 0.78,
-          paceDisplay: '78%',
-          size: 68,
-        ),
-        const SizedBox(height: AppSpacing.sm),
-        const _MetricsExplainerRow(),
-        const SizedBox(height: AppSpacing.md),
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              flex: 3,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Активность · 30 дней',
-                    style: AppTypography.caption.copyWith(
-                      color: AppColors.primarySoft,
+        PrimeContentCard(
+          padding: const EdgeInsets.all(AppSpacing.lg),
+          child: Column(
+            children: [
+              Text(
+                'ГЛАВНОЕ',
+                style: AppTypography.caption.copyWith(
+                  color: AppColors.primarySoft,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.2,
+                ),
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              SizedBox(
+                width: 100,
+                height: 100,
+                child: CustomPaint(
+                  painter: _HeroStreakRingPainter(progress: 7 / 30),
+                  child: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          '7',
+                          style: AppTypography.numeric.copyWith(
+                            fontSize: 28,
+                            height: 1,
+                          ),
+                        ),
+                        Text(
+                          'дней',
+                          style: AppTypography.caption.copyWith(fontSize: 11),
+                        ),
+                      ],
                     ),
                   ),
-                  const SizedBox(height: AppSpacing.xs),
-                  const PrimeDotPlot(
-                    values: _demoDots,
-                    height: 72,
-                  ),
-                ],
+                ),
               ),
+              const SizedBox(height: AppSpacing.xs),
+              Text(
+                'серия подряд',
+                style: AppTypography.caption.copyWith(
+                  color: AppColors.textMuted,
+                ),
+              ),
+              Text(
+                '12 день цикла · темп 40%',
+                style: AppTypography.caption.copyWith(
+                  color: AppColors.textSecondary,
+                  fontSize: 11,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        Row(
+          children: [
+            Expanded(
+              child: _MetricPill(label: 'Праймы', value: '120'),
             ),
             const SizedBox(width: AppSpacing.sm),
             Expanded(
-              flex: 2,
-              child: Column(
-                children: [
-                  PrimeSegmentedArc(
-                    progress: 0.4,
-                    valueLabel: '12',
-                    caption: 'день цикла',
-                    size: 120,
-                  ),
-                  const SizedBox(height: AppSpacing.xxs),
-                  Text(
-                    'Темп цикла · 40%',
-                    style: AppTypography.caption.copyWith(
-                      color: AppColors.textMuted,
-                      fontSize: 10,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
-              ),
+              child: _MetricPill(label: 'Темп', value: '78%'),
             ),
           ],
+        ),
+        const SizedBox(height: AppSpacing.md),
+        PrimeContentCard(
+          padding: const EdgeInsets.all(AppSpacing.md),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Активность · 30 дней',
+                style: AppTypography.caption.copyWith(
+                  color: AppColors.primarySoft,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              const PrimeDotPlot(
+                values: _demoDots,
+                height: 88,
+              ),
+            ],
+          ),
         ),
         const SizedBox(height: AppSpacing.md),
         PrimeContentCard(
@@ -814,48 +1268,70 @@ class _OnboardingMetricsPreviewState extends State<OnboardingMetricsPreview> {
   }
 }
 
-/// Short, plain-language legend for the three metrics rings above —
-/// avoids leaving new users guessing what "серия/Праймы/темп" mean.
-class _MetricsExplainerRow extends StatelessWidget {
-  const _MetricsExplainerRow();
+class _HeroStreakRingPainter extends CustomPainter {
+  _HeroStreakRingPainter({required this.progress});
 
-  static const _items = [
-    (label: 'Серия', hint: 'дней подряд с отчётом'),
-    (label: 'Праймы', hint: 'очки за полные командные дни'),
-    (label: 'Темп', hint: '% пройденного 30-дневного цикла'),
-  ];
+  final double progress;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    const stroke = 6.0;
+    final radius = (size.shortestSide - stroke) / 2;
+
+    canvas.drawCircle(
+      center,
+      radius,
+      Paint()
+        ..color = AppColors.primaryContainer.withValues(alpha: 0.45)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = stroke,
+    );
+
+    canvas.drawArc(
+      Rect.fromCircle(center: center, radius: radius),
+      -3.14159 / 2,
+      3.14159 * 2 * progress.clamp(0.0, 1.0),
+      false,
+      Paint()
+        ..color = AppColors.primary
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = stroke
+        ..strokeCap = StrokeCap.round,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _HeroStreakRingPainter oldDelegate) =>
+      oldDelegate.progress != progress;
+}
+
+class _MetricPill extends StatelessWidget {
+  const _MetricPill({required this.label, required this.value});
+
+  final String label;
+  final String value;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        for (final item in _items)
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xxs),
-              child: Column(
-                children: [
-                  Text(
-                    item.label,
-                    textAlign: TextAlign.center,
-                    style: AppTypography.caption.copyWith(
-                      color: AppColors.primarySoft,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  Text(
-                    item.hint,
-                    textAlign: TextAlign.center,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: AppTypography.caption.copyWith(fontSize: 10),
-                  ),
-                ],
-              ),
-            ),
+    return PrimeContentCard(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.sm,
+        vertical: AppSpacing.md,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            value,
+            style: AppTypography.title2.copyWith(fontWeight: FontWeight.w700),
           ),
-      ],
+          Text(
+            label,
+            style: AppTypography.caption.copyWith(color: AppColors.textMuted),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -901,101 +1377,83 @@ class OnboardingGoalPicker extends StatelessWidget {
         OnboardingGoal.readInsteadOfFeed => 'глава вместо скролла по вечерам',
       };
 
+  static const _popularGoals = [
+    OnboardingGoal.lessDistraction,
+    OnboardingGoal.moveMore,
+    OnboardingGoal.readRegularly,
+    OnboardingGoal.betterMorning,
+    OnboardingGoal.eveningRoutine,
+    OnboardingGoal.socialize,
+  ];
+
+  static const _extraGoals = [
+    OnboardingGoal.betterSleep,
+    OnboardingGoal.lessStress,
+    OnboardingGoal.lessSocialFeed,
+    OnboardingGoal.readInsteadOfFeed,
+  ];
+
   @override
   Widget build(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(
-          'Выбрано ${selected.length} из $maxSelections',
-          style: AppTypography.caption.copyWith(color: AppColors.primarySoft),
-        ),
-        const SizedBox(height: AppSpacing.sm),
-        GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 2,
-            mainAxisSpacing: AppSpacing.sm,
-            crossAxisSpacing: AppSpacing.sm,
-            childAspectRatio: 1.35,
-          ),
-          itemCount: OnboardingGoal.values.length,
-          itemBuilder: (context, index) {
-            final goal = OnboardingGoal.values[index];
-            final isSelected = selected.contains(goal);
-            final atMax = !isSelected && selected.length >= maxSelections;
-
-            return AnimatedContainer(
-              duration: AppDurations.fast,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(AppRadius.lg),
-                boxShadow:
-                    isSelected ? AppGlow.violet(opacity: 0.22) : null,
-              ),
-              child: PrimeContentCard(
-                padding: const EdgeInsets.all(AppSpacing.sm),
-                onTap: atMax
-                    ? null
-                    : () {
-                        if (!isSelected && selected.length >= maxSelections) {
-                          return;
-                        }
-                        onToggle(goal);
-                      },
-                child: AnimatedOpacity(
-                duration: AppDurations.fast,
-                opacity: atMax ? 0.45 : 1,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          width: 36,
-                          height: 36,
-                          decoration: BoxDecoration(
-                            color: isSelected
-                                ? AppColors.primary.withValues(alpha: 0.28)
-                                : AppColors.elevatedSurface,
-                            borderRadius: BorderRadius.circular(AppRadius.sm),
-                          ),
-                          child: Icon(
-                            _iconFor(goal),
-                            size: 20,
-                            color: isSelected
-                                ? AppColors.textPrimary
-                                : AppColors.textMuted,
-                          ),
-                        ),
-                        const Spacer(),
-                        if (isSelected)
-                          Icon(
-                            Icons.check_circle_rounded,
-                            color: AppColors.primary,
-                            size: 20,
-                          ),
-                      ],
-                    ),
-                    const Spacer(),
-                    Text(
-                      goal.label,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppTypography.caption.copyWith(
-                        color: AppColors.textPrimary,
-                        fontWeight:
-                            isSelected ? FontWeight.w700 : FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Container(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.sm,
+              vertical: AppSpacing.xxs,
+            ),
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.18),
+              borderRadius: BorderRadius.circular(AppRadius.pill),
+            ),
+            child: Text(
+              'Выбрано ${selected.length} из $maxSelections',
+              style: AppTypography.caption.copyWith(
+                color: AppColors.primarySoft,
+                fontWeight: FontWeight.w700,
               ),
             ),
-          );
-          },
+          ),
         ),
         const SizedBox(height: AppSpacing.md),
+        for (final goal in _popularGoals) ...[
+          _GoalRow(
+            goal: goal,
+            isSelected: selected.contains(goal),
+            atMax: !selected.contains(goal) && selected.length >= maxSelections,
+            onToggle: onToggle,
+          ),
+          const SizedBox(height: AppSpacing.xs),
+        ],
+        Theme(
+          data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+          child: ExpansionTile(
+            tilePadding: EdgeInsets.zero,
+            title: Text(
+              'Ещё цели',
+              style: AppTypography.caption.copyWith(
+                color: AppColors.primarySoft,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            children: [
+              for (final goal in _extraGoals) ...[
+                _GoalRow(
+                  goal: goal,
+                  isSelected: selected.contains(goal),
+                  atMax:
+                      !selected.contains(goal) && selected.length >= maxSelections,
+                  onToggle: onToggle,
+                ),
+                const SizedBox(height: AppSpacing.xs),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(height: AppSpacing.sm),
         Text(
           selected.isEmpty
               ? 'Отметьте всё, что откликается'
@@ -1023,6 +1481,101 @@ class OnboardingGoalPicker extends StatelessWidget {
           ),
         ],
       ],
+    );
+  }
+}
+
+class _GoalRow extends StatelessWidget {
+  const _GoalRow({
+    required this.goal,
+    required this.isSelected,
+    required this.atMax,
+    required this.onToggle,
+  });
+
+  final OnboardingGoal goal;
+  final bool isSelected;
+  final bool atMax;
+  final ValueChanged<OnboardingGoal> onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedContainer(
+      duration: AppDurations.fast,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        boxShadow: isSelected ? AppGlow.violet(opacity: 0.22) : null,
+      ),
+      child: PrimeContentCard(
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.sm,
+          vertical: AppSpacing.sm,
+        ),
+        onTap: atMax
+            ? null
+            : () {
+                if (!isSelected && atMax) return;
+                onToggle(goal);
+              },
+        child: AnimatedOpacity(
+          duration: AppDurations.fast,
+          opacity: atMax ? 0.45 : 1,
+          child: Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: isSelected
+                      ? AppColors.primary.withValues(alpha: 0.28)
+                      : AppColors.elevatedSurface,
+                  borderRadius: BorderRadius.circular(AppRadius.sm),
+                ),
+                child: Icon(
+                  OnboardingGoalPicker._iconFor(goal),
+                  size: 22,
+                  color: isSelected
+                      ? AppColors.textPrimary
+                      : AppColors.textMuted,
+                ),
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      goal.label,
+                      style: AppTypography.caption.copyWith(
+                        color: AppColors.textPrimary,
+                        fontWeight:
+                            isSelected ? FontWeight.w700 : FontWeight.w600,
+                        fontSize: 14,
+                      ),
+                    ),
+                    Text(
+                      OnboardingGoalPicker._consequenceFor(goal),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTypography.caption.copyWith(
+                        color: AppColors.textMuted,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(
+                isSelected
+                    ? Icons.check_circle_rounded
+                    : Icons.circle_outlined,
+                color: isSelected ? AppColors.primary : AppColors.textMuted,
+                size: 22,
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -1059,7 +1612,7 @@ class OnboardingSummaryCard extends StatelessWidget {
           ),
           const SizedBox(height: AppSpacing.md),
           Text(
-            'Ваш план',
+            'Готово',
             style: AppTypography.caption.copyWith(color: AppColors.primarySoft),
           ),
           const SizedBox(height: AppSpacing.xs),
@@ -1097,9 +1650,18 @@ class OnboardingSummaryCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: AppSpacing.xs),
-          const _NextStep(n: '1', text: 'Создайте аккаунт — около 30 секунд'),
-          const _NextStep(n: '2', text: 'Соберём команду из 6'),
-          const _NextStep(n: '3', text: 'Стартуете первый день вместе'),
+          const _NextStep(
+            icon: Icons.person_add_outlined,
+            text: 'Создайте аккаунт — около 30 секунд',
+          ),
+          const _NextStep(
+            icon: Icons.groups_2_outlined,
+            text: 'Соберём команду из 6',
+          ),
+          const _NextStep(
+            icon: Icons.flag_outlined,
+            text: 'Стартуете первый день вместе',
+          ),
         ],
       ),
     );
@@ -1107,25 +1669,27 @@ class OnboardingSummaryCard extends StatelessWidget {
 }
 
 class _NextStep extends StatelessWidget {
-  const _NextStep({required this.n, required this.text});
+  const _NextStep({required this.icon, required this.text});
 
-  final String n;
+  final IconData icon;
   final String text;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: AppSpacing.xxs),
+      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
       child: Row(
         children: [
-          Text(
-            n,
-            style: AppTypography.caption.copyWith(
-              color: AppColors.primarySoft,
-              fontWeight: FontWeight.w700,
+          Container(
+            width: 28,
+            height: 28,
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.2),
+              borderRadius: BorderRadius.circular(AppRadius.sm),
             ),
+            child: Icon(icon, size: 16, color: AppColors.primarySoft),
           ),
-          const SizedBox(width: AppSpacing.xs),
+          const SizedBox(width: AppSpacing.sm),
           Expanded(child: Text(text, style: AppTypography.caption)),
         ],
       ),

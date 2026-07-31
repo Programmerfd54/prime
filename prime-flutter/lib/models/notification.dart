@@ -30,6 +30,7 @@ class PrimeNotification {
     required this.payload,
     required this.read,
     required this.createdAt,
+    this.rawType = 'system',
   });
 
   final String id;
@@ -39,8 +40,28 @@ class PrimeNotification {
   final Map<String, dynamic> payload;
   final bool read;
   final DateTime createdAt;
+  final String rawType;
 
-  String? get requestId => payload['request_id'] as String?;
+  String? get requestId {
+    final raw = payload['request_id'];
+    if (raw is String && raw.isNotEmpty) return raw;
+    if (raw != null) return raw.toString();
+    return null;
+  }
+
+  String? get requesterId {
+    final raw = payload['requester_id'];
+    if (raw is String && raw.isNotEmpty) return raw;
+    if (raw != null) return raw.toString();
+    return null;
+  }
+
+  String? get requesterNickname {
+    final raw = payload['requester_nickname'];
+    if (raw is String && raw.isNotEmpty) return raw;
+    if (raw != null) return raw.toString();
+    return null;
+  }
   String? get groupId => payload['group_id'] as String?;
 
   factory PrimeNotification.fromJson(Map<String, dynamic> json) {
@@ -53,6 +74,7 @@ class PrimeNotification {
       read: json['read'] as bool? ?? false,
       createdAt: DateTime.tryParse(json['created_at'] as String? ?? '') ??
           DateTime.now(),
+      rawType: json['type'] as String? ?? 'system',
     );
   }
 }
@@ -69,7 +91,8 @@ class NotificationListResponse {
   factory NotificationListResponse.fromJson(Map<String, dynamic> json) {
     return NotificationListResponse(
       items: (json['items'] as List<dynamic>? ?? [])
-          .map((item) => PrimeNotification.fromJson(item as Map<String, dynamic>))
+          .map((item) =>
+              PrimeNotification.fromJson(item as Map<String, dynamic>))
           .toList(),
       unreadCount: json['unread_count'] as int? ?? 0,
     );

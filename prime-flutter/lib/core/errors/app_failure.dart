@@ -49,6 +49,42 @@ final class ForbiddenFailure extends AppFailure {
   });
 }
 
+/// Social writes blocked until [expiresAt] (moderation restriction).
+final class SocialWriteRestrictedFailure extends AppFailure {
+  const SocialWriteRestrictedFailure({
+    required this.expiresAt,
+    super.message = AppCopy.forbidden,
+    super.statusCode = 403,
+    super.correlationId,
+    super.debugDetail,
+  });
+
+  final DateTime expiresAt;
+}
+
+/// High-confidence profanity block; may include a write cooldown.
+final class ProfanityRejectedFailure extends AppFailure {
+  const ProfanityRejectedFailure({
+    this.expiresAt,
+    super.message = AppCopy.forbidden,
+    super.statusCode = 403,
+    super.correlationId,
+    super.debugDetail,
+  });
+
+  final DateTime? expiresAt;
+}
+
+/// Medium-confidence profanity — message held for review, not a user ban.
+final class ProfanityQuarantinedFailure extends AppFailure {
+  const ProfanityQuarantinedFailure({
+    super.message = AppCopy.forbidden,
+    super.statusCode = 403,
+    super.correlationId,
+    super.debugDetail,
+  });
+}
+
 /// Login succeeded on credentials but the signup was never confirmed.
 final class EmailNotVerifiedFailure extends AppFailure {
   const EmailNotVerifiedFailure({

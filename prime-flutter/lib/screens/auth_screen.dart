@@ -24,13 +24,14 @@ import '../design/tokens.dart';
 import '../design/typography.dart';
 import '../l10n/copy.dart';
 import '../providers/auth_provider.dart';
+import 'forgot_password_screen.dart';
 import '../ui/components/app_password_field.dart';
 import '../ui/components/app_primary_button.dart';
 import '../ui/components/app_secondary_button.dart';
 import '../ui/components/app_text_button.dart';
 import '../ui/components/app_inline_error.dart';
 import '../ui/components/prime_text_field.dart';
-import 'forgot_password_screen.dart';
+import '../ui/components/app_snackbar.dart';
 
 enum _NicknameAvailability { idle, checking, available, taken }
 
@@ -82,11 +83,14 @@ class _AuthScreenState extends State<AuthScreen> {
   int _resendSeconds = 0;
   Timer? _resendTimer;
   bool _submittingCode = false;
-  /// Dev hint when the backend did not return [verification_code].
-  String? _devCodeNotice;
   /// True after the first successful `register` in this wizard session.
   bool _registrationPending = false;
+  String? _registeredName;
+  String? _registeredNickname;
+  String? _registeredPassword;
   bool _offerContinueVerification = false;
+  /// Login found correct password on an account awaiting email confirmation.
+  bool _loginVerificationPending = false;
   late final TapGestureRecognizer _termsRecognizer;
   late final TapGestureRecognizer _privacyRecognizer;
 
@@ -173,8 +177,11 @@ class _AuthScreenState extends State<AuthScreen> {
 
   Future<void> _checkNickname(String nickname) async {
     try {
-      final available =
-          await context.read<ApiClient>().checkNicknameAvailable(nickname);
+      final forEmail = _nicknameAvailabilityEmail;
+      final available = await context.read<ApiClient>().checkNicknameAvailable(
+            nickname,
+            forEmail: forEmail,
+          );
       if (!mounted || _normalizedNickname != nickname) return;
       setState(
         () => _nicknameStatus = available
@@ -195,8 +202,6 @@ class _AuthScreenState extends State<AuthScreen> {
       setState(() {
         if (result.available) {
           _emailStatus = _EmailAvailability.available;
-        } else if (result.pendingVerification) {
-          _emailStatus = _EmailAvailability.pendingVerification;
         } else {
           _emailStatus = _EmailAvailability.taken;
         }
@@ -207,7 +212,63 @@ class _AuthScreenState extends State<AuthScreen> {
     }
   }
 
+  String? get _nicknameAvailabilityEmail {
+    if (_isLogin) return null;
+    final pending = _pendingEmail?.trim().toLowerCase();
+    if (pending != null && pending.isNotEmpty) return pending;
+    final draft = _email.text.trim().toLowerCase();
+    return draft.isNotEmpty ? draft : null;
+  }
+
+  bool get _registrationDraftChanged {
+    if (!_registrationPending) return true;
+    final email = _email.text.trim().toLowerCase();
+    return email != (_pendingEmail ?? '') ||
+        _name.text.trim() != (_registeredName ?? '') ||
+        _normalizedNickname != (_registeredNickname ?? '') ||
+        _password.text != (_registeredPassword ?? '');
+  }
+
+  void _backRegisterStep({bool editFromCode = false}) {
+    if (_registerStep <= 0) return;
+    setState(() {
+      _registerStep = editFromCode ? 0 : _registerStep - 1;
+      _error = null;
+      _notice = null;
+    });
+    if (_registerStep == 0) {
+      _refreshNicknameAvailability();
+    } else if (_registerStep == 1) {
+      _refreshEmailAvailability();
+    }
+  }
+
+  void _refreshNicknameAvailability() {
+    final nickname = _normalizedNickname;
+    if (!_nicknameRegex.hasMatch(nickname)) {
+      setState(() => _nicknameStatus = _NicknameAvailability.idle);
+      return;
+    }
+    setState(() => _nicknameStatus = _NicknameAvailability.checking);
+    unawaited(_checkNickname(nickname));
+  }
+
+  void _refreshEmailAvailability() {
+    final email = _email.text.trim().toLowerCase();
+    if (_validateEmail(email) != null) {
+      setState(() => _emailStatus = _EmailAvailability.idle);
+      return;
+    }
+    setState(() => _emailStatus = _EmailAvailability.checking);
+    unawaited(_checkEmail(email));
+  }
+
   Future<void> _submit() async {
+    if (_loginVerificationPending) {
+      await _submitCode();
+      return;
+    }
+
     if (!_isLogin && _registerStep == _codeStep) {
       await _submitCode();
       return;
@@ -234,7 +295,10 @@ class _AuthScreenState extends State<AuthScreen> {
     }
 
     if (!_isLogin && _nicknameStatus == _NicknameAvailability.taken) {
-      setState(() => _error = AppCopy.nicknameTaken);
+      setState(() {
+        _error = null;
+        if (_registerStep != 0) _registerStep = 0;
+      });
       return;
     }
 
@@ -255,7 +319,9 @@ class _AuthScreenState extends State<AuthScreen> {
       } else {
         // Going back and tapping "Создать аккаунт" again must not hit register
         // twice — the account may already exist, waiting for the code.
-        if (_registrationPending && _pendingEmail == email) {
+        if (_registrationPending &&
+            _pendingEmail == email &&
+            !_registrationDraftChanged) {
           await _continuePendingRegistration(email);
           return;
         }
@@ -271,8 +337,13 @@ class _AuthScreenState extends State<AuthScreen> {
     } catch (e) {
       if (!mounted) return;
       final failure = FailureMapper.from(e);
+      if (_isLogin && failure is NotFoundFailure) {
+        _switchToRegisterPreservingEmail();
+        showAppSnackBar(context, failure.message);
+        return;
+      }
       if (failure is EmailNotVerifiedFailure) {
-        await _resumeUnconfirmedSignup(email);
+        await _startLoginVerification(email, notice: failure.message);
         return;
       }
       if (!_isLogin && failure is ConflictFailure) {
@@ -280,7 +351,7 @@ class _AuthScreenState extends State<AuthScreen> {
             failure.message.toLowerCase().contains('никнейм');
         if (isNicknameConflict) {
           setState(() {
-            _error = AppCopy.nicknameTaken;
+            _error = null;
             _registerStep = 0;
             _nicknameStatus = _NicknameAvailability.taken;
             _offerSwitchToLogin = false;
@@ -355,9 +426,11 @@ class _AuthScreenState extends State<AuthScreen> {
     required EmailVerificationTicket ticket,
   }) {
     _code.clear();
-    final prefilled = _applyDevVerificationCode(ticket);
     setState(() {
       _pendingEmail = email;
+      _registeredName = _name.text.trim();
+      _registeredNickname = _normalizedNickname;
+      _registeredPassword = _password.text;
       _registerStep = _codeStep;
       _registrationPending = true;
       _error = null;
@@ -367,54 +440,45 @@ class _AuthScreenState extends State<AuthScreen> {
     });
     Analytics.instance.registerStepViewed(_codeStep);
     _startResendCountdown(ticket.resendAvailableInSeconds);
-    _scheduleDevAutoSubmit(prefilledFromTicket: prefilled, ticket: ticket);
   }
 
-  /// Dev/profile builds: backend returns [verification_code] for local QA.
-  bool _applyDevVerificationCode(EmailVerificationTicket ticket) {
-    if (kReleaseMode) return false;
-    final code = ticket.devCode?.trim();
-    if (code == null || code.length != _codeLength) {
-      _devCodeNotice = code == null
-          ? (ticket.resendAvailableInSeconds > 0
-              ? 'Dev: новый код можно запросить через '
-                  '${ticket.resendAvailableInSeconds} с'
-              : 'Dev: бэкенд не вернул код. В .env включите '
-                  'EMAIL_VERIFICATION_EXPOSE_CODE=true и пересоздайте '
-                  'контейнер prime-api.')
-          : null;
-      return false;
-    }
-    _devCodeNotice = null;
-    _code.value = TextEditingValue(
-      text: code,
-      selection: TextSelection.collapsed(offset: code.length),
-    );
-    return true;
+  /// Login with correct password on an account that was never confirmed.
+  Future<void> _startLoginVerification(
+    String email, {
+    String? notice,
+  }) async {
+    _code.clear();
+    setState(() {
+      _loginVerificationPending = true;
+      _pendingEmail = email;
+      _error = null;
+      _notice = notice ?? AppCopy.emailNotVerifiedLogin;
+      _offerSwitchToLogin = false;
+      _offerContinueVerification = false;
+    });
+    await _resendCode();
   }
 
-  void _scheduleDevAutoSubmit({
-    required bool prefilledFromTicket,
-    EmailVerificationTicket? ticket,
-  }) {
-    if (kReleaseMode || !prefilledFromTicket) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || _registerStep != _codeStep || _submittingCode) return;
-      if (ticket != null) {
-        _applyDevVerificationCode(ticket);
-      }
-      if (_code.text.length != _codeLength) return;
-      unawaited(_submitCode());
+  void _cancelLoginVerification() {
+    _resendTimer?.cancel();
+    setState(() {
+      _loginVerificationPending = false;
+      _pendingEmail = null;
+      _code.clear();
+      _notice = null;
+      _error = null;
+      _resendSeconds = 0;
     });
   }
 
-  /// Login found a correct password on an account that was never confirmed.
+  /// Register flow resume — keeps the registration wizard on the code step.
   Future<void> _resumeUnconfirmedSignup(
     String email, {
     String? notice,
   }) async {
     _code.clear();
     setState(() {
+      _loginVerificationPending = false;
       _isLogin = false;
       _registerStep = _codeStep;
       _pendingEmail = email;
@@ -466,6 +530,9 @@ class _AuthScreenState extends State<AuthScreen> {
     try {
       await auth.verifyEmail(email: email, code: code);
       Analytics.instance.authSuccess(register: true);
+      if (mounted) {
+        setState(() => _loginVerificationPending = false);
+      }
     } catch (e) {
       if (!mounted) return;
       final failure = FailureMapper.from(e);
@@ -492,10 +559,8 @@ class _AuthScreenState extends State<AuthScreen> {
       final ticket =
           await context.read<AuthProvider>().resendVerification(email);
       if (!mounted) return;
-      final prefilled = _applyDevVerificationCode(ticket);
       setState(() => _notice = AppCopy.emailVerificationResent);
       _startResendCountdown(ticket.resendAvailableInSeconds);
-      _scheduleDevAutoSubmit(prefilledFromTicket: prefilled, ticket: ticket);
     } catch (e) {
       if (!mounted) return;
       setState(() => _error = FailureMapper.from(e).message);
@@ -540,6 +605,7 @@ class _AuthScreenState extends State<AuthScreen> {
   }
 
   String get _primaryActionLabel {
+    if (_loginVerificationPending) return 'Подтвердить';
     if (_isLogin) return 'Войти';
     return switch (_registerStep) {
       0 || 1 => AppCopy.continueLabel,
@@ -555,6 +621,9 @@ class _AuthScreenState extends State<AuthScreen> {
       _validateNickname(_nickname.text) == null;
 
   bool get _canSubmit {
+    if (_loginVerificationPending) {
+      return _code.text.trim().length == _codeLength && !_submittingCode;
+    }
     if (_isLogin) {
       return _validateEmail(_email.text) == null &&
           _validatePassword(_password.text) == null;
@@ -625,6 +694,7 @@ class _AuthScreenState extends State<AuthScreen> {
     _resendTimer?.cancel();
     setState(() {
       _isLogin = !_isLogin;
+      _loginVerificationPending = false;
       _registerStep = 0;
       _error = null;
       _notice = null;
@@ -635,8 +705,34 @@ class _AuthScreenState extends State<AuthScreen> {
       _code.clear();
       _registrationPending = false;
       _pendingEmail = null;
+      _registeredName = null;
+      _registeredNickname = null;
+      _registeredPassword = null;
       _nicknameStatus = _NicknameAvailability.idle;
       _emailStatus = _EmailAvailability.idle;
+    });
+  }
+
+  void _switchToRegisterPreservingEmail() {
+    _resendTimer?.cancel();
+    setState(() {
+      _isLogin = false;
+      _loginVerificationPending = false;
+      _registerStep = 1;
+      _error = null;
+      _notice = null;
+      _offerSwitchToLogin = false;
+      _offerContinueVerification = false;
+      _agreed = false;
+      _resendSeconds = 0;
+      _code.clear();
+      _registrationPending = false;
+      _pendingEmail = null;
+      _registeredName = null;
+      _registeredNickname = null;
+      _registeredPassword = null;
+      _nicknameStatus = _NicknameAvailability.idle;
+      _emailStatus = _EmailAvailability.available;
     });
   }
 
@@ -644,6 +740,7 @@ class _AuthScreenState extends State<AuthScreen> {
     _resendTimer?.cancel();
     setState(() {
       _isLogin = true;
+      _loginVerificationPending = false;
       _registerStep = 0;
       _error = null;
       _notice = null;
@@ -654,6 +751,9 @@ class _AuthScreenState extends State<AuthScreen> {
       _code.clear();
       _registrationPending = false;
       _pendingEmail = null;
+      _registeredName = null;
+      _registeredNickname = null;
+      _registeredPassword = null;
       _nicknameStatus = _NicknameAvailability.idle;
       _emailStatus = _EmailAvailability.idle;
     });
@@ -705,6 +805,7 @@ class _AuthScreenState extends State<AuthScreen> {
       };
 
   String get _heroTitle {
+    if (_loginVerificationPending) return 'Подтвердите почту';
     if (_isLogin) return 'С возвращением';
     return switch (_registerStep) {
       0 => 'Как вас представить',
@@ -715,6 +816,10 @@ class _AuthScreenState extends State<AuthScreen> {
   }
 
   String get _heroSubtitle {
+    if (_loginVerificationPending) {
+      return 'Отправили код из 6 цифр на ${_pendingEmail ?? _email.text.trim()}. '
+          'Аккаунт уже создан — осталось подтвердить почту, чтобы войти.';
+    }
     if (_isLogin) {
       return 'Продолжите привычки и общение в команде.';
     }
@@ -742,13 +847,13 @@ class _AuthScreenState extends State<AuthScreen> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               AuthHeroBanner(
-                compact: _isLogin,
+                compact: _isLogin || _loginVerificationPending,
                 title: _heroTitle,
                 subtitle: _heroSubtitle,
-                badge: _isLogin ? null : 'Регистрация',
+                badge: (_isLogin || _loginVerificationPending) ? null : 'Регистрация',
               ),
               const SizedBox(height: AppSpacing.lg),
-              if (!_isLogin) ...[
+              if (!_isLogin && !_loginVerificationPending) ...[
                 AuthRegisterStepper(step: _registerStep),
                 const SizedBox(height: AppSpacing.lg),
               ],
@@ -837,7 +942,33 @@ class _AuthScreenState extends State<AuthScreen> {
                         validator: _validatePassword,
                       ),
                     ],
-                    if (_isLogin) ...[
+                    if (_loginVerificationPending) ...[
+                      AppCodeField(
+                        key: const ValueKey('auth-login-code'),
+                        controller: _code,
+                        length: _codeLength,
+                        onCompleted: (_) => unawaited(_submitCode()),
+                      ),
+                      const SizedBox(height: AppSpacing.sm),
+                      AuthFieldHint(
+                        text: _resendSeconds > 0
+                            ? AppCopy.emailVerificationResendIn(_resendSeconds)
+                            : 'Письма нет? Проверьте папку «Спам» '
+                                'или отправьте код снова.',
+                        tone: _resendSeconds > 0
+                            ? AuthFieldHintTone.loading
+                            : AuthFieldHintTone.neutral,
+                      ),
+                      if (_resendSeconds == 0) ...[
+                        const SizedBox(height: AppSpacing.sm),
+                        AppSecondaryButton(
+                          label: 'Отправить код снова',
+                          icon: Icons.refresh_rounded,
+                          onPressed: _resendCode,
+                        ),
+                      ],
+                    ],
+                    if (_isLogin && !_loginVerificationPending) ...[
                       PrimeTextField(
                         key: const ValueKey('auth-login-email'),
                         controller: _email,
@@ -928,22 +1059,6 @@ class _AuthScreenState extends State<AuthScreen> {
                         length: _codeLength,
                         onCompleted: (_) => unawaited(_submitCode()),
                       ),
-                      if (!kReleaseMode && _devCodeNotice != null) ...[
-                        const SizedBox(height: AppSpacing.sm),
-                        AuthFieldHint(
-                          text: _devCodeNotice!,
-                          tone: AuthFieldHintTone.neutral,
-                        ),
-                      ],
-                      if (!kReleaseMode &&
-                          _devCodeNotice == null &&
-                          _code.text.length == _codeLength) ...[
-                        const SizedBox(height: AppSpacing.sm),
-                        AuthFieldHint(
-                          text: 'Dev: код подставлен автоматически',
-                          tone: AuthFieldHintTone.positive,
-                        ),
-                      ],
                       const SizedBox(height: AppSpacing.sm),
                       AuthFieldHint(
                         text: _resendSeconds > 0
@@ -1000,6 +1115,7 @@ class _AuthScreenState extends State<AuthScreen> {
                       onPressed: _canSubmit ? _submit : null,
                     ),
                     if (!_isLogin &&
+                        !_loginVerificationPending &&
                         _registerStep > 0 &&
                         (_registerStep != _codeStep ||
                             _canEditRegistrationData)) ...[
@@ -1008,23 +1124,27 @@ class _AuthScreenState extends State<AuthScreen> {
                         label: _registerStep == _codeStep
                             ? 'Изменить данные'
                             : AppCopy.back,
-                        onPressed: () => setState(() {
-                          _registerStep -= 1;
-                          _error = null;
-                          _notice = null;
-                        }),
+                        onPressed: () => _backRegisterStep(
+                          editFromCode: _registerStep == _codeStep,
+                        ),
                       ),
                     ],
                   ],
                 ),
               ),
               const SizedBox(height: AppSpacing.sm),
-              AuthFooterLink(
-                label: _isLogin
-                    ? 'Нет аккаунта? Создать'
-                    : 'Уже есть аккаунт? Войти',
-                onPressed: _toggleMode,
-              ),
+              if (_loginVerificationPending) ...[
+                AuthFooterLink(
+                  label: 'Вернуться ко входу',
+                  onPressed: _cancelLoginVerification,
+                ),
+              ] else
+                AuthFooterLink(
+                  label: _isLogin
+                      ? 'Нет аккаунта? Создать'
+                      : 'Уже есть аккаунт? Войти',
+                  onPressed: _toggleMode,
+                ),
             ],
           ),
         ),

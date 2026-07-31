@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../design/lottie_registry.dart';
 import '../../../design/tokens.dart';
 import '../../../design/typography.dart';
 import '../../../design/visuals/ambient_and_progress.dart';
@@ -47,6 +48,15 @@ class AppGroupRecapPanel extends StatelessWidget {
           ),
           const SizedBox(height: AppSpacing.xs),
           Text(recap.message, style: AppTypography.bodySecondary),
+          if (recap.supportSignals > 0) ...[
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              'Команда поддержала вас ${recap.supportSignals} раз — '
+              'это помогло держать ритм вместе.',
+              style:
+                  AppTypography.caption.copyWith(color: AppColors.primarySoft),
+            ),
+          ],
           const SizedBox(height: AppSpacing.md),
           Row(
             children: [
@@ -69,12 +79,9 @@ class AppGroupRecapPanel extends StatelessWidget {
               Expanded(
                 child: _RecapMetricTile(
                   label: 'Лучший день',
-                  value: recap.bestDay != null
-                      ? '${recap.bestDayCount}'
-                      : '—',
-                  caption: recap.bestDay != null
-                      ? _formatDay(recap.bestDay!)
-                      : null,
+                  value: recap.bestDay != null ? '${recap.bestDayCount}' : '—',
+                  caption:
+                      recap.bestDay != null ? _formatDay(recap.bestDay!) : null,
                   icon: Icons.emoji_events_outlined,
                 ),
               ),
@@ -87,6 +94,106 @@ class AppGroupRecapPanel extends StatelessWidget {
 
   static String _formatDay(DateTime day) =>
       '${day.day.toString().padLeft(2, '0')}.${day.month.toString().padLeft(2, '0')}';
+}
+
+class AppPersonalImpactPanel extends StatelessWidget {
+  const AppPersonalImpactPanel({super.key, required this.result});
+
+  final PersonalResultModel result;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(AppRadius.xl),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            AppColors.success.withValues(alpha: 0.1),
+            AppColors.primary.withValues(alpha: 0.08),
+          ],
+        ),
+        border: Border.all(
+          color: AppColors.success.withValues(alpha: 0.28),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.auto_graph_rounded, color: AppColors.success),
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(
+                child: Text(
+                  'Ваш результат благодаря ритму',
+                  style: AppTypography.title2,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          Text(result.message, style: AppTypography.bodySecondary),
+          const SizedBox(height: AppSpacing.md),
+          Wrap(
+            spacing: AppSpacing.xs,
+            runSpacing: AppSpacing.xs,
+            children: [
+              _ImpactPill(
+                value: '${result.readyDays}/7',
+                label: 'личный ритм',
+              ),
+              _ImpactPill(
+                value: '${result.teamDays}',
+                label: 'дней вместе',
+              ),
+              _ImpactPill(
+                value: '${result.supportReceived}',
+                label: 'поддержек получено',
+              ),
+              _ImpactPill(
+                value: '${result.supportGiven}',
+                label: 'поддержек от вас',
+              ),
+              if (result.recoveredHardDays > 0)
+                _ImpactPill(
+                  value: '${result.recoveredHardDays}',
+                  label: 'сложных дней пройдено',
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ImpactPill extends StatelessWidget {
+  const _ImpactPill({required this.value, required this.label});
+
+  final String value;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.sm,
+        vertical: AppSpacing.xs,
+      ),
+      decoration: BoxDecoration(
+        color: AppColors.surface.withValues(alpha: 0.58),
+        borderRadius: BorderRadius.circular(AppRadius.pill),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Text(
+        '$value · $label',
+        style: AppTypography.caption.copyWith(fontWeight: FontWeight.w700),
+      ),
+    );
+  }
 }
 
 class _RecapMetricTile extends StatelessWidget {
@@ -187,12 +294,17 @@ class _MilestoneCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (item.unlocked) ...[
+            const PrimeLottie(
+              slot: PrimeLottieSlot.success,
+              height: 48,
+            ),
+            const SizedBox(height: AppSpacing.xxs),
+          ],
           Row(
             children: [
               Icon(
-                item.unlocked
-                    ? Icons.verified_rounded
-                    : Icons.flag_outlined,
+                item.unlocked ? Icons.verified_rounded : Icons.flag_outlined,
                 color: accent,
                 size: 20,
               ),

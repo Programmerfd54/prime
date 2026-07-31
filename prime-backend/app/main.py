@@ -12,9 +12,11 @@ from .config import get_settings
 from .db import SessionLocal, create_db_schema
 from .logging_config import configure_logging
 from .middleware import request_log_middleware, security_headers_middleware
+from .rate_limit_middleware import global_rate_limit_middleware
 from .matrix import migrate_legacy_tokens
 from .outbox_worker import run_outbox_worker
-from .routers import auth, catalog, chat, groups, notifications, reports, social, users, waiting_room
+from .media_pipeline.worker import run_media_worker
+from .routers import auth, catalog, chat, email, groups, moderation, mfa, notifications, ops, reports, social, users, waiting_room
 
 
 settings = get_settings()
@@ -22,8 +24,26 @@ configure_logging(settings.log_level)
 logger = logging.getLogger("prime.app")
 
 
+def _validate_production_settings() -> None:
+    if not settings.is_production:
+        return
+    if settings.enable_dev_tools:
+        raise RuntimeError("ENABLE_DEV_TOOLS must be false in production")
+    if settings.email_verification_expose_code:
+        raise RuntimeError("EMAIL_VERIFICATION_EXPOSE_CODE must be false in production")
+    if settings.cors_allow_origin_regex.strip():
+        raise RuntimeError("CORS_ALLOW_ORIGIN_REGEX must be empty in production")
+    if not settings.cors_allowed_origins.strip():
+        raise RuntimeError("CORS_ALLOWED_ORIGINS must be set in production")
+    if not settings.moderator_features_enabled:
+        return
+    if not settings.moderator_mfa_enforce:
+        raise RuntimeError("MODERATOR_MFA_ENFORCE must be true in production when moderator features are enabled")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _validate_production_settings()
     logger.info("starting_prime_api")
     await create_db_schema()
     async with SessionLocal() as session:
@@ -32,12 +52,14 @@ async def lifespan(app: FastAPI):
             logger.info("matrix_tokens_encrypted", extra={"count": migrated})
     stop_event = asyncio.Event()
     worker = asyncio.create_task(run_outbox_worker(stop_event))
+    media_worker = asyncio.create_task(run_media_worker(stop_event))
     try:
         yield
     finally:
         stop_event.set()
         worker.cancel()
-        await asyncio.gather(worker, return_exceptions=True)
+        media_worker.cancel()
+        await asyncio.gather(worker, media_worker, return_exceptions=True)
     logger.info("stopping_prime_api")
 
 
@@ -54,6 +76,7 @@ app = FastAPI(
     openapi_url=openapi_url,
 )
 app.middleware("http")(security_headers_middleware)
+app.middleware("http")(global_rate_limit_middleware)
 app.middleware("http")(request_log_middleware)
 Path("uploads").mkdir(parents=True, exist_ok=True)
 _cors_origins = [
@@ -168,17 +191,22 @@ app.add_middleware(
     allow_origin_regex=_cors_regex,
     allow_credentials=False,
     allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID", "Accept", "Cache-Control"],
     expose_headers=["X-Request-ID"],
 )
 
 app.include_router(auth.router, prefix="/api/v1")
+app.include_router(email.router, prefix="/api/v1")
+app.include_router(mfa.router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")
 app.include_router(users.legacy_router, prefix="/api/v1")
 app.include_router(catalog.router, prefix="/api/v1")
 app.include_router(social.router, prefix="/api/v1")
 app.include_router(notifications.router, prefix="/api/v1")
+app.include_router(ops.router, prefix="/api/v1")
 app.include_router(waiting_room.router, prefix="/api/v1")
 app.include_router(groups.router, prefix="/api/v1")
 app.include_router(chat.router, prefix="/api/v1")
 app.include_router(reports.router, prefix="/api/v1")
+app.include_router(moderation.router, prefix="/api/v1")
+app.include_router(moderation.ops_router, prefix="/api/v1")

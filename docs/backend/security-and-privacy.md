@@ -23,6 +23,10 @@ Implemented controls:
 - moderator-only operational endpoints and membership checks close the
   previously reachable group-management paths; keyset cursors and bounded
   limits protect list endpoints.
+- device registrations are removed server-side on logout when reachable; iOS
+  also unregisters from remote notifications and clears delivered team
+  notifications locally, so an offline logout does not leave native delivery
+  enabled on the signed-out installation.
 
 Release prerequisites:
 

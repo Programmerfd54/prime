@@ -9,6 +9,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../config/constants.dart';
 import '../core/errors/app_failure.dart';
 import '../core/errors/failure_mapper.dart';
+import '../core/features/moderator_features.dart';
+import '../models/social_restriction.dart';
 import 'regions.dart';
 
 class ApiClient {
@@ -166,6 +168,20 @@ class ApiClient {
     await prefs.setString(key, jsonEncode(data));
   }
 
+  static bool _isSensitiveCachePath(String path) {
+    if (path.startsWith('/direct-chats') ||
+        path.startsWith('/friends') ||
+        path.startsWith('/notifications')) {
+      return true;
+    }
+    return RegExp(r'^/chat/[^/]+/messages$').hasMatch(path);
+  }
+
+  Future<void> _persistCache(String key, String path, dynamic data) async {
+    if (_isSensitiveCachePath(path)) return;
+    await _saveCache(key, data);
+  }
+
   Future<dynamic> _readCache(String key) async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(key);
@@ -185,11 +201,12 @@ class ApiClient {
     final key = _cacheKey(path, queryParameters);
     try {
       final r = await dio.get(path, queryParameters: queryParameters);
-      await _saveCache(key, r.data);
+      await _persistCache(key, path, r.data);
       _memoryCache[key] = _MemoryCacheEntry(r.data, DateTime.now());
       return r.data;
     } on DioException catch (error) {
       if (isUnauthorized(error) || !isNetworkError(error)) rethrow;
+      if (_isSensitiveCachePath(path)) rethrow;
       final cached = await _readCache(key);
       if (cached != null) return cached;
       rethrow;
@@ -213,14 +230,16 @@ class ApiClient {
         }
         return mem.data;
       }
-      final disk = await _readCache(key);
-      if (disk != null) {
-        _memoryCache[key] = _MemoryCacheEntry(
-          disk,
-          DateTime.now().subtract(ttl),
-        );
-        unawaited(_refreshInBackground(key, path, queryParameters));
-        return disk;
+      if (!_isSensitiveCachePath(path)) {
+        final disk = await _readCache(key);
+        if (disk != null) {
+          _memoryCache[key] = _MemoryCacheEntry(
+            disk,
+            DateTime.now().subtract(ttl),
+          );
+          unawaited(_refreshInBackground(key, path, queryParameters));
+          return disk;
+        }
       }
     }
 
@@ -228,6 +247,7 @@ class ApiClient {
       return await _fetchAndCache(key, path, queryParameters: queryParameters);
     } on DioException catch (error) {
       if (isUnauthorized(error) || !isNetworkError(error)) rethrow;
+      if (_isSensitiveCachePath(path)) rethrow;
       final disk = await _readCache(key);
       if (disk != null) {
         _memoryCache[key] = _MemoryCacheEntry(
@@ -262,7 +282,7 @@ class ApiClient {
       queryParameters: queryParameters,
       options: _optionsForPath(path),
     );
-    await _saveCache(key, r.data);
+    await _persistCache(key, path, r.data);
     _memoryCache[key] = _MemoryCacheEntry(r.data, DateTime.now());
     return r.data;
   }
@@ -294,6 +314,12 @@ class ApiClient {
   List<dynamic>? peekGroupsCacheSync() {
     final raw = peekMemoryCacheSync('/groups');
     if (raw is List) return List<dynamic>.from(raw);
+    return null;
+  }
+
+  Map<String, dynamic>? peekGroupsOverviewCacheSync() {
+    final raw = peekMemoryCacheSync('/groups/overview');
+    if (raw is Map) return Map<String, dynamic>.from(raw);
     return null;
   }
 
@@ -329,6 +355,7 @@ class ApiClient {
     final key = _cacheKey(path, queryParameters);
     final mem = _memoryCache[key];
     if (mem != null) return mem.data;
+    if (_isSensitiveCachePath(path)) return null;
     return _readCache(key);
   }
 
@@ -357,9 +384,17 @@ class ApiClient {
     return r.data as Map<String, dynamic>;
   }
 
-  Future<bool> checkNicknameAvailable(String nickname) async {
+  Future<bool> checkNicknameAvailable(
+    String nickname, {
+    String? forEmail,
+  }) async {
     final normalized = nickname.trim().replaceFirst(RegExp(r'^@'), '');
-    final r = await dio.get('/auth/nickname-available/$normalized');
+    final r = await dio.get(
+      '/auth/nickname-available/$normalized',
+      queryParameters: forEmail != null && forEmail.isNotEmpty
+          ? {'email': forEmail.trim().toLowerCase()}
+          : null,
+    );
     return (r.data as Map<String, dynamic>)['available'] as bool? ?? false;
   }
 
@@ -485,6 +520,65 @@ class ApiClient {
     await dio.delete('/users/me');
   }
 
+  Future<SocialRestrictionStatus> fetchMySocialRestriction() async {
+    final r = await dio.get('/users/me/restriction');
+    return SocialRestrictionStatus.fromJson(
+      Map<String, dynamic>.from(r.data as Map),
+    );
+  }
+
+  Future<Map<String, dynamic>> submitModerationAppeal({
+    required String decisionId,
+    String explanation = '',
+  }) async {
+    final r = await dio.post('/moderation/appeals', data: {
+      'decision_id': decisionId,
+      'explanation': explanation,
+    });
+    return r.data as Map<String, dynamic>;
+  }
+
+  /// Moderator TOTP enrollment — returns otpauth URI for QR display.
+  Future<Map<String, dynamic>> enrollModeratorTotp() async {
+    if (!ModeratorFeatures.enabled) {
+      throw const ForbiddenFailure(
+        message: 'Функции модератора отключены',
+      );
+    }
+    final r = await dio.post('/auth/mfa/totp/enroll');
+    return r.data as Map<String, dynamic>;
+  }
+
+  /// Verify TOTP for enrollment (`confirmEnrollment: true`) or step-up.
+  Future<Map<String, dynamic>> verifyModeratorTotp(
+    String code, {
+    bool confirmEnrollment = false,
+  }) async {
+    if (!ModeratorFeatures.enabled) {
+      throw const ForbiddenFailure(
+        message: 'Функции модератора отключены',
+      );
+    }
+    final r = await dio.post('/auth/mfa/totp/verify', data: {
+      'code': code.trim(),
+      if (confirmEnrollment) 'confirm_enrollment': true,
+    });
+    return r.data as Map<String, dynamic>;
+  }
+
+  /// Single-use backup code step-up for moderators.
+  Future<Map<String, dynamic>> verifyModeratorBackupCode(String code) async {
+    if (!ModeratorFeatures.enabled) {
+      throw const ForbiddenFailure(
+        message: 'Функции модератора отключены',
+      );
+    }
+    final r = await dio.post('/auth/mfa/backup-code/verify', data: {
+      'code': code.trim(),
+    });
+    return r.data as Map<String, dynamic>;
+  }
+
   Future<Map<String, dynamic>> buyStreakShield() async {
     final r = await dio.post('/users/me/shields/buy');
     return r.data as Map<String, dynamic>;
@@ -590,6 +684,20 @@ class ApiClient {
     });
   }
 
+  Future<Map<String, dynamic>> getEmailPreferences() async {
+    final r = await dio.get('/users/me/email-preferences');
+    return r.data as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> updateEmailPreferences({
+    required bool marketingEmailsOptIn,
+  }) async {
+    final r = await dio.patch('/users/me/email-preferences', data: {
+      'marketing_emails_opt_in': marketingEmailsOptIn,
+    });
+    return r.data as Map<String, dynamic>;
+  }
+
   // ------------------------------------------------------------------ skills
   Future<List<Map<String, dynamic>>> listRegions() async {
     try {
@@ -643,7 +751,10 @@ class ApiClient {
     await _invalidatePathCache('/groups/waiting-room');
   }
 
-  Future<void> invalidateGroupsCache() => _invalidatePathCache('/groups');
+  Future<void> invalidateGroupsCache() async {
+    await _invalidatePathCache('/groups');
+    await _invalidatePathCache('/groups/overview');
+  }
 
   Future<void> leaveWaitingRoom({String? skillId}) async => await dio.delete(
         '/groups/waiting-room',
@@ -715,6 +826,46 @@ class ApiClient {
     return r.data as Map<String, dynamic>;
   }
 
+  Future<Map<String, dynamic>> supportGroupMember({
+    required String groupId,
+    required String targetUserId,
+    String? message,
+  }) async {
+    final r = await dio.post('/groups/$groupId/support', data: {
+      'target_user_id': targetUserId,
+      if (message != null && message.trim().isNotEmpty)
+        'message': message.trim(),
+    });
+    await invalidateGroupsCache();
+    return r.data as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> groupsOverview({
+    bool forceRefresh = false,
+  }) async {
+    final data = await _getCachedSWR(
+      '/groups/overview',
+      ttl: groupsCacheTtl,
+      forceRefresh: forceRefresh,
+    );
+    return data as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> reconcileMembership() async {
+    final r = await dio.post('/groups/membership/reconcile');
+    await invalidateGroupsCache();
+    return r.data as Map<String, dynamic>;
+  }
+
+  Future<List<dynamic>> membershipHistory({int limit = 100}) async {
+    final r = await dio.get(
+      '/groups/membership-history',
+      queryParameters: {'limit': limit},
+    );
+    final data = r.data as Map<String, dynamic>;
+    return data['items'] as List<dynamic>? ?? const [];
+  }
+
   Future<List<dynamic>> listGroups({bool forceRefresh = false}) async {
     final data = await _getCachedSWR(
       '/groups',
@@ -748,6 +899,8 @@ class ApiClient {
 
   Future<Map<String, dynamic>> changeIntroGroup(String groupId) async {
     final r = await dio.post('/groups/$groupId/intro/change');
+    await invalidateGroupsCache();
+    await invalidateWaitingRoomCache();
     return r.data as Map<String, dynamic>;
   }
 
@@ -935,14 +1088,28 @@ class ApiClient {
     await dio.post('/notifications/read-all');
   }
 
+  Future<void> deleteNotification(String notificationId) async {
+    await dio.delete('/notifications/$notificationId');
+  }
+
+  Future<void> clearAllNotifications() async {
+    await dio.post('/notifications/clear');
+  }
+
   Future<void> registerDeviceToken({
     required String token,
     required String platform,
+    String provider = 'fcm',
   }) async {
     await dio.post('/devices/register', data: {
       'token': token,
       'platform': platform,
+      'provider': provider,
     });
+  }
+
+  Future<void> unregisterDeviceToken(String token) async {
+    await dio.post('/devices/unregister', data: {'token': token});
   }
 
   Future<List<dynamic>> listDirectChats({bool forceRefresh = false}) async {

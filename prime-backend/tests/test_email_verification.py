@@ -323,7 +323,7 @@ async def test_http_signup_flow_over_asgi(monkeypatch: pytest.MonkeyPatch) -> No
 
     sent: list[str] = []
 
-    async def fake_send_email(*, to, subject, text_body, html_body=None):
+    async def fake_send_email(*, to, subject, text_body, html_body=None, list_unsubscribe_url=None):
         sent.append(to)
         return True
 

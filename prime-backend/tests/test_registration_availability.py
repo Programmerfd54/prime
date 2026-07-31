@@ -44,12 +44,18 @@ async def test_nickname_available_without_auth() -> None:
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             free = await client.get("/api/v1/auth/nickname-available/freshnick")
             taken = await client.get("/api/v1/auth/nickname-available/takennick")
+            own_pending = await client.get(
+                "/api/v1/auth/nickname-available/takennick",
+                params={"email": "avail@example.com"},
+            )
             invalid = await client.get("/api/v1/auth/nickname-available/ab")
 
         assert free.status_code == 200
         assert free.json()["available"] is True
         assert taken.status_code == 200
         assert taken.json()["available"] is False
+        assert own_pending.status_code == 200
+        assert own_pending.json()["available"] is True
         assert invalid.status_code == 400
     finally:
         app.dependency_overrides.clear()
@@ -102,7 +108,7 @@ async def test_email_available_without_auth() -> None:
         assert pending_resp.status_code == 200
         assert pending_resp.json() == {
             "available": False,
-            "pending_verification": True,
+            "pending_verification": False,
         }
         assert verified.status_code == 200
         assert verified.json() == {

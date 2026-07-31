@@ -20,7 +20,8 @@ class WaitingRoomPoller extends ChangeNotifier {
   WaitingRoomStats? stats;
   Duration interval = const Duration(seconds: 10);
 
-  bool get inQueue => status?.inQueue == true || (status?.queues.isNotEmpty ?? false);
+  bool get inQueue =>
+      status?.inQueue == true || (status?.queues.isNotEmpty ?? false);
   String? get matchedGroupId => status?.matchedGroupId;
   bool get isActive => _timer?.isActive == true;
 
@@ -34,10 +35,22 @@ class WaitingRoomPoller extends ChangeNotifier {
 
   /// Starts periodic polling. Safe to call repeatedly — does not restart
   /// an already-running timer or fire a duplicate immediate refresh.
-  void start({Duration? interval, bool forceRefresh = false}) {
+  void start({
+    Duration? interval,
+    bool forceRefresh = false,
+    bool immediate = true,
+  }) {
     if (interval != null) this.interval = interval;
     if (isActive && !forceRefresh) return;
-    _restart(immediate: true);
+    _restart(immediate: immediate);
+  }
+
+  void applySnapshot(WaitingRoomStatus next, {WaitingRoomStats? nextStats}) {
+    status = next;
+    if (nextStats != null) stats = nextStats;
+    loading = false;
+    error = null;
+    if (!_disposed) notifyListeners();
   }
 
   void pause() => _timer?.cancel();

@@ -30,7 +30,7 @@ Future<bool> showAboutBeforeTeamSheet(
 }) async {
   final auth = context.read<AuthProvider>();
   final controller = TextEditingController(text: auth.user?.about ?? '');
-  final result = await showAppBottomSheet<bool>(
+  final savedText = await showAppBottomSheet<String>(
     context: context,
     child: Builder(
       builder: (sheetContext) {
@@ -97,7 +97,7 @@ Future<bool> showAboutBeforeTeamSheet(
                       loading: saving,
                       onPressed: saving
                           ? null
-                          : () async {
+                          : () {
                               final junk =
                                   AboutQuality.junkReason(controller.text);
                               if (junk != null) {
@@ -109,10 +109,11 @@ Future<bool> showAboutBeforeTeamSheet(
                                 saving = true;
                                 localError = null;
                               });
-                              await auth.applyAboutLocally(trimmed);
-                              auth.persistAboutInBackground(trimmed);
+                              // Close the sheet before AuthProvider notifies —
+                              // otherwise the chat screen rebuilds while the
+                              // sheet is still mounted and can crash (ui-*).
                               if (sheetContext.mounted) {
-                                Navigator.of(sheetContext).pop(true);
+                                Navigator.of(sheetContext).pop(trimmed);
                               }
                             },
                     ),
@@ -126,7 +127,13 @@ Future<bool> showAboutBeforeTeamSheet(
     ),
   );
   controller.dispose();
-  return result == true;
+
+  if (savedText == null || !context.mounted) {
+    return false;
+  }
+  await auth.applyAboutLocally(savedText);
+  auth.persistAboutInBackground(savedText);
+  return true;
 }
 
 class _WhyAboutBullets extends StatelessWidget {

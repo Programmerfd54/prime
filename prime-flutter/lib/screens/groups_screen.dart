@@ -5,11 +5,15 @@ import 'package:provider/provider.dart';
 
 import '../core/analytics/analytics.dart';
 import '../core/errors/failure_mapper.dart';
+import '../core/groups/group_navigation.dart';
+import '../core/groups/group_prep_state.dart';
+import '../core/groups/team_day_presentation.dart';
+import '../core/notifications/native_push_service.dart';
 import '../core/sync/waiting_room_poller.dart';
+import '../ui/components/app_push_degraded_banner.dart';
 import '../data/api_client.dart';
 import '../design/routes.dart';
 import '../ui/kit/tokens/kit_layout.dart';
-import '../ui/kit/components/prime_content_card.dart';
 import '../ui/kit/presentation/gate_groups_active_presentation.dart';
 import '../ui/kit/presentation/gate_groups_presentation.dart';
 import '../design/tokens.dart';
@@ -28,6 +32,7 @@ import '../ui/components/app_snackbar.dart';
 import '../ui/components/app_skeleton.dart';
 import '../ui/components/editorial/app_group_editorial.dart';
 import '../ui/components/editorial/app_team_formation.dart';
+import '../ui/components/groups/app_early_start_banner.dart';
 import '../ui/components/groups/invite_friends_sheet.dart';
 import '../ui/components/profile/about_before_team_sheet.dart';
 import '../ui/components/profile/rhythm_support_sheet.dart';
@@ -36,11 +41,13 @@ import '../widgets/async_error_view.dart';
 class GroupsScreen extends StatefulWidget {
   final SkillModel? preselectedSkill;
   final int refreshToken;
+  final bool preferSearchTab;
 
   const GroupsScreen({
     super.key,
     this.preselectedSkill,
     this.refreshToken = 0,
+    this.preferSearchTab = false,
   });
 
   @override
@@ -61,10 +68,15 @@ class _GroupsScreenState extends State<GroupsScreen> {
   String? _errorCorrelationId;
   String? _handledMatchedGroupId;
   WaitingRoomPoller? _poller;
+  _GroupsMode _mode = _GroupsMode.active;
+  bool _membershipInconsistent = false;
 
   @override
   void initState() {
     super.initState();
+    if (widget.preferSearchTab) {
+      _mode = _GroupsMode.search;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _poller = context.read<WaitingRoomPoller>();
@@ -82,6 +94,12 @@ class _GroupsScreenState extends State<GroupsScreen> {
   @override
   void didUpdateWidget(covariant GroupsScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.preferSearchTab != widget.preferSearchTab &&
+        widget.preferSearchTab) {
+      _mode = _GroupsMode.search;
+    } else if (oldWidget.preferSearchTab && !widget.preferSearchTab) {
+      _mode = _GroupsMode.active;
+    }
     if (oldWidget.preselectedSkill?.id != widget.preselectedSkill?.id ||
         oldWidget.refreshToken != widget.refreshToken) {
       _load();
@@ -120,19 +138,20 @@ class _GroupsScreenState extends State<GroupsScreen> {
     final api = context.read<ApiClient>();
     final poller = context.read<WaitingRoomPoller>();
     try {
-      final list = await api.listGroups(forceRefresh: true);
+      final overview = await api.groupsOverview(forceRefresh: true);
+      final list = overview['groups'] as List<dynamic>? ?? const [];
       _groups = list
           .map((j) => GroupModel.fromJson(j as Map<String, dynamic>))
           .toList();
-      await poller.refresh();
-      _waitingRoom = poller.status ??
-          WaitingRoomStatus.fromJson(await api.waitingRoomStatus(
-            skillId: widget.preselectedSkill?.id,
-          ));
+      _waitingRoom = WaitingRoomStatus.fromJson(
+        overview['waiting_room'] as Map<String, dynamic>? ?? const {},
+      );
+      poller.applySnapshot(_waitingRoom!);
       _waitingRoomStats = poller.stats;
+      _membershipInconsistent = overview['membership_consistent'] != true;
       if (_waitingRoom?.inQueue == true ||
           (_waitingRoom?.queues.isNotEmpty ?? false)) {
-        poller.start();
+        poller.start(immediate: false);
       }
     } catch (e) {
       if (mounted) {
@@ -213,6 +232,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
       if (!mounted) return;
       setState(() {
         _waitingRoom = WaitingRoomStatus.fromJson(result);
+        _mode = _GroupsMode.search;
       });
       context.read<WaitingRoomPoller>().start();
     } catch (e) {
@@ -229,8 +249,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
     final agreed = await showAppConfirmDialog(
       context: context,
       title: 'Старт втроём?',
-      body:
-          'Вы уверены, что хотите начать «$skillLabel» втроём?\n\n'
+      body: 'Вы уверены, что хотите начать «$skillLabel» втроём?\n\n'
           'Для полной поддержки лучше команда из 4–6 человек: больше мотивации, '
           'отчётности и взаимной опоры. Но вы можете начать втроём уже сейчас — '
           'поиск остальных участников продолжится позже.',
@@ -262,7 +281,8 @@ class _GroupsScreenState extends State<GroupsScreen> {
       await context.read<WaitingRoomPoller>().refresh();
       if (mounted) {
         setState(() {
-          _waitingRoom = context.read<WaitingRoomPoller>().status ?? _waitingRoom;
+          _waitingRoom =
+              context.read<WaitingRoomPoller>().status ?? _waitingRoom;
         });
       }
       await _load();
@@ -391,11 +411,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
 
   void _openMatchedGroup(String groupId) {
     _handledMatchedGroupId = groupId;
-    Navigator.of(context).push(
-      PrimeRoute.sharedAxis(
-        builder: (_) => GroupDetailScreen(groupId: groupId),
-      ),
-    );
+    unawaited(_openGroup(groupId));
   }
 
   @override
@@ -432,15 +448,13 @@ class _GroupsScreenState extends State<GroupsScreen> {
         break;
       }
     }
-    final confirmedCount = matchedGroup?.members
-            .where((m) => m.confirmedParticipation)
-            .length ??
-        0;
-    final acceptedCount = matchedGroup?.members
-            .where((m) => m.acceptedRules)
-            .length ??
-        0;
-    final matchTotal = matchedGroup?.maxMembers ?? matchedGroup?.membersCount ?? 6;
+    final userId = context.read<AuthProvider>().user?.id;
+    final prep = matchedGroup != null
+        ? GroupPrepStateResolver.resolve(
+            group: matchedGroup,
+            currentUserId: userId,
+          )
+        : null;
     final showPendingBanner = matchedGroup != null &&
         (matchedGroup.status == GroupStatus.introduction ||
             matchedGroup.status == GroupStatus.rulesPending);
@@ -460,6 +474,14 @@ class _GroupsScreenState extends State<GroupsScreen> {
     final otherGroups =
         _groups.where((g) => g.status != GroupStatus.active).toList();
     final hasCycleContent = _groups.isNotEmpty;
+    final hasActiveModeContent = hasCycleContent || showPendingBanner;
+    final hasSearchModeContent = inWaiting || widget.preselectedSkill != null;
+    final showModeSwitch = hasActiveModeContent && hasSearchModeContent;
+    final visibleMode = showModeSwitch
+        ? _mode
+        : hasActiveModeContent
+            ? _GroupsMode.active
+            : _GroupsMode.search;
 
     return AmbientCanvas(
       child: RefreshIndicator(
@@ -482,138 +504,147 @@ class _GroupsScreenState extends State<GroupsScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                  Text(
-                    'Мои группы',
-                    style: AppTypography.titleXL,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: AppSpacing.xxs),
-                  const Text(
-                    'Команда из шести — ритм, поддержка и общий прогресс',
-                    style: AppTypography.bodySecondary,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: AppSpacing.lg),
-                  if (showPendingBanner) ...[
-                    if (matchedGroup!.status == GroupStatus.rulesPending)
-                      GateGroupsRulesPendingCard(
-                        onOpen: () => _openMatchedGroup(matchedGroup!.id),
-                        skillName:
-                            _waitingRoom?.skillName ?? matchedGroup.skillName,
-                        acceptedCount: acceptedCount,
-                        total: matchTotal,
-                        userAccepted: myMember?.acceptedRules ?? false,
-                      )
-                    else
-                      GateGroupsConfirmationCard(
-                        onConfirm: () => _openMatchedGroup(matchedGroup!.id),
-                        skillName:
-                            _waitingRoom?.skillName ?? matchedGroup.skillName,
-                        confirmedCount: confirmedCount,
-                        total: matchTotal,
-                        userConfirmed: myMember?.confirmedParticipation ?? false,
-                      ),
-                    const SizedBox(height: AppSpacing.md),
-                  ],
-                  if (hasCycleContent) ...[
-                    const _SectionHeader(
-                      title: 'Мой цикл',
-                      subtitle: 'Активные команды и прогресс дня',
-                    ),
-                    const SizedBox(height: AppSpacing.sm),
-                    if (activeGroups.isNotEmpty) ...[
-                      for (final group in activeGroups) ...[
-                        _TeamDayCard(
-                          group: group,
-                          onOpenGroup: () => _openGroup(group.id),
-                          onNudge: () => _nudgeGroup(group),
+                        const Text(
+                          'Мои группы',
+                          style: AppTypography.titleXL,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
-                        const SizedBox(height: AppSpacing.sm),
-                      ],
-                      if (activeGroups.length == 1) ...[
-                        AppGroupActiveCycleHero(
-                          group: activeGroups.first,
-                          onTap: () => _openGroup(activeGroups.first.id),
+                        const SizedBox(height: AppSpacing.xxs),
+                        const Text(
+                          'Команда из шести — ритм, поддержка и общий прогресс',
+                          style: AppTypography.bodySecondary,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
                         ),
-                        const SizedBox(height: AppSpacing.sm),
-                      ] else
-                        for (final group in activeGroups)
-                          Padding(
-                            padding:
-                                const EdgeInsets.only(bottom: AppSpacing.sm),
-                            child: _GroupTile(
-                              group: group,
-                              onTap: () => _openGroup(group.id),
-                            ),
+                        const SizedBox(height: AppSpacing.lg),
+                        if (NativePushService.instance.degraded) ...[
+                          const AppPushDegradedBanner(),
+                          const SizedBox(height: AppSpacing.md),
+                        ],
+                        if (_membershipInconsistent) ...[
+                          _MembershipAuditBanner(
+                            onReconcile: _reconcileMembership,
                           ),
-                    ],
-                    for (final group in otherGroups)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-                        child: _GroupTile(
-                          group: group,
-                          onTap: () => _openGroup(group.id),
-                        ),
-                      ),
-                    const SizedBox(height: AppSpacing.md),
-                  ],
-                  if (inWaiting) ...[
-                    if (queueCards.length > 1) ...[
-                      const _SectionHeader(
-                        title: 'Поиск',
-                        subtitle: 'Собираем команду из 6 человек',
-                      ),
-                      const SizedBox(height: AppSpacing.xs),
-                      Text(
-                        'Ищем команду по ${queueCards.length} привычкам — стартёт первая собранная',
-                        style: AppTypography.caption,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: AppSpacing.sm),
-                    ],
-                    _SearchQueuesPanel(
-                      queues: queueCards,
-                      stats: _waitingRoomStats,
-                      stopping: _stopping,
-                      expanding: _expanding,
-                      startingEarlyStart: _startingEarlyStart,
-                      onStop: _confirmStopSearch,
-                      onExpand: _expandSearch,
-                      onEarlyStart: _confirmEarlyStart,
-                    ),
-                    if (devMode) ...[
-                      const SizedBox(height: AppSpacing.sm),
-                      _DevAssembleButton(
-                        loading: _assembling,
-                        onPressed: _assembleTestTeam,
-                      ),
-                    ],
-                    const SizedBox(height: AppSpacing.md),
-                  ] else if (widget.preselectedSkill != null) ...[
-                    const _SectionHeader(
-                      title: 'Поиск',
-                      subtitle: 'Собираем команду из 6 человек',
-                    ),
-                    const SizedBox(height: AppSpacing.sm),
-                    _SkillStartCard(
-                      skill: widget.preselectedSkill!,
-                      joining: _joining,
-                      onStart: _startSearch,
-                    ),
-                    if (devMode) ...[
-                      const SizedBox(height: AppSpacing.sm),
-                      _DevAssembleButton(
-                        loading: _assembling,
-                        onPressed: _assembleTestTeam,
-                      ),
-                    ],
-                    const SizedBox(height: AppSpacing.md),
-                  ],
-                  if (_groups.isEmpty && !inWaiting && !showPendingBanner)
-                    const AppGroupEmptyState(),
+                          const SizedBox(height: AppSpacing.md),
+                        ],
+                        if (showModeSwitch) ...[
+                          _GroupsModeSwitch(
+                            value: visibleMode,
+                            activeCount: _groups.length,
+                            searchCount: queueCards.length,
+                            onChanged: (value) => setState(() => _mode = value),
+                          ),
+                          const SizedBox(height: AppSpacing.lg),
+                        ],
+                        if (visibleMode == _GroupsMode.active &&
+                            showPendingBanner &&
+                            prep != null) ...[
+                          if (matchedGroup.status == GroupStatus.rulesPending)
+                            GateGroupsRulesPendingCard.fromPresentation(
+                              prep: prep,
+                              onOpen: () => _openMatchedGroup(matchedGroup!.id),
+                              skillName: _waitingRoom?.skillName ??
+                                  matchedGroup.skillName,
+                              userAccepted: myMember?.acceptedRules ?? false,
+                            )
+                          else
+                            GateGroupsConfirmationCard.fromPresentation(
+                              prep: prep,
+                              onConfirm: () =>
+                                  _openMatchedGroup(matchedGroup!.id),
+                              skillName: _waitingRoom?.skillName ??
+                                  matchedGroup.skillName,
+                              userConfirmed:
+                                  myMember?.confirmedParticipation ?? false,
+                            ),
+                          const SizedBox(height: AppSpacing.md),
+                        ],
+                        if (visibleMode == _GroupsMode.active &&
+                            hasCycleContent) ...[
+                          const _SectionHeader(
+                            title: 'Мой темп',
+                            subtitle: 'Активные команды и прогресс дня',
+                          ),
+                          const SizedBox(height: AppSpacing.sm),
+                          if (activeGroups.isNotEmpty)
+                            for (final group in activeGroups)
+                              Padding(
+                                padding: const EdgeInsets.only(
+                                    bottom: AppSpacing.sm),
+                                child: _ActiveGroupDayCard(
+                                  group: group,
+                                  onOpenGroup: _openGroup,
+                                  onNudgeGroup: _nudgeGroups,
+                                ),
+                              ),
+                          for (final group in otherGroups)
+                            Padding(
+                              padding:
+                                  const EdgeInsets.only(bottom: AppSpacing.sm),
+                              child: _GroupTile(
+                                group: group,
+                                onTap: () => _openGroup(group.id),
+                              ),
+                            ),
+                          const SizedBox(height: AppSpacing.md),
+                        ],
+                        if (visibleMode == _GroupsMode.search && inWaiting) ...[
+                          if (queueCards.length > 1) ...[
+                            const _SectionHeader(
+                              title: 'Поиск',
+                              subtitle: 'Собираем команду из 6 человек',
+                            ),
+                            const SizedBox(height: AppSpacing.xs),
+                            Text(
+                              'Ищем команду по ${queueCards.length} привычкам — стартёт первая собранная',
+                              style: AppTypography.caption,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: AppSpacing.sm),
+                          ],
+                          _SearchQueuesPanel(
+                            queues: queueCards,
+                            stats: _waitingRoomStats,
+                            stopping: _stopping,
+                            expanding: _expanding,
+                            startingEarlyStart: _startingEarlyStart,
+                            onStop: _confirmStopSearch,
+                            onExpand: _expandSearch,
+                            onEarlyStart: _confirmEarlyStart,
+                          ),
+                          if (devMode) ...[
+                            const SizedBox(height: AppSpacing.sm),
+                            _DevAssembleButton(
+                              loading: _assembling,
+                              onPressed: _assembleTestTeam,
+                            ),
+                          ],
+                          const SizedBox(height: AppSpacing.md),
+                        ] else if (visibleMode == _GroupsMode.search &&
+                            widget.preselectedSkill != null) ...[
+                          const _SectionHeader(
+                            title: 'Поиск',
+                            subtitle: 'Собираем команду из 6 человек',
+                          ),
+                          const SizedBox(height: AppSpacing.sm),
+                          _SkillStartCard(
+                            skill: widget.preselectedSkill!,
+                            joining: _joining,
+                            onStart: _startSearch,
+                          ),
+                          if (devMode) ...[
+                            const SizedBox(height: AppSpacing.sm),
+                            _DevAssembleButton(
+                              loading: _assembling,
+                              onPressed: _assembleTestTeam,
+                            ),
+                          ],
+                          const SizedBox(height: AppSpacing.md),
+                        ],
+                        if (_groups.isEmpty && !inWaiting && !showPendingBanner)
+                          const AppGroupEmptyState(),
                       ],
                     ),
                   ),
@@ -626,79 +657,227 @@ class _GroupsScreenState extends State<GroupsScreen> {
     );
   }
 
-  void _openGroup(String groupId) {
-    Navigator.of(context).push(
-      PrimeRoute.sharedAxis(
-        builder: (_) => GroupDetailScreen(groupId: groupId),
-      ),
-    );
-  }
-
-  Future<void> _nudgeGroup(GroupModel group) async {
+  Future<void> _reconcileMembership() async {
     try {
-      final result = await context.read<ApiClient>().nudgeGroup(group.id);
+      await context.read<ApiClient>().reconcileMembership();
       if (!mounted) return;
-      final alreadyComplete = result['already_complete'] as bool? ?? false;
-      showAppSnackBar(
-        context,
-        alreadyComplete
-            ? 'День уже закрыт — все отчитались'
-            : 'Напоминание отправлено команде',
-      );
-      final list = await context.read<ApiClient>().listGroups();
+      setState(() => _membershipInconsistent = false);
+      await _load();
       if (!mounted) return;
-      setState(() {
-        _groups = list
-            .map((j) => GroupModel.fromJson(j as Map<String, dynamic>))
-            .toList();
-      });
+      showAppSnackBar(context, 'Состояние команды восстановлено');
     } catch (e) {
       if (!mounted) return;
       showAppSnackBar(context, FailureMapper.from(e).message);
     }
   }
+
+  Future<void> _openGroup(String groupId) async {
+    await openGroupDetail(
+      context,
+      groupId: groupId,
+      host: ({preferSearchTab = false, skillId}) {
+          if (!mounted) return;
+          if (preferSearchTab) {
+            setState(() => _mode = _GroupsMode.search);
+          }
+        },
+    );
+    if (!mounted) return;
+    await _load();
+  }
+
+  Future<void> _nudgeGroups(List<GroupModel> groups) async {
+    final targets =
+        TeamDayPresentationResolver.groupsNeedingNudge(groups);
+    if (targets.isEmpty) {
+      if (!mounted) return;
+      showAppSnackBar(context, 'День уже закрыт — все отчитались');
+      return;
+    }
+    var sent = 0;
+    var alreadyComplete = 0;
+    for (final group in targets) {
+      try {
+        final result = await context.read<ApiClient>().nudgeGroup(group.id);
+        if (!mounted) return;
+        if (result['already_complete'] as bool? ?? false) {
+          alreadyComplete++;
+        } else {
+          sent++;
+        }
+      } catch (e) {
+        if (!mounted) return;
+        showAppSnackBar(context, FailureMapper.from(e).message);
+        return;
+      }
+    }
+    final list = await context.read<ApiClient>().listGroups();
+    if (!mounted) return;
+    setState(() {
+      _groups = list
+          .map((j) => GroupModel.fromJson(j as Map<String, dynamic>))
+          .toList();
+    });
+    if (!mounted) return;
+    if (sent > 0) {
+      showAppSnackBar(
+        context,
+        targets.length > 1
+            ? 'Напоминания отправлены · $sent из ${targets.length}'
+            : 'Напоминание отправлено команде',
+      );
+    } else if (alreadyComplete > 0) {
+      showAppSnackBar(context, 'День уже закрыт — все отчитались');
+    }
+  }
 }
 
-class _TeamDayCard extends StatelessWidget {
-  const _TeamDayCard({
-    required this.group,
-    required this.onOpenGroup,
-    required this.onNudge,
+enum _GroupsMode { active, search }
+
+class _GroupsModeSwitch extends StatelessWidget {
+  const _GroupsModeSwitch({
+    required this.value,
+    required this.activeCount,
+    required this.searchCount,
+    required this.onChanged,
   });
 
-  final GroupModel group;
-  final VoidCallback onOpenGroup;
-  final VoidCallback onNudge;
+  final _GroupsMode value;
+  final int activeCount;
+  final int searchCount;
+  final ValueChanged<_GroupsMode> onChanged;
 
   @override
   Widget build(BuildContext context) {
-    final teamDay = group.teamDay;
-    final pulse = group.teamPulse;
-    final ready = teamDay?.readyCount ?? pulse?.completedToday ?? 0;
-    final total = teamDay?.memberCount ??
-        pulse?.totalActive ??
-        group.membersCount.clamp(1, group.maxMembers);
-    final waiting = teamDay?.waitingFor.isNotEmpty == true
-        ? teamDay!.waitingFor
-        : (pulse?.waitingFor ?? const <TeamWaitingMember>[]);
-    final remaining = teamDay?.remaining ??
-        (total - ready).clamp(0, total);
-    final complete = teamDay?.isComplete == true ||
-        pulse?.isTeamDayComplete == true;
-    final waitingNames = waiting
-        .map((m) => m.displayName)
-        .where((name) => name.isNotEmpty)
-        .take(4)
-        .join(', ');
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceSoft.withValues(alpha: 0.72),
+        borderRadius: BorderRadius.circular(AppRadius.pill),
+        border: Border.all(color: AppColors.border),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.primary.withValues(alpha: 0.08),
+            blurRadius: 20,
+            spreadRadius: -6,
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: _GroupsModeButton(
+              label: 'Активные',
+              count: activeCount,
+              selected: value == _GroupsMode.active,
+              icon: Icons.bolt_rounded,
+              onTap: () => onChanged(_GroupsMode.active),
+            ),
+          ),
+          Expanded(
+            child: _GroupsModeButton(
+              label: 'Поиск',
+              count: searchCount,
+              selected: value == _GroupsMode.search,
+              icon: Icons.group_add_outlined,
+              onTap: () => onChanged(_GroupsMode.search),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
-    return GateGroupsActiveCycleCard(
-      ready: ready,
-      total: total,
-      complete: complete,
-      remaining: remaining,
-      waitingNames: waitingNames.isEmpty ? null : waitingNames,
-      onReport: onOpenGroup,
-      onNudge: complete ? null : onNudge,
+class _GroupsModeButton extends StatelessWidget {
+  const _GroupsModeButton({
+    required this.label,
+    required this.count,
+    required this.selected,
+    required this.icon,
+    required this.onTap,
+  });
+
+  final String label;
+  final int count;
+  final bool selected;
+  final IconData icon;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(AppRadius.pill),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.sm,
+            vertical: AppSpacing.sm,
+          ),
+          decoration: BoxDecoration(
+            color: selected
+                ? AppColors.primary.withValues(alpha: 0.2)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(AppRadius.pill),
+            border: selected
+                ? Border.all(
+                    color: AppColors.primarySoft.withValues(alpha: 0.48),
+                  )
+                : null,
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                icon,
+                size: 18,
+                color:
+                    selected ? AppColors.primarySoft : AppColors.textSecondary,
+              ),
+              const SizedBox(width: AppSpacing.xs),
+              Flexible(
+                child: Text(
+                  '$label $count',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTypography.body.copyWith(
+                    color: selected
+                        ? AppColors.textPrimary
+                        : AppColors.textSecondary,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ActiveGroupDayCard extends StatelessWidget {
+  const _ActiveGroupDayCard({
+    required this.group,
+    required this.onOpenGroup,
+    required this.onNudgeGroup,
+  });
+
+  final GroupModel group;
+  final Future<void> Function(String groupId) onOpenGroup;
+  final Future<void> Function(List<GroupModel> groups) onNudgeGroup;
+
+  @override
+  Widget build(BuildContext context) {
+    return GateGroupsActiveHabitCard.fromGroup(
+      group: group,
+      onReport: () => onOpenGroup(group.id),
+      onNudge: () => onNudgeGroup([group]),
+      onOpen: () => onOpenGroup(group.id),
     );
   }
 }
@@ -880,6 +1059,7 @@ class _SearchCard extends StatefulWidget {
 class _SearchCardState extends State<_SearchCard> {
   late bool _scopeRussia;
   Map<String, dynamic>? _preferences;
+  String? _dismissedEarlyStartRequestId;
 
   @override
   void initState() {
@@ -945,15 +1125,6 @@ class _SearchCardState extends State<_SearchCard> {
     }
   }
 
-  String? _medianLine(WaitingRoomStatus status) {
-    final hours = status.medianMatchHours ?? widget.stats?.medianMatchHours;
-    if (hours == null) return null;
-    final rounded = hours == hours.roundToDouble()
-        ? hours.toInt().toString()
-        : hours.toStringAsFixed(1);
-    return 'Обычно собирается за ~$rounded ч';
-  }
-
   @override
   Widget build(BuildContext context) {
     final status = widget.status;
@@ -975,14 +1146,29 @@ class _SearchCardState extends State<_SearchCard> {
     final onlineInPool = status.onlineInPool > 0
         ? status.onlineInPool
         : (widget.stats?.onlineInPool ?? 0);
-    final liveRegionLine =
-        'В $regionLabel сейчас ищут $regionSearching, из них $skillSearching — вашу привычку · онлайн $onlineInPool';
     final about = context.watch<AuthProvider>().user?.about.trim() ?? '';
-    final aboutReady = about.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length >= 3;
+    final aboutReady =
+        about.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length >= 3;
+    final hasEarlyStartProposal =
+        status.earlyStartPending || status.earlyStartWaitingOthers;
+    final showEarlyStartBanner = hasEarlyStartProposal &&
+        status.earlyStartRequestId != _dismissedEarlyStartRequestId;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (showEarlyStartBanner) ...[
+          AppEarlyStartBanner(
+            status: status,
+            loading: widget.startingEarlyStart,
+            onConfirm: widget.onEarlyStart,
+            onKeepWaiting: () => setState(
+              () => _dismissedEarlyStartRequestId =
+                  status.earlyStartRequestId ?? 'legacy',
+            ),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+        ],
         GateGroupsPresentation(
           habitName: skillName,
           found: waiting,
@@ -996,6 +1182,7 @@ class _SearchCardState extends State<_SearchCard> {
           expansionAvailableAt: status.expansionAvailableAt,
           expanding: widget.expanding,
           status: status,
+          showEarlyStartPanel: !hasEarlyStartProposal,
           checklist: gateReadinessFromProfile(
             aboutReady: aboutReady,
             preferences: _preferences,
@@ -1051,6 +1238,48 @@ class _PreSearchBullet extends StatelessWidget {
           const SizedBox(width: AppSpacing.xs),
           Expanded(
             child: Text(text, style: AppTypography.bodySecondary),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MembershipAuditBanner extends StatelessWidget {
+  const _MembershipAuditBanner({required this.onReconcile});
+
+  final Future<void> Function() onReconcile;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: AppColors.warning.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        border: Border.all(color: AppColors.warning.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.sync_problem_rounded, color: AppColors.warning),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Данные команды рассинхронизированы. Можно восстановить '
+                  'состояние без перезапуска приложения.',
+                  style: AppTypography.bodySecondary,
+                ),
+                const SizedBox(height: AppSpacing.xs),
+                TextButton(
+                  onPressed: () => unawaited(onReconcile()),
+                  child: const Text('Восстановить'),
+                ),
+              ],
+            ),
           ),
         ],
       ),

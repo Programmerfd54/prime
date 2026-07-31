@@ -109,6 +109,11 @@ class Settings(BaseSettings):
     mail_from_name: str = Field(default="ПРАЙМ", alias="MAIL_FROM_NAME")
     # Shown as Reply-To; use support@your-domain so users can answer if needed.
     mail_reply_to: str = Field(default="", alias="MAIL_REPLY_TO")
+    # Public base URL for links embedded in outgoing mail (unsubscribe, etc.).
+    public_api_base_url: str = Field(
+        default="http://localhost:8080/api/v1",
+        alias="PUBLIC_API_BASE_URL",
+    )
     group_region_expansion_minutes: int = Field(
         default=5,
         ge=1,
@@ -159,8 +164,62 @@ class Settings(BaseSettings):
         ge=1,
         alias="UPLOAD_RATE_LIMIT_WINDOW_SECONDS",
     )
+    fcm_project_id: str = Field(default="", alias="FCM_PROJECT_ID")
+    fcm_service_account_json: str = Field(
+        default="",
+        alias="FCM_SERVICE_ACCOUNT_JSON",
+    )
+    fcm_service_account_file: str = Field(
+        default="",
+        alias="FCM_SERVICE_ACCOUNT_FILE",
+    )
+    apns_key_id: str = Field(default="", alias="APNS_KEY_ID")
+    apns_team_id: str = Field(default="", alias="APNS_TEAM_ID")
+    apns_bundle_id: str = Field(default="", alias="APNS_BUNDLE_ID")
+    apns_private_key: str = Field(default="", alias="APNS_PRIVATE_KEY")
+    apns_use_sandbox: bool = Field(default=False, alias="APNS_USE_SANDBOX")
+    push_timeout_seconds: int = Field(default=10, ge=1, le=60, alias="PUSH_TIMEOUT_SECONDS")
+    app_env: str = Field(default="development", alias="APP_ENV")
+    api_rate_limit_enabled: bool = Field(default=True, alias="API_RATE_LIMIT_ENABLED")
+    api_rate_limit_requests: int = Field(default=300, ge=1, alias="API_RATE_LIMIT_REQUESTS")
+    api_rate_limit_window_seconds: int = Field(
+        default=60,
+        ge=1,
+        alias="API_RATE_LIMIT_WINDOW_SECONDS",
+    )
+    friend_request_rate_limit_attempts: int = Field(
+        default=20,
+        ge=1,
+        alias="FRIEND_REQUEST_RATE_LIMIT_ATTEMPTS",
+    )
+    friend_request_rate_limit_window_seconds: int = Field(
+        default=3600,
+        ge=1,
+        alias="FRIEND_REQUEST_RATE_LIMIT_WINDOW_SECONDS",
+    )
+    moderator_step_up_ttl_minutes: int = Field(
+        default=15,
+        ge=1,
+        le=60,
+        alias="MODERATOR_STEP_UP_TTL_MINUTES",
+    )
+    moderator_mfa_enforce: bool = Field(default=False, alias="MODERATOR_MFA_ENFORCE")
+    moderator_features_enabled: bool = Field(
+        default=False,
+        alias="MODERATOR_FEATURES_ENABLED",
+    )
+    webauthn_rp_id: str = Field(default="localhost", alias="WEBAUTHN_RP_ID")
+    webauthn_rp_name: str = Field(default="PRIME", alias="WEBAUTHN_RP_NAME")
+    webauthn_origin: str = Field(default="http://localhost:8080", alias="WEBAUTHN_ORIGIN")
+    media_scanner: str = Field(default="noop", alias="MEDIA_SCANNER")
+    clamav_host: str = Field(default="127.0.0.1", alias="CLAMAV_HOST")
+    clamav_port: int = Field(default=3310, ge=1, alias="CLAMAV_PORT")
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    @property
+    def is_production(self) -> bool:
+        return self.app_env.strip().lower() in {"production", "prod"}
 
 
 @lru_cache

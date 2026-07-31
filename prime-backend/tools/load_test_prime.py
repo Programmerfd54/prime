@@ -252,6 +252,41 @@ def run_friend_flow(base_url: str) -> list[Result]:
     return results
 
 
+def run_moderation_probe(base_url: str, nickname: str, password: str) -> list[Result]:
+    email = f"loadmod+{nickname}@example.com"
+    results: list[Result] = []
+    _, register_body = timed(
+        "moderation_register",
+        lambda: request_json(
+            base_url,
+            "POST",
+            "/auth/register",
+            {"email": email, "password": password, "name": "Load", "nickname": nickname},
+        ),
+    )
+    code = (register_body or {}).get("verification_code")
+    if not code:
+        return results
+    _, verify_body = timed(
+        "moderation_verify",
+        lambda: request_json(base_url, "POST", "/auth/verify-email", {"email": email, "code": code}),
+    )
+    token = (verify_body or {}).get("access_token")
+    if not token:
+        return results
+    result, _ = timed(
+        "moderation_classify_path",
+        lambda: request_json(
+            base_url,
+            "GET",
+            "/users/me/restriction",
+            token=token,
+        ),
+    )
+    results.append(result)
+    return results
+
+
 def print_summary(results: list[Result]) -> None:
     by_name: dict[str, list[Result]] = {}
     for result in results:
@@ -282,12 +317,20 @@ def main() -> None:
     parser.add_argument("--health-concurrency", type=int, default=20)
     parser.add_argument("--users", type=int, default=30)
     parser.add_argument("--user-concurrency", type=int, default=10)
+    parser.add_argument(
+        "--moderation-probe",
+        action="store_true",
+        help="Run authenticated restriction endpoint probe after user flow.",
+    )
     args = parser.parse_args()
 
     results: list[Result] = []
     results.extend(run_health_load(args.base_url, args.health_total, args.health_concurrency))
-    results.extend(run_user_flow(args.base_url, args.users, args.user_concurrency))
-    results.extend(run_friend_flow(args.base_url))
+    if not args.health_only:
+        results.extend(run_user_flow(args.base_url, args.users, args.user_concurrency))
+        results.extend(run_friend_flow(args.base_url))
+        if args.moderation_probe:
+            results.extend(run_moderation_probe(args.base_url, "loadmoduser", "LoadTest123!"))
     print_summary(results)
 
 

@@ -28,6 +28,7 @@ class GateGroupsPresentation extends StatelessWidget {
     this.expansionAvailableAt,
     this.expanding = false,
     this.status,
+    this.showEarlyStartPanel = true,
     this.checklist = const [],
     this.onExpandSearch,
     this.onStopSearch,
@@ -52,6 +53,7 @@ class GateGroupsPresentation extends StatelessWidget {
   final DateTime? expansionAvailableAt;
   final bool expanding;
   final WaitingRoomStatus? status;
+  final bool showEarlyStartPanel;
   final List<GateReadinessItem> checklist;
   final VoidCallback? onExpandSearch;
   final VoidCallback? onStopSearch;
@@ -76,14 +78,16 @@ class GateGroupsPresentation extends StatelessWidget {
               children: [
                 Text(
                   'Мои группы',
-                  style: AppTypography.pageTitle.copyWith(color: p.ink, fontSize: 28),
+                  style: AppTypography.pageTitle
+                      .copyWith(color: p.ink, fontSize: 28),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 4),
                 Text(
                   'Команда из шести — ритм, поддержка и общий прогресс',
-                  style: AppTypography.bodySecondary.copyWith(color: p.inkSecondary),
+                  style: AppTypography.bodySecondary
+                      .copyWith(color: p.inkSecondary),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -135,12 +139,14 @@ class GateGroupsPresentation extends StatelessWidget {
                         children: [
                           Text(
                             'Найдено $found из $total',
-                            style: KitTypography.cardTitle.copyWith(color: p.ink),
+                            style:
+                                KitTypography.cardTitle.copyWith(color: p.ink),
                           ),
                           const SizedBox(height: 4),
                           Text(
                             '$skillSearching ищут эту привычку · онлайн $onlineInPool',
-                            style: KitTypography.caption.copyWith(color: p.inkMuted),
+                            style: KitTypography.caption
+                                .copyWith(color: p.inkMuted),
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                           ),
@@ -148,7 +154,8 @@ class GateGroupsPresentation extends StatelessWidget {
                             const SizedBox(height: 6),
                             Text(
                               '$confirmedCount/$total подтвердили участие',
-                              style: KitTypography.caption.copyWith(color: p.mint),
+                              style:
+                                  KitTypography.caption.copyWith(color: p.mint),
                             ),
                           ],
                         ],
@@ -162,13 +169,15 @@ class GateGroupsPresentation extends StatelessWidget {
                   filled: found,
                   slots: status?.slots ?? const [],
                 ),
-                if (status?.canStartEarly == true) ...[
+                if (showEarlyStartPanel && status?.canStartEarly == true) ...[
                   const SizedBox(height: AppSpacing.sm),
                   _EarlyStartPanel(
                     waitingOthers: status!.earlyStartWaitingOthers,
                     pendingOthers: status!.earlyStartPending,
                     confirmedCount: status!.earlyStartConfirmedCount,
                     neededConfirmations: status!.earlyStartNeededConfirmations,
+                    proposerName: status!.earlyStartProposerName,
+                    secondsRemaining: status!.earlyStartSecondsRemaining,
                     loading: startingEarlyStart,
                     onStart: onEarlyStart,
                   ),
@@ -183,7 +192,8 @@ class GateGroupsPresentation extends StatelessWidget {
                   canExpand: canExpandSearch,
                   expanding: expanding,
                   expansionAvailableAt: expansionAvailableAt,
-                  scopeIsRussia: scopeIsRussia || (status?.allowOtherRegions ?? false),
+                  scopeIsRussia:
+                      scopeIsRussia || (status?.allowOtherRegions ?? false),
                   regionSearching: regionSearching,
                   onExpand: onExpandSearch,
                 ),
@@ -303,7 +313,9 @@ class _ScopeChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = context.prime;
     return Material(
-      color: selected ? p.brandContainer.withValues(alpha: 0.55) : Colors.transparent,
+      color: selected
+          ? p.brandContainer.withValues(alpha: 0.55)
+          : Colors.transparent,
       borderRadius: BorderRadius.circular(10),
       child: InkWell(
         onTap: onTap,
@@ -325,7 +337,8 @@ class _ScopeChip extends StatelessWidget {
               ),
               Text(
                 '$count чел.',
-                style: KitTypography.caption.copyWith(color: p.inkMuted, fontSize: 11),
+                style: KitTypography.caption
+                    .copyWith(color: p.inkMuted, fontSize: 11),
                 maxLines: 1,
               ),
             ],
@@ -470,9 +483,7 @@ class _ChecklistRow extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(bottom: AppSpacing.xs),
       child: Material(
-        color: item.done
-            ? p.mint.withValues(alpha: 0.08)
-            : p.surfaceSoft,
+        color: item.done ? p.mint.withValues(alpha: 0.08) : p.surfaceSoft,
         borderRadius: BorderRadius.circular(14),
         child: InkWell(
           onTap: onTap,
@@ -513,7 +524,8 @@ class _ChecklistRow extends StatelessWidget {
                       ),
                       Text(
                         item.subtitle,
-                        style: KitTypography.caption.copyWith(color: p.inkSecondary),
+                        style: KitTypography.caption
+                            .copyWith(color: p.inkSecondary),
                       ),
                     ],
                   ),
@@ -603,13 +615,15 @@ class _GateTeamSlotChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = context.prime;
-    final label = filled ? (letter ?? String.fromCharCode(65 + index)) : '${index + 1}';
+    final label =
+        filled ? (letter ?? String.fromCharCode(65 + index)) : '${index + 1}';
     return Container(
       width: 44,
       height: 44,
       alignment: Alignment.center,
       decoration: BoxDecoration(
-        color: filled ? p.brandContainer.withValues(alpha: 0.65) : p.surfaceSoft,
+        color:
+            filled ? p.brandContainer.withValues(alpha: 0.65) : p.surfaceSoft,
         shape: BoxShape.circle,
         border: Border.all(
           color: filled ? p.brand.withValues(alpha: 0.45) : p.hairline,
@@ -633,6 +647,8 @@ class _EarlyStartPanel extends StatelessWidget {
     required this.pendingOthers,
     required this.confirmedCount,
     required this.neededConfirmations,
+    this.proposerName,
+    this.secondsRemaining = 0,
     required this.loading,
     this.onStart,
   });
@@ -641,6 +657,8 @@ class _EarlyStartPanel extends StatelessWidget {
   final bool pendingOthers;
   final int confirmedCount;
   final int neededConfirmations;
+  final String? proposerName;
+  final int secondsRemaining;
   final bool loading;
   final VoidCallback? onStart;
 
@@ -648,7 +666,8 @@ class _EarlyStartPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = context.prime;
     if (waitingOthers) {
-      final remaining = (neededConfirmations - confirmedCount).clamp(1, neededConfirmations);
+      final remaining =
+          (neededConfirmations - confirmedCount).clamp(1, neededConfirmations);
       return Container(
         width: double.infinity,
         padding: const EdgeInsets.all(AppSpacing.sm),
@@ -663,13 +682,25 @@ class _EarlyStartPanel extends StatelessWidget {
             Icon(Icons.hourglass_top_rounded, size: 18, color: p.brand),
             const SizedBox(width: AppSpacing.xs),
             Expanded(
-              child: Text(
-                'Вы подтвердили ранний старт. Ждём ещё $remaining '
-                '${remaining == 1 ? 'подтверждение' : 'подтверждения'} в очереди.',
-                style: KitTypography.caption.copyWith(
-                  color: p.inkSecondary,
-                  height: 1.35,
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Вы подтвердили ранний старт. Ждём ещё $remaining '
+                    '${remaining == 1 ? 'подтверждение' : 'подтверждения'} в очереди.',
+                    style: KitTypography.caption.copyWith(
+                      color: p.inkSecondary,
+                      height: 1.35,
+                    ),
+                  ),
+                  if (secondsRemaining > 0) ...[
+                    const SizedBox(height: 3),
+                    Text(
+                      'Решение действует ещё ${_timeLabel(secondsRemaining)}',
+                      style: KitTypography.caption.copyWith(color: p.brand),
+                    ),
+                  ],
+                ],
               ),
             ),
           ],
@@ -699,7 +730,9 @@ class _EarlyStartPanel extends StatelessWidget {
                     confirmedCount >= neededConfirmations - 1
                         ? '$confirmedCount из $neededConfirmations подтвердили — осталось ваше подтверждение.'
                         : '$confirmedCount из $neededConfirmations подтвердили ранний старт. '
-                            'Кто-то предложил старт втроём — подтвердите, чтобы начать.',
+                            '${proposerName?.trim().isNotEmpty == true ? proposerName : 'Участник'} '
+                            'предлагает старт втроём — подтвердите, чтобы начать. '
+                            '${secondsRemaining > 0 ? 'Осталось ${_timeLabel(secondsRemaining)}.' : ''}',
                     style: KitTypography.caption.copyWith(
                       color: p.inkSecondary,
                       height: 1.35,
@@ -779,6 +812,11 @@ class _EarlyStartPanel extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  static String _timeLabel(int seconds) {
+    final minutes = (seconds / 60).ceil().clamp(1, 99);
+    return '$minutes мин';
   }
 }
 

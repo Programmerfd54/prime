@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../core/analytics/analytics.dart';
 import '../core/errors/failure_mapper.dart';
+import '../core/groups/group_navigation.dart';
 import '../core/habits/habit_program_metadata.dart';
+import '../core/notifications/native_push_service.dart';
 import '../core/home/home_state.dart';
 import '../core/pending/report_queue.dart';
 import '../core/sync/waiting_room_poller.dart';
@@ -21,6 +23,7 @@ import '../providers/auth_provider.dart';
 import '../providers/chats_inbox_provider.dart';
 import '../design/visuals/ambient_and_progress.dart';
 import '../design/visuals/habit_art.dart';
+import '../ui/components/app_push_degraded_banner.dart';
 import '../ui/components/app_primary_button.dart';
 import '../ui/components/app_skeleton.dart';
 import '../ui/components/app_snackbar.dart';
@@ -40,12 +43,14 @@ class DashboardScreen extends StatefulWidget {
     this.onOpenHabits,
     this.onOpenChats,
     this.onOpenGroups,
+    this.onNotificationNavigate,
     this.refreshToken = 0,
   });
 
   final VoidCallback? onOpenHabits;
   final VoidCallback? onOpenChats;
   final VoidCallback? onOpenGroups;
+  final NotificationNavigateCallback? onNotificationNavigate;
   final int refreshToken;
 
   @override
@@ -56,7 +61,7 @@ class _ActiveChallenge {
   final String groupId;
   final String skillId;
   final String skillName;
-  final CalendarOut? calendar;
+  final bool reportedToday;
   final TeamDayModel? teamDay;
   final TeamPulseModel? teamPulse;
 
@@ -64,7 +69,7 @@ class _ActiveChallenge {
     required this.groupId,
     required this.skillId,
     required this.skillName,
-    required this.calendar,
+    required this.reportedToday,
     this.teamDay,
     this.teamPulse,
   });
@@ -83,7 +88,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   final _scrollController = ScrollController();
   final _reportComposerKey = GlobalKey();
   List<DirectChatSummary> _directChats = [];
-  late DateTime _visibleMonth;
   String? _selectedMood;
   bool _showExpandedReport = false;
 
@@ -93,9 +97,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _scrollController.dispose();
     super.dispose();
   }
-
-  bool _sameDate(DateTime a, DateTime b) =>
-      a.year == b.year && a.month == b.month && a.day == b.day;
 
   bool _needsRecoveryBanner(CalendarOut? calendar, int successfulDays) {
     if (calendar == null || successfulDays <= 0) return false;
@@ -117,8 +118,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     int teamTotal = 0,
   }) async {
     if (!mounted) return;
-    final title =
-        teamComplete ? 'День закрыт!' : 'Отчёт принят, ждём команду';
+    final title = teamComplete ? 'День закрыт!' : 'Отчёт принят, ждём команду';
     final body = teamComplete
         ? 'Отчёт засчитан — серия продолжается.'
         : teamTotal > 0
@@ -166,24 +166,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   bool get _reportedTodayOnActive {
-    for (final challenge in _activeChallenges) {
-      final calendar = challenge.calendar;
-      if (calendar == null) continue;
-      for (final day in calendar.days) {
-        if (_sameDate(day.date, calendar.today) &&
-            (day.reported || day.completed)) {
-          return true;
-        }
-      }
-    }
-    return false;
+    return _activeChallenges.any((challenge) => challenge.reportedToday);
   }
 
   @override
   void initState() {
     super.initState();
-    final now = DateTime.now();
-    _visibleMonth = DateTime(now.year, now.month);
     _load();
   }
 
@@ -195,21 +183,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  void _showPreviousMonth() {
-    setState(() {
-      _visibleMonth = DateTime(_visibleMonth.year, _visibleMonth.month - 1);
-    });
-  }
-
-  void _showNextMonth() {
-    setState(() {
-      _visibleMonth = DateTime(_visibleMonth.year, _visibleMonth.month + 1);
-    });
-  }
-
   Future<void> _load() async {
-    final showSkeleton =
-        _activityCalendar == null && _activeChallenges.isEmpty;
+    final showSkeleton = _activityCalendar == null && _activeChallenges.isEmpty;
     if (mounted && showSkeleton) {
       setState(() {
         _loading = true;
@@ -226,17 +201,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
     unawaited(ReportQueue.instance.flush(api));
 
     final memCal = api.peekCalendarAllCacheSync();
-    final memGroups = api.peekGroupsCacheSync();
-    if (memCal != null || memGroups != null) {
-      _applyDashboardData(calendarRaw: memCal, groupsRaw: memGroups);
+    final memOverview = api.peekGroupsOverviewCacheSync();
+    if (memCal != null || memOverview != null) {
+      _applyDashboardData(
+        calendarRaw: memCal,
+        groupsRaw: memOverview?['groups'] as List<dynamic>?,
+      );
       if (mounted) setState(() => _loading = false);
     }
     unawaited(() async {
       final diskCal = await api.peekCalendarAllCache();
-      final diskGroups = await api.peekGroupsCache();
+      final diskOverview = await api.peekCache('/groups/overview');
       if (!mounted) return;
-      if (diskCal != null || diskGroups != null) {
-        _applyDashboardData(calendarRaw: diskCal, groupsRaw: diskGroups);
+      if (diskCal != null || diskOverview != null) {
+        _applyDashboardData(
+          calendarRaw: diskCal,
+          groupsRaw: diskOverview is Map<String, dynamic>
+              ? (diskOverview['groups'] as List<dynamic>?)
+              : null,
+        );
         setState(() => _loading = false);
       }
     }());
@@ -245,11 +228,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
     List<dynamic>? groupsRaw;
     Object? firstError;
 
-    final calendarFuture = api.calendarAll().then<Map<String, dynamic>?>((v) => v).catchError((e) {
+    final calendarFuture =
+        api.calendarAll().then<Map<String, dynamic>?>((v) => v).catchError((e) {
       firstError ??= e;
       return null;
     });
-    final groupsFuture = api.listGroups().then<List<dynamic>?>((v) => v).catchError((e) {
+    final groupsFuture = api.groupsOverview().then<List<dynamic>?>((overview) {
+      if (mounted) {
+        context.read<WaitingRoomPoller>().applySnapshot(
+              WaitingRoomStatus.fromJson(
+                overview['waiting_room'] as Map<String, dynamic>? ?? const {},
+              ),
+            );
+      }
+      return overview['groups'] as List<dynamic>? ?? const [];
+    }).catchError((e) {
       firstError ??= e;
       return null;
     });
@@ -258,8 +251,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     groupsRaw = results[1] as List<dynamic>?;
 
     final hasFreshData = calendarRaw != null || groupsRaw != null;
-    final hasAnyData =
-        hasFreshData || _activityCalendar != null || _activeChallenges.isNotEmpty;
+    final hasAnyData = hasFreshData ||
+        _activityCalendar != null ||
+        _activeChallenges.isNotEmpty;
 
     if (hasFreshData) {
       _applyDashboardData(calendarRaw: calendarRaw, groupsRaw: groupsRaw);
@@ -281,15 +275,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     if (!hasAnyData) return;
 
-    if (groupsRaw != null) {
-      final active = groupsRaw!
-          .cast<Map<String, dynamic>>()
-          .where((g) => g['status'] == 'active')
-          .toList();
-      if (active.isNotEmpty) {
-        unawaited(_hydrateActiveChallengeCalendars(api, active));
-      }
-    }
     unawaited(
       context.read<ChatsInboxProvider>().ensureLoaded().then((_) {
         if (!mounted) return;
@@ -340,7 +325,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 skillName: (parsed.skillName ?? parsed.name).trim().isNotEmpty
                     ? (parsed.skillName ?? parsed.name)
                     : 'Текущая привычка',
-                calendar: null,
+                reportedToday: parsed.myTodayReport?.reported == true,
                 teamDay: parsed.teamDay,
                 teamPulse: parsed.teamPulse,
               );
@@ -357,47 +342,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  Future<void> _hydrateActiveChallengeCalendars(
-    ApiClient api,
-    List<Map<String, dynamic>> active,
-  ) async {
-    final challenges = await Future.wait(
-      active.map((group) async {
-        final parsed = GroupModel.fromJson(group);
-        CalendarOut? calendar;
-        try {
-          calendar = CalendarOut.fromJson(await api.calendar(parsed.id));
-        } catch (_) {
-          calendar = null;
-        }
-        return _ActiveChallenge(
-          groupId: parsed.id,
-          skillId: parsed.skillId,
-          skillName: (parsed.skillName ?? parsed.name).trim().isNotEmpty
-              ? (parsed.skillName ?? parsed.name)
-              : 'Текущая привычка',
-          calendar: calendar,
-          teamDay: parsed.teamDay,
-          teamPulse: parsed.teamPulse,
-        );
-      }),
-    );
-    if (!mounted) return;
-    setState(() {
-      _activeChallenges
-        ..clear()
-        ..addAll(challenges);
-    });
-  }
-
   HomePendingGroup? _pendingGroupContext() {
     final raw = _pendingGroup;
     if (raw == null) return null;
     return HomePendingGroup(
       groupId: raw['id'] as String,
-      skillName: raw['skill_name'] as String? ??
-          raw['name'] as String? ??
-          'Команда',
+      skillName:
+          raw['skill_name'] as String? ?? raw['name'] as String? ?? 'Команда',
       status: _groupStatusFrom(raw['status'] as String?),
     );
   }
@@ -416,9 +367,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   void _openGroup(String groupId) {
-    Navigator.of(context).push(
-      PrimeRoute.sharedAxis(
-        builder: (_) => GroupDetailScreen(groupId: groupId),
+    unawaited(
+      openGroupDetail(
+        context,
+        groupId: groupId,
+        host: ({preferSearchTab = false, skillId}) {
+          widget.onOpenGroups?.call();
+        },
       ),
     );
   }
@@ -579,13 +534,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final teamDay = challenge.teamDay;
     final pulse = challenge.teamPulse;
     final ready = teamDay?.readyCount ?? pulse?.completedToday ?? 0;
-    final total = teamDay?.memberCount ??
-        pulse?.totalActive ??
-        0;
+    final total = teamDay?.memberCount ?? pulse?.totalActive ?? 0;
     final status = teamDay?.status ??
-        (pulse?.isTeamDayComplete == true
-            ? 'complete'
-            : pulse?.dayStatus);
+        (pulse?.isTeamDayComplete == true ? 'complete' : pulse?.dayStatus);
     final waiting = teamDay?.waitingFor.isNotEmpty == true
         ? teamDay!.waitingFor
         : (pulse?.waitingFor ?? const <TeamWaitingMember>[]);
@@ -662,7 +613,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
           const SizedBox(height: AppSpacing.xxs),
           Text(
             'Отчёт за сегодня уже отправлен — можно обновить текст',
-            style: AppTypography.caption.copyWith(color: AppColors.textSecondary),
+            style:
+                AppTypography.caption.copyWith(color: AppColors.textSecondary),
           ),
         ],
       ],
@@ -728,6 +680,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
         searching: searching,
         matchedGroupId: waiting.matchedGroupId,
         pendingGroup: _pendingGroupContext(),
+        pendingGroupModel: _pendingGroup == null
+            ? null
+            : GroupModel.fromJson(_pendingGroup!),
+        currentUserId: user?.id,
         peopleWaiting: queue?.peopleWaiting ?? 0,
         needed: queue?.needed ?? 6,
         queueSkillName: queue?.skillName,
@@ -759,73 +715,80 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
               sliver: SliverList(
                 delegate: SliverChildListDelegate([
+                  if (NativePushService.instance.degraded) ...[
+                    const AppPushDegradedBanner(),
+                    const SizedBox(height: AppSpacing.md),
+                  ],
                   PrimeTabContentFrame(
                     child: GateHomePresentation(
-                    user: user,
-                    dateLabel: dashboardTodayLabel(),
-                    homeState: homeState,
-                    streak: _activityCalendar?.currentStreak ?? 0,
-                    primes: user?.primePoints ?? 0,
-                    successDays: user?.successfulDays ?? 0,
-                    teamReady: teamDay.ready,
-                    teamTotal: teamDay.total,
-                    teamPulse: primary?.teamPulse,
-                    directChats: _directChats,
-                    calendar: _activityCalendar,
-                    waitingNames: teamDay.waitingNames,
-                    activeHabitKind: primary != null
-                        ? habitArtKindFor(primary.skillName)
-                        : null,
-                    selectedMood: _selectedMood,
-                    onMoodSelected: homeState.showReportComposer ? _onMoodSelected : null,
-                    onOpenHabits: widget.onOpenHabits,
-                    onNudgeTeam: _nudgeTeamFromHome,
-                    showExpandedReport: _showExpandedReport,
-                    onAvatarTap: () {
-                      Navigator.of(context).push(
-                        PrimeRoute.sharedAxis(builder: (_) => const AvatarScreen()),
-                      );
-                    },
-                    onPrimaryAction: () => _onHomePrimaryAction(homeState),
-                    onOpenGroup: primary != null
-                        ? () => _openGroup(primary.groupId)
-                        : (homeState.showWaitingCompanion
-                            ? widget.onOpenGroups
-                            : null),
-                    onOpenChats: widget.onOpenChats,
-                    onPrimesTap: () => showGatePrimesDialog(context),
-                    waitingRegionSearching: waiting.stats?.regionSearching ??
-                        queue?.regionSearching ??
-                        0,
-                    waitingSkillSearching: waiting.stats?.skillSearching ??
-                        queue?.skillSearching ??
-                        0,
-                    waitingOnlineInPool: waiting.stats?.onlineInPool ??
-                        queue?.onlineInPool ??
-                        0,
-                    waitingRegionLabel: queue?.regionName ?? 'вашем городе',
-                    waitingScopeIsRussia:
-                        queue?.allowOtherRegions ?? false,
-                    waitingPeopleWaiting: queue?.peopleWaiting ?? 0,
-                    waitingNeeded: queue?.needed ?? 6,
-                    waitingSkillName: queue?.skillName,
-                    onFindFriends: widget.onOpenChats,
-                    recoveryBanner: showRecovery
-                        ? RecoveryBanner(
-                            onAction: homeState.showReportComposer
-                                ? _scrollToReportComposer
-                                : widget.onOpenHabits,
-                          )
-                        : null,
-                    reportComposer: homeState.showReportComposer && _groupId != null
-                        ? KeyedSubtree(
-                            key: _reportComposerKey,
-                            child: _buildReportComposer(
-                              reportedToday: reportedToday,
-                              homeState: homeState,
-                            ),
-                          )
-                        : null,
+                      user: user,
+                      dateLabel: dashboardTodayLabel(),
+                      homeState: homeState,
+                      streak: _activityCalendar?.currentStreak ?? 0,
+                      primes: user?.primePoints ?? 0,
+                      successDays: user?.successfulDays ?? 0,
+                      teamReady: teamDay.ready,
+                      teamTotal: teamDay.total,
+                      teamPulse: primary?.teamPulse,
+                      directChats: _directChats,
+                      calendar: _activityCalendar,
+                      waitingNames: teamDay.waitingNames,
+                      activeHabitKind: primary != null
+                          ? habitArtKindFor(primary.skillName)
+                          : null,
+                      selectedMood: _selectedMood,
+                      onMoodSelected:
+                          homeState.showReportComposer ? _onMoodSelected : null,
+                      onOpenHabits: widget.onOpenHabits,
+                      onNudgeTeam: _nudgeTeamFromHome,
+                      showExpandedReport: _showExpandedReport,
+                      onAvatarTap: () {
+                        Navigator.of(context).push(
+                          PrimeRoute.sharedAxis(
+                              builder: (_) => const AvatarScreen()),
+                        );
+                      },
+                      onPrimaryAction: () => _onHomePrimaryAction(homeState),
+                      onOpenGroup: primary != null
+                          ? () => _openGroup(primary.groupId)
+                          : (homeState.showWaitingCompanion
+                              ? widget.onOpenGroups
+                              : null),
+                      onOpenChats: widget.onOpenChats,
+                      onPrimesTap: () => showGatePrimesDialog(context),
+                      waitingRegionSearching: waiting.stats?.regionSearching ??
+                          queue?.regionSearching ??
+                          0,
+                      waitingSkillSearching: waiting.stats?.skillSearching ??
+                          queue?.skillSearching ??
+                          0,
+                      waitingOnlineInPool: waiting.stats?.onlineInPool ??
+                          queue?.onlineInPool ??
+                          0,
+                      waitingRegionLabel: queue?.regionName ?? 'вашем городе',
+                      waitingScopeIsRussia: queue?.allowOtherRegions ?? false,
+                      waitingPeopleWaiting: queue?.peopleWaiting ?? 0,
+                      waitingNeeded: queue?.needed ?? 6,
+                      waitingSkillName: queue?.skillName,
+                      onFindFriends: widget.onOpenChats,
+                      onNotificationNavigate: widget.onNotificationNavigate,
+                      recoveryBanner: showRecovery
+                          ? RecoveryBanner(
+                              onAction: homeState.showReportComposer
+                                  ? _scrollToReportComposer
+                                  : widget.onOpenHabits,
+                            )
+                          : null,
+                      reportComposer:
+                          homeState.showReportComposer && _groupId != null
+                              ? KeyedSubtree(
+                                  key: _reportComposerKey,
+                                  child: _buildReportComposer(
+                                    reportedToday: reportedToday,
+                                    homeState: homeState,
+                                  ),
+                                )
+                              : null,
                     ),
                   ),
                 ]),

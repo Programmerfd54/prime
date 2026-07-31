@@ -48,37 +48,37 @@ class OnboardingProgramPreview {
     OnboardingProgramPreview(
       skillId: 'live-communication',
       title: 'Живое общение',
-      subtitle: 'Ежедневный контакт без перегруза',
+      subtitle: 'Один осознанный разговор каждый день — без телефона',
       icon: Icons.forum_outlined,
     ),
     OnboardingProgramPreview(
       skillId: 'digital-detox',
       title: 'Цифровой детокс',
-      subtitle: 'Меньше экрана — больше фокуса',
+      subtitle: '45 минут хобби вместо бесцельного скролла',
       icon: Icons.phonelink_erase_outlined,
     ),
     OnboardingProgramPreview(
       skillId: 'one-chapter',
       title: 'Одна глава',
-      subtitle: 'Чтение как устойчивая привычка',
+      subtitle: 'От 5 страниц в день — и через месяц целая книга',
       icon: Icons.menu_book_outlined,
     ),
     OnboardingProgramPreview(
       skillId: 'morning-focus',
       title: 'Утренний фокус',
-      subtitle: 'Спокойное начало дня',
+      subtitle: '40 минут без экрана — ясная голова с утра',
       icon: Icons.wb_sunny_outlined,
     ),
     OnboardingProgramPreview(
       skillId: 'body-charge',
       title: 'Зарядка для тела',
-      subtitle: 'Движение без перегруза',
+      subtitle: '10 минут утром + силовая три раза в неделю',
       icon: Icons.fitness_center_outlined,
     ),
     OnboardingProgramPreview(
       skillId: 'evening-ritual',
       title: 'Вечерний ритуал',
-      subtitle: 'Мягкое завершение дня',
+      subtitle: 'Телефон вне спальни — качественный отдых',
       icon: Icons.dark_mode_outlined,
     ),
   ];

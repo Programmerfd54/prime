@@ -82,12 +82,12 @@ class _NotificationCenterLoaderState extends State<_NotificationCenterLoader> {
       _respondingId = key;
       _respondingAccept = accept;
     });
-    final realtime = context.read<RealtimeClient>();
-    realtime.removeNotificationLocally(notification.id);
     try {
       await widget
           .onRespondFriend(notification, accept)
           .timeout(const Duration(seconds: 12));
+      if (!mounted) return;
+      context.read<RealtimeClient>().removeNotificationLocally(notification.id);
     } catch (e) {
       if (mounted) {
         showAppSnackBar(context, FailureMapper.from(e).message);
@@ -141,6 +141,26 @@ class _NotificationCenterLoaderState extends State<_NotificationCenterLoader> {
       onItemTap: _onItemTap,
       onAcceptFriend: (n) => _respond(n, true),
       onDeclineFriend: (n) => _respond(n, false),
+      onDismiss: (notification) async {
+        try {
+          await realtime.dismissNotification(notification.id);
+        } catch (e) {
+          if (context.mounted) {
+            showAppSnackBar(context, FailureMapper.from(e).message);
+          }
+        }
+      },
+      onClearAll: realtime.items.isEmpty
+          ? null
+          : () async {
+              try {
+                await realtime.clearAllNotifications();
+              } catch (e) {
+                if (context.mounted) {
+                  showAppSnackBar(context, FailureMapper.from(e).message);
+                }
+              }
+            },
     );
   }
 }

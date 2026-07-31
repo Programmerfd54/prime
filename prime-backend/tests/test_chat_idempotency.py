@@ -35,8 +35,15 @@ async def test_group_message_client_id_is_idempotent(monkeypatch) -> None:
             region_code="66",
             age=25,
             profile_completed=True,
+            matrix_user_id="@chat-idempotency:matrix",
+            matrix_access_token="test-token",
         )
-        group = Group(skill_id="body-charge", status="active", max_members=1)
+        group = Group(
+            skill_id="body-charge",
+            status="active",
+            max_members=1,
+            matrix_room_id="!idempotency:matrix",
+        )
         session.add_all([user, group])
         await session.flush()
         session.add(GroupMember(group_id=group.id, user_id=user.id, active=True))

@@ -16,7 +16,7 @@ class OnboardingRhythmChart extends StatefulWidget {
     super.key,
     this.quitCount = '2',
     this.attemptCount = '2-3',
-    this.height = 148,
+    this.height = 172,
   });
 
   final String quitCount;
@@ -196,6 +196,27 @@ class _OnboardingRhythmChartState extends State<OnboardingRhythmChart>
               fontWeight: FontWeight.w600,
             ),
           ),
+          const SizedBox(height: AppSpacing.sm),
+          Wrap(
+            spacing: AppSpacing.md,
+            runSpacing: AppSpacing.xxs,
+            children: [
+              _Legend(
+                color: AppColors.coral,
+                label: 'Без системы',
+                dashed: true,
+              ),
+              _Legend(color: AppColors.primary, label: 'С ПРАЙМ'),
+              if (_ghostCount > 0)
+                _Legend(
+                  color: AppColors.textSecondary,
+                  label: _ghostCount == 1
+                      ? 'Прошлая попытка'
+                      : 'Прошлые попытки ($_ghostCount)',
+                  dashed: true,
+                ),
+            ],
+          ),
           const SizedBox(height: AppSpacing.md),
           SizedBox(
             height: widget.height,
@@ -222,32 +243,6 @@ class _OnboardingRhythmChartState extends State<OnboardingRhythmChart>
               for (final label in _labels)
                 Text(label, style: AppTypography.caption),
             ],
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          Wrap(
-            spacing: AppSpacing.md,
-            runSpacing: AppSpacing.xxs,
-            children: [
-              _Legend(
-                color: AppColors.coral,
-                label: 'Без системы',
-                dashed: true,
-              ),
-              _Legend(color: AppColors.primary, label: 'С ПРАЙМ'),
-              if (_ghostCount > 0)
-                _Legend(
-                  color: AppColors.textSecondary,
-                  label: _ghostCount == 1
-                      ? 'Прошлая попытка'
-                      : 'Прошлые попытки ($_ghostCount)',
-                  dashed: true,
-                ),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          Text(
-            'Обычно ритм ломается на $_breakDay-й день — там и нужна команда',
-            style: AppTypography.bodySecondary,
           ),
         ],
       ),
@@ -385,14 +380,24 @@ class _RhythmPainter extends CustomPainter {
           text: 'здесь чаще бросают',
           style: AppTypography.caption.copyWith(
             color: AppColors.coral,
-            fontSize: 10,
-            fontWeight: FontWeight.w600,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
           ),
         ),
         textDirection: TextDirection.ltr,
-      )..layout(maxWidth: size.width * 0.5);
-      final labelX = (drop.dx - tp.width / 2).clamp(0.0, size.width - tp.width);
-      final labelY = (drop.dy - 22).clamp(0.0, size.height - tp.height);
+      )..layout(maxWidth: size.width * 0.55);
+      final labelX = (drop.dx - tp.width / 2).clamp(4.0, size.width - tp.width - 4);
+      final labelY = (drop.dy - 28).clamp(4.0, size.height - tp.height - 4);
+      final bgRect = Rect.fromLTWH(
+        labelX - 6,
+        labelY - 3,
+        tp.width + 12,
+        tp.height + 6,
+      );
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(bgRect, const Radius.circular(8)),
+        Paint()..color = AppColors.coral.withValues(alpha: 0.18),
+      );
       tp.paint(canvas, Offset(labelX, labelY));
     }
   }

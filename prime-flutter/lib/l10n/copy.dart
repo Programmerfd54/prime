@@ -132,6 +132,8 @@ abstract final class AppCopy {
   // Email confirmation (register step 4)
   static const emailNotVerified =
       'Почта ещё не подтверждена. Введите код из письма, чтобы войти.';
+  static const emailNotVerifiedLogin =
+      'Аккаунт уже создан, но почта не подтверждена. Мы отправили код — введите его, чтобы войти.';
   static const emailVerificationCodeInvalid =
       'Код подтверждения недействителен или истёк. Запросите новый.';
   static const emailVerificationCodeLength = 'Код состоит из 6 цифр.';

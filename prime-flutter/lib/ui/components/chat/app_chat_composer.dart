@@ -37,6 +37,9 @@ class AppChatComposer extends StatefulWidget {
     this.onCancelReply,
     this.quickReplies = const [],
     this.onQuickReply,
+    this.readOnly = false,
+    this.readOnlyHint = 'Отправка сообщений временно недоступна',
+    this.embedded = false,
   });
 
   final TextEditingController controller;
@@ -51,16 +54,22 @@ class AppChatComposer extends StatefulWidget {
   final VoidCallback? onCancelReply;
   final List<String> quickReplies;
   final ValueChanged<String>? onQuickReply;
+  final bool readOnly;
+  final String readOnlyHint;
+  final bool embedded;
 
   @override
   State<AppChatComposer> createState() => _AppChatComposerState();
 }
 
 class _AppChatComposerState extends State<AppChatComposer> {
+  final _focusNode = FocusNode();
+
   @override
   void initState() {
     super.initState();
     widget.controller.addListener(_onTextChanged);
+    _focusNode.addListener(_onFocusChanged);
   }
 
   @override
@@ -75,12 +84,17 @@ class _AppChatComposerState extends State<AppChatComposer> {
   @override
   void dispose() {
     widget.controller.removeListener(_onTextChanged);
+    _focusNode.removeListener(_onFocusChanged);
+    _focusNode.dispose();
     super.dispose();
   }
+
+  void _onFocusChanged() => setState(() {});
 
   void _onTextChanged() => setState(() {});
 
   bool get _canSend {
+    if (widget.readOnly) return false;
     if (widget.uploading) return false;
     if (widget.pending != null) return true;
     return widget.controller.text.trim().isNotEmpty;
@@ -89,26 +103,56 @@ class _AppChatComposerState extends State<AppChatComposer> {
   @override
   Widget build(BuildContext context) {
     final p = context.prime;
+    if (widget.readOnly) {
+      return DecoratedBox(
+        decoration: BoxDecoration(
+          color: p.surface.withValues(alpha: 0.98),
+          border: Border(top: BorderSide(color: p.hairline)),
+        ),
+        child: SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.lg,
+              AppSpacing.sm,
+              AppSpacing.lg,
+              AppSpacing.sm,
+            ),
+            child: Text(
+              widget.readOnlyHint,
+              style: AppTypography.bodySecondary.copyWith(color: p.inkMuted),
+              textAlign: TextAlign.center,
+            ),
+          ),
+        ),
+      );
+    }
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: p.surface.withValues(alpha: 0.98),
-        border: Border(top: BorderSide(color: p.hairline)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.12),
-            blurRadius: 12,
-            offset: const Offset(0, -2),
-          ),
-        ],
+        color: widget.embedded
+            ? Colors.transparent
+            : p.surface.withValues(alpha: 0.98),
+        border: widget.embedded
+            ? null
+            : Border(top: BorderSide(color: p.hairline)),
+        boxShadow: widget.embedded
+            ? null
+            : [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.12),
+                  blurRadius: 12,
+                  offset: const Offset(0, -2),
+                ),
+              ],
       ),
       child: SafeArea(
         top: false,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(
+          padding: EdgeInsets.fromLTRB(
             AppSpacing.sm,
-            AppSpacing.xs,
+            widget.embedded ? AppSpacing.xxs : AppSpacing.xs,
             AppSpacing.sm,
-            AppSpacing.sm,
+            widget.embedded ? AppSpacing.xs : AppSpacing.sm,
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -140,22 +184,31 @@ class _AppChatComposerState extends State<AppChatComposer> {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Expanded(
-                    child: Container(
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 160),
+                      curve: Curves.easeOut,
                       clipBehavior: Clip.antiAlias,
                       decoration: BoxDecoration(
                         color: p.surfaceSoft,
                         borderRadius: BorderRadius.circular(AppRadius.xl),
-                        border: Border.all(color: p.hairline),
+                        border: Border.all(
+                          color: _focusNode.hasFocus
+                              ? p.brand.withValues(alpha: 0.38)
+                              : p.hairline,
+                          width: _focusNode.hasFocus ? 1.5 : 1,
+                        ),
                       ),
                       padding: const EdgeInsets.fromLTRB(4, 4, 4, 4),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          Material(
-                            color: Colors.transparent,
-                            child: InkWell(
+                      child: Material(
+                        type: MaterialType.transparency,
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            InkWell(
                               onTap: widget.uploading ? null : widget.onAttach,
                               borderRadius: BorderRadius.circular(AppRadius.lg),
+                              splashColor: p.brand.withValues(alpha: 0.08),
+                              highlightColor: p.brand.withValues(alpha: 0.04),
                               child: Padding(
                                 padding: const EdgeInsets.all(8),
                                 child: Icon(
@@ -167,38 +220,53 @@ class _AppChatComposerState extends State<AppChatComposer> {
                                 ),
                               ),
                             ),
-                          ),
-                          Expanded(
-                            child: TextField(
-                              controller: widget.controller,
-                              minLines: 1,
-                              maxLines: 5,
-                              enabled: !widget.uploading,
-                              textInputAction: TextInputAction.newline,
-                              style: AppTypography.body.copyWith(color: p.ink),
-                              cursorColor: p.brand,
-                              decoration: InputDecoration(
-                                hintText: 'Сообщение',
-                                hintStyle: AppTypography.bodySecondary.copyWith(
-                                  color: p.inkMuted,
+                            Expanded(
+                              child: Theme(
+                                data: Theme.of(context).copyWith(
+                                  textSelectionTheme: TextSelectionThemeData(
+                                    cursorColor: p.brand,
+                                    selectionColor:
+                                        p.brand.withValues(alpha: 0.22),
+                                    selectionHandleColor: p.brand,
+                                  ),
+                                  inputDecorationTheme:
+                                      const InputDecorationTheme(
+                                    filled: false,
+                                    border: InputBorder.none,
+                                    enabledBorder: InputBorder.none,
+                                    focusedBorder: InputBorder.none,
+                                    contentPadding: EdgeInsets.zero,
+                                    isDense: true,
+                                  ),
                                 ),
-                                filled: true,
-                                fillColor: Colors.transparent,
-                                border: InputBorder.none,
-                                enabledBorder: InputBorder.none,
-                                focusedBorder: InputBorder.none,
-                                disabledBorder: InputBorder.none,
-                                errorBorder: InputBorder.none,
-                                focusedErrorBorder: InputBorder.none,
-                                contentPadding: const EdgeInsets.symmetric(
-                                  horizontal: 4,
-                                  vertical: 10,
+                                child: TextField(
+                                  controller: widget.controller,
+                                  focusNode: _focusNode,
+                                  minLines: 1,
+                                  maxLines: 5,
+                                  enabled: !widget.uploading,
+                                  textInputAction: TextInputAction.newline,
+                                  style:
+                                      AppTypography.body.copyWith(color: p.ink),
+                                  decoration: InputDecoration(
+                                    hintText: 'Сообщение',
+                                    hintStyle: AppTypography.bodySecondary
+                                        .copyWith(color: p.inkMuted),
+                                    border: InputBorder.none,
+                                    enabledBorder: InputBorder.none,
+                                    focusedBorder: InputBorder.none,
+                                    disabledBorder: InputBorder.none,
+                                    contentPadding: const EdgeInsets.symmetric(
+                                      horizontal: 2,
+                                      vertical: 10,
+                                    ),
+                                    isDense: true,
+                                  ),
                                 ),
-                                isDense: true,
                               ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   ),

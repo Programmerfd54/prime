@@ -1,9 +1,6 @@
-"""Transactional email delivery over SMTP.
+"""Transactional email delivery over SMTP."""
+from __future__ import annotations
 
-Delivery is best-effort: a mail outage must never break the request that
-triggered it, so failures are logged and returned as False instead of raised.
-Recipients are never written to the log.
-"""
 import asyncio
 import logging
 import smtplib
@@ -14,8 +11,15 @@ from .config import Settings, get_settings
 
 logger = logging.getLogger("prime.mailer")
 
-BRAND_PURPLE = "#8B5CF6"
-BRAND_DEEP = "#6D28D9"
+
+def public_list_unsubscribe_url(url: str | None) -> str | None:
+    """Skip List-Unsubscribe when the URL is not publicly reachable (hurts deliverability)."""
+    if not url:
+        return None
+    lowered = url.lower()
+    if "localhost" in lowered or "127.0.0.1" in lowered:
+        return None
+    return url
 
 
 def _sender_address(settings: Settings) -> str:
@@ -33,6 +37,7 @@ def _build_message(
     subject: str,
     text_body: str,
     html_body: str | None,
+    list_unsubscribe_url: str | None = None,
 ) -> EmailMessage:
     settings = get_settings()
     message = EmailMessage()
@@ -42,6 +47,9 @@ def _build_message(
     reply_to = (settings.mail_reply_to or _sender_address(settings)).strip()
     if reply_to:
         message["Reply-To"] = reply_to
+    if list_unsubscribe_url:
+        message["List-Unsubscribe"] = f"<{list_unsubscribe_url}>"
+        message["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
     message.set_content(text_body)
     if html_body:
         message.add_alternative(html_body, subtype="html")
@@ -72,6 +80,7 @@ async def send_email(
     subject: str,
     text_body: str,
     html_body: str | None = None,
+    list_unsubscribe_url: str | None = None,
 ) -> bool:
     """Send one email. Returns True only when SMTP accepted the message."""
     if not smtp_configured():
@@ -82,6 +91,7 @@ async def send_email(
         subject=subject,
         text_body=text_body,
         html_body=html_body,
+        list_unsubscribe_url=list_unsubscribe_url,
     )
     try:
         await asyncio.to_thread(_send_sync, message)
@@ -90,88 +100,3 @@ async def send_email(
         return False
     logger.info("email_sent", extra={"mail_subject": subject})
     return True
-
-
-def build_verification_email(
-    *,
-    name: str,
-    code: str,
-    ttl_minutes: int,
-) -> tuple[str, str, str]:
-    """Returns (subject, text_body, html_body) for the signup confirmation."""
-    greeting = f"{name}, здравствуйте!" if name.strip() else "Здравствуйте!"
-    # Keep the subject static — putting the code in the subject triggers spam
-    # filters and leaks it into lock-screen previews.
-    subject = "Подтверждение регистрации в ПРАЙМ"
-    text_body = (
-        f"{greeting}\n\n"
-        "Вы завершаете регистрацию в ПРАЙМ. Введите этот код в приложении, "
-        "чтобы подтвердить, что почта принадлежит вам:\n\n"
-        f"    {code}\n\n"
-        f"Код действует {ttl_minutes} минут.\n\n"
-        "Если вы не регистрировались в ПРАЙМ, просто удалите это письмо — "
-        "без кода аккаунт активировать нельзя.\n"
-    )
-    spaced_code = " ".join(code)
-    html_body = f"""<!doctype html>
-<html lang="ru">
-  <body style="margin:0;padding:24px;background:#F4F2F8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;color:#1A1524;">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;margin:0 auto;background:#FFFFFF;border-radius:20px;overflow:hidden;">
-      <tr>
-        <td style="padding:28px 32px 8px 32px;">
-          <div style="font-size:13px;letter-spacing:2px;text-transform:uppercase;color:{BRAND_DEEP};font-weight:600;">ПРАЙМ</div>
-          <h1 style="margin:16px 0 8px 0;font-size:22px;line-height:1.3;">Подтвердите почту</h1>
-          <p style="margin:0;font-size:15px;line-height:1.6;color:#5C5468;">
-            {greeting} Осталось подтвердить, что эта почта принадлежит вам.
-          </p>
-        </td>
-      </tr>
-      <tr>
-        <td style="padding:24px 32px;">
-          <div style="background:{BRAND_PURPLE};border-radius:16px;padding:20px;text-align:center;">
-            <div style="font-size:32px;font-weight:700;letter-spacing:8px;color:#FFFFFF;">{spaced_code}</div>
-          </div>
-          <p style="margin:16px 0 0 0;font-size:14px;line-height:1.6;color:#5C5468;">
-            Код действует {ttl_minutes} минут. Введите его на шаге «Код» в приложении.
-          </p>
-        </td>
-      </tr>
-      <tr>
-        <td style="padding:0 32px 28px 32px;">
-          <p style="margin:0;font-size:13px;line-height:1.6;color:#7C6B96;">
-            Если вы не регистрировались в ПРАЙМ, просто удалите это письмо —
-            без кода аккаунт активировать нельзя.
-          </p>
-        </td>
-      </tr>
-    </table>
-  </body>
-</html>
-"""
-    return subject, text_body, html_body
-
-
-def build_password_reset_email(
-    *,
-    name: str,
-    token: str,
-    ttl_minutes: int,
-) -> tuple[str, str, str]:
-    """Return a reset message; the raw token is delivered only by email."""
-    greeting = f"{name}, здравствуйте!" if name.strip() else "Здравствуйте!"
-    subject = "Восстановление пароля в ПРАЙМ"
-    text_body = (
-        f"{greeting}\n\n"
-        "Мы получили запрос на смену пароля. Введите этот код в приложении:\n\n"
-        f"{token}\n\n"
-        f"Код действует {ttl_minutes} минут. Если запрос делали не вы, удалите письмо.\n"
-    )
-    html_body = f"""<!doctype html>
-<html lang="ru"><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#1A1524">
-  <h2>Восстановление пароля</h2>
-  <p>{greeting}</p>
-  <p>Введите этот код в приложении:</p>
-  <p style="font-size:20px;font-weight:700;letter-spacing:2px">{token}</p>
-  <p>Код действует {ttl_minutes} минут.</p>
-</body></html>"""
-    return subject, text_body, html_body

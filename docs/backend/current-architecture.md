@@ -14,8 +14,15 @@ database outbox worker, so retries do not block the request and pending work is
 durable across API restarts.
 
 Startup retains the historical idempotent schema bootstrap for compatibility,
-then applies numbered PostgreSQL migrations through `schema_migrations`. New
-hot-path indexes and group-message idempotency are in migration `0002`.
+then applies numbered PostgreSQL migrations through `schema_migrations`.
+Migration `0005` adds revisioned team state, membership history, expiring
+early-start proposals and the indexes used by the batched group overview.
+Migration `0006` adds moderation decisions and private-media scope tracking.
+
+The primary team read is `GET /groups/overview`. It returns preparation,
+active-cycle and waiting-room state in one response. Its group-card path uses
+five SQL statements for one or many groups; full personal progress remains on
+the detail endpoint so list latency does not grow through N+1 queries.
 
 The intended scale boundary is still one modular monolith plus PostgreSQL and
 Matrix. A shared broker should be introduced only after the metrics in the

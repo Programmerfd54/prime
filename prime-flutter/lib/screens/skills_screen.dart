@@ -25,7 +25,6 @@ import '../ui/kit/presentation/profile_surfaces.dart';
 import '../design/visuals/charts/charts.dart';
 import '../ui/components/app_chip.dart';
 import '../ui/components/app_dialog.dart';
-import '../ui/components/app_icon_button.dart';
 import '../ui/components/app_primary_button.dart';
 import '../ui/components/app_skeleton.dart';
 import '../ui/components/editorial/app_habit_catalog.dart';
@@ -169,8 +168,9 @@ class _SkillsScreenState extends State<SkillsScreen> {
         _errorCorrelationId = null;
       });
     }
+    final api = context.read<ApiClient>();
     try {
-      final list = await context.read<ApiClient>().listSkills();
+      final list = await api.listSkills();
       _skills = list
           .map((json) => SkillModel.fromJson(json as Map<String, dynamic>))
           .toList()
@@ -302,16 +302,20 @@ class _SkillsScreenState extends State<SkillsScreen> {
                           builder: (_) => SkillDetailScreen(
                             skill: featured,
                             allSkills: _skills
-                                .where((s) => s.category == SkillCategory.official)
+                                .where(
+                                  (s) => s.category == SkillCategory.official,
+                                )
                                 .toList(),
                             onSearchStarted: widget.onSearchStarted,
                             isFavorite: _favorites.contains(featured.id),
-                            onFavoriteToggle: () => _toggleFavorite(featured.id),
+                            onFavoriteToggle: () =>
+                                _toggleFavorite(featured.id),
                           ),
                         ),
                       ),
                     ),
-                    if (_onboardingPrefs.recommendationReason(null) != null) ...[
+                    if (_onboardingPrefs.recommendationReason(null) !=
+                        null) ...[
                       const SizedBox(height: AppSpacing.xxs),
                       Text(
                         _onboardingPrefs.recommendationReason(null)!,
@@ -914,9 +918,11 @@ class _SkillDetailScreenState extends State<SkillDetailScreen> {
                       const SizedBox(height: AppSpacing.lg),
                       AppHabitDetailSections(skill: widget.skill),
                       const SizedBox(height: AppSpacing.lg),
-                      const Text(
+                      Text(
                         AppCopy.multiQueueHint,
-                        style: AppTypography.caption,
+                        style: AppTypography.caption.copyWith(
+                          color: context.prime.inkMuted,
+                        ),
                       ),
                       SizedBox(height: bottomBarHeight + AppSpacing.lg),
                     ]),
@@ -937,76 +943,59 @@ class _SkillDetailScreenState extends State<SkillDetailScreen> {
                   ),
                   child: Row(
                     children: [
-                      PrimeGlassOverlay(
-                        padding: EdgeInsets.zero,
-                        borderRadius: BorderRadius.circular(AppRadius.pill),
-                        child: AppIconButton(
-                          tooltip: AppCopy.back,
-                          icon: Icons.arrow_back_ios_new_rounded,
-                          onPressed: () => Navigator.of(context).pop(),
-                        ),
+                      _HeroGlassIconButton(
+                        tooltip: AppCopy.back,
+                        icon: Icons.arrow_back_ios_new_rounded,
+                        onPressed: () => Navigator.of(context).pop(),
                       ),
                       const Spacer(),
-                      PrimeGlassOverlay(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: AppSpacing.xxs,
-                        ),
-                        borderRadius: BorderRadius.circular(AppRadius.pill),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            AppIconButton(
-                              tooltip: _favorite
-                                  ? 'Убрать из избранного'
-                                  : 'Сохранить',
-                              icon: _favorite
-                                  ? Icons.bookmark_rounded
-                                  : Icons.bookmark_outline_rounded,
-                              foregroundColor: _favorite
-                                  ? AppColors.primarySoft
-                                  : AppColors.textMuted,
-                              onPressed: widget.onFavoriteToggle == null
-                                  ? null
-                                  : () {
-                                      widget.onFavoriteToggle!();
-                                      setState(() => _favorite = !_favorite);
-                                    },
-                            ),
-                            AppIconButton(
-                              tooltip: 'Сравнить',
-                              icon: Icons.compare_arrows_rounded,
-                              onPressed: widget.allSkills.length < 2
-                                  ? null
-                                  : () {
-                                      Analytics.instance.habitCompareOpened(
-                                        widget.skill.id,
-                                      );
-                                      showHabitCompareSheet(
-                                        context: context,
-                                        primary: widget.skill,
-                                        allSkills: widget.allSkills,
-                                      );
-                                    },
-                            ),
-                            AppIconButton(
-                              tooltip: 'Поделиться',
-                              icon: Icons.ios_share_rounded,
-                              onPressed: () async {
-                                final text =
-                                    'Программа «${widget.skill.name}» в ПРАЙМ — ${AppCopy.cycleDays}';
-                                await Clipboard.setData(
-                                  ClipboardData(text: text),
+                      _HeroGlassIconButton(
+                        tooltip: _favorite
+                            ? 'Убрать из избранного'
+                            : 'Сохранить',
+                        icon: _favorite
+                            ? Icons.bookmark_rounded
+                            : Icons.bookmark_outline_rounded,
+                        highlighted: _favorite,
+                        onPressed: widget.onFavoriteToggle == null
+                            ? null
+                            : () {
+                                widget.onFavoriteToggle!();
+                                setState(() => _favorite = !_favorite);
+                              },
+                      ),
+                      const SizedBox(width: AppSpacing.xs),
+                      _HeroGlassIconButton(
+                        tooltip: 'Сравнить',
+                        icon: Icons.compare_arrows_rounded,
+                        onPressed: widget.allSkills.length < 2
+                            ? null
+                            : () {
+                                Analytics.instance.habitCompareOpened(
+                                  widget.skill.id,
                                 );
-                                if (!context.mounted) return;
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text('Ссылка скопирована в буфер'),
-                                  ),
+                                showHabitCompareSheet(
+                                  context: context,
+                                  primary: widget.skill,
+                                  allSkills: widget.allSkills,
                                 );
                               },
+                      ),
+                      const SizedBox(width: AppSpacing.xs),
+                      _HeroGlassIconButton(
+                        tooltip: 'Поделиться',
+                        icon: Icons.ios_share_rounded,
+                        onPressed: () async {
+                          final text =
+                              'Программа «${widget.skill.name}» в ПРАЙМ — ${AppCopy.cycleDays}';
+                          await Clipboard.setData(ClipboardData(text: text));
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Ссылка скопирована в буфер'),
                             ),
-                          ],
-                        ),
+                          );
+                        },
                       ),
                     ],
                   ),
@@ -1017,5 +1006,54 @@ class _SkillDetailScreenState extends State<SkillDetailScreen> {
         ),
       ),
     );
+  }
+}
+
+/// Circular frosted control for photo hero toolbars.
+class _HeroGlassIconButton extends StatelessWidget {
+  const _HeroGlassIconButton({
+    required this.icon,
+    required this.onPressed,
+    this.tooltip,
+    this.highlighted = false,
+  });
+
+  final IconData icon;
+  final VoidCallback? onPressed;
+  final String? tooltip;
+  final bool highlighted;
+
+  static const _size = 44.0;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onPressed != null;
+    final iconColor = !enabled
+        ? Colors.white.withValues(alpha: 0.38)
+        : highlighted
+            ? AppColors.primarySoft
+            : Colors.white.withValues(alpha: 0.94);
+
+    Widget button = PrimeGlassOverlay(
+      padding: EdgeInsets.zero,
+      borderRadius: BorderRadius.circular(AppRadius.pill),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onPressed,
+          borderRadius: BorderRadius.circular(AppRadius.pill),
+          child: SizedBox(
+            width: _size,
+            height: _size,
+            child: Icon(icon, size: 20, color: iconColor),
+          ),
+        ),
+      ),
+    );
+
+    if (tooltip != null && tooltip!.isNotEmpty) {
+      button = Tooltip(message: tooltip!, child: button);
+    }
+    return button;
   }
 }

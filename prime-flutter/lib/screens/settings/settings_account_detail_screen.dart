@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -22,6 +24,7 @@ class _SettingsAccountDetailScreenState extends State<SettingsAccountDetailScree
   static const _notificationsKey = 'notifications_enabled';
 
   bool _notificationsEnabled = true;
+  bool _updatingMarketing = false;
 
   @override
   void initState() {
@@ -54,9 +57,25 @@ class _SettingsAccountDetailScreenState extends State<SettingsAccountDetailScree
     await context.read<AuthProvider>().replayOnboarding();
   }
 
+  Future<void> _setMarketingEmailsEnabled(bool value) async {
+    if (_updatingMarketing) return;
+    setState(() => _updatingMarketing = true);
+    try {
+      await context.read<AuthProvider>().updateMarketingEmailsOptIn(value);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Не удалось сохранить настройку рассылки')),
+      );
+    } finally {
+      if (mounted) setState(() => _updatingMarketing = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = context.watch<AuthProvider>().user;
+    final marketingEnabled = user?.marketingEmailsOptIn ?? true;
 
     return SettingsPageScaffold(
       title: 'Аккаунт',
@@ -97,6 +116,29 @@ class _SettingsAccountDetailScreenState extends State<SettingsAccountDetailScree
                   : 'Отключены на этом устройстве',
               value: _notificationsEnabled,
               onChanged: _setNotificationsEnabled,
+            ),
+          ],
+        ),
+        const SizedBox(height: AppSpacing.lg),
+        AppSettingsSection(
+          title: 'Почта',
+          footer: const SettingsInfoBanner(
+            text:
+                'Служебные письма — подтверждение регистрации и безопасность — '
+                'приходят всегда. Рассылка — новости, советы и подборки от ПРАЙМ.',
+          ),
+          children: [
+            AppSettingsSwitchTile(
+              icon: Icons.mail_outline_rounded,
+              title: 'Рассылка',
+              subtitle: marketingEnabled
+                  ? 'Новости и советы на ${user?.email ?? 'вашу почту'}'
+                  : 'Отключена — можно включить снова здесь',
+              value: marketingEnabled,
+              onChanged: (value) {
+                if (_updatingMarketing) return;
+                unawaited(_setMarketingEmailsEnabled(value));
+              },
             ),
           ],
         ),

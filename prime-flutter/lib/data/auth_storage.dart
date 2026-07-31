@@ -15,7 +15,9 @@ class AuthStorage {
   static const _keyCachedUser = 'prime_cached_user';
   static const _keyOnboarding = 'prime_onboarding_done';
   static const _keyDeveloperMode = 'prime_developer_mode';
-  static const _secure = FlutterSecureStorage();
+  static const _secure = FlutterSecureStorage(
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  );
 
   const AuthStorage();
 

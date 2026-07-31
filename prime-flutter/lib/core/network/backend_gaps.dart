@@ -4,7 +4,8 @@
 /// - WebSocket / SSE channel for group + direct chat events
 /// - Refresh tokens / token revoke / logout-all-devices
 /// - Dedicated nickname availability endpoint (client uses by-nickname 404)
-/// - Push notifications (FCM/APNs) registration + delivery
+/// - Push notifications (FCM/APNs) registration + delivery — native iOS/Android
+///   bridges register tokens; degraded Android fallback without Firebase config
 /// - Per-message delivery / read receipts (inbox unread via last_read_at exists)
 /// - Custom habit CRUD (flag `can_create_custom_skills` only)
 /// - Real group voting (endpoint is currently a stub)

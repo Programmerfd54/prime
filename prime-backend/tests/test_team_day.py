@@ -176,7 +176,7 @@ async def test_finalize_stale_marks_pending_as_missed() -> None:
         )
         await session.commit()
 
-        changed = await finalize_stale_group_days(session, group.id)
+        changed = await finalize_stale_group_days(session, group)
         await session.commit()
         assert changed == 1
 

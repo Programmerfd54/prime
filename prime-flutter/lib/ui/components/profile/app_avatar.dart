@@ -42,7 +42,20 @@ class AppAvatar extends StatelessWidget {
       ),
       clipBehavior: Clip.antiAlias,
       child: hasAsset
-          ? Image.asset(assetPath!, fit: BoxFit.cover)
+          ? Image.asset(
+              assetPath!,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => Center(
+                child: Text(
+                  initial,
+                  style: AppTypography.title2.copyWith(
+                    fontSize: radius * 0.72,
+                    color: AppColors.textSecondary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            )
           : hasNetwork
               ? Image.network(
                   url!,

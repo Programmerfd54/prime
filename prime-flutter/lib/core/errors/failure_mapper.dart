@@ -41,6 +41,7 @@ abstract final class FailureMapper {
           correlationId: correlationId,
           debugDetail: debugDetail,
           retryAfter: _retryAfter(error.response?.headers),
+          responseData: error.response?.data,
         );
       case DioExceptionType.cancel:
         return const UnknownFailure(message: 'Запрос был отменён.');
@@ -56,6 +57,7 @@ abstract final class FailureMapper {
           status,
           correlationId: correlationId,
           debugDetail: debugDetail,
+          responseData: error.response?.data,
         );
     }
   }
@@ -65,6 +67,7 @@ abstract final class FailureMapper {
     String? correlationId,
     String? debugDetail,
     int? retryAfter,
+    dynamic responseData,
   }) {
     return switch (status) {
       400 || 422 => ValidationFailure(
@@ -79,9 +82,10 @@ abstract final class FailureMapper {
           correlationId: correlationId,
           debugDetail: debugDetail,
         ),
-      403 => ForbiddenFailure(
+      403 => _fromForbidden(
           correlationId: correlationId,
           debugDetail: debugDetail,
+          responseData: responseData,
         ),
       404 => NotFoundFailure(
           message: _preferSafeDetail(debugDetail) ?? AppCopy.notFound,
@@ -124,6 +128,62 @@ abstract final class FailureMapper {
     };
   }
 
+  static AppFailure _fromForbidden({
+    String? correlationId,
+    String? debugDetail,
+    dynamic responseData,
+  }) {
+    final structured = _structuredDetail(responseData);
+    if (structured != null) {
+      final code = structured['code'] as String?;
+      final message =
+          _preferSafeDetail(structured['message'] as String?) ??
+              AppCopy.forbidden;
+      final expiresAt = _parseExpiresAt(structured['expires_at']);
+      return switch (code) {
+        'SOCIAL_WRITE_RESTRICTED' => SocialWriteRestrictedFailure(
+            message: message,
+            expiresAt: expiresAt ?? DateTime.now(),
+            correlationId: correlationId,
+            debugDetail: debugDetail,
+          ),
+        'PROFANITY_REJECTED' => ProfanityRejectedFailure(
+            message: message,
+            expiresAt: expiresAt,
+            correlationId: correlationId,
+            debugDetail: debugDetail,
+          ),
+        'PROFANITY_QUARANTINED' => ProfanityQuarantinedFailure(
+            message: message,
+            correlationId: correlationId,
+            debugDetail: debugDetail,
+          ),
+        _ => ForbiddenFailure(
+            message: message,
+            correlationId: correlationId,
+            debugDetail: debugDetail,
+          ),
+      };
+    }
+    return ForbiddenFailure(
+      message: _preferSafeDetail(debugDetail) ?? AppCopy.forbidden,
+      correlationId: correlationId,
+      debugDetail: debugDetail,
+    );
+  }
+
+  static Map<String, dynamic>? _structuredDetail(dynamic responseData) {
+    if (responseData is! Map) return null;
+    final detail = responseData['detail'];
+    if (detail is! Map) return null;
+    return Map<String, dynamic>.from(detail);
+  }
+
+  static DateTime? _parseExpiresAt(dynamic raw) {
+    if (raw is! String || raw.trim().isEmpty) return null;
+    return DateTime.tryParse(raw);
+  }
+
   static final _stockHttpDetail = RegExp(
     r'^(not found|method not allowed|internal server error|bad request|'
     r'unauthorized|forbidden|validation error|unprocessable entity)$',
@@ -152,6 +212,9 @@ abstract final class FailureMapper {
   static String? _extractDetail(dynamic data) {
     if (data is Map && data['detail'] != null) {
       final detail = data['detail'];
+      if (detail is Map && detail['message'] is String) {
+        return detail['message'] as String;
+      }
       if (detail is String) return detail;
       if (detail is List) {
         final parts = <String>[];

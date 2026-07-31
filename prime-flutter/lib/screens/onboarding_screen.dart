@@ -8,18 +8,15 @@ import '../core/sync/user_personalization_sync.dart';
 import '../core/onboarding/onboarding_preferences.dart';
 import '../design/gradients.dart';
 import '../design/haptics.dart';
-import '../design/lottie_registry.dart';
 import '../design/motion.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
-import '../ui/components/app_chip.dart';
 import '../l10n/copy.dart';
 import '../data/api_client.dart';
 import '../providers/auth_provider.dart';
 import '../design/visuals/ambient_and_progress.dart';
 import '../ui/kit/presentation/profile_surfaces.dart';
 import '../ui/components/app_primary_button.dart';
-import '../ui/components/app_text_button.dart';
 import '../core/pending/pending_search.dart';
 import '../ui/components/onboarding/onboarding_interactive.dart';
 
@@ -200,28 +197,24 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     0,
                   ),
                   child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      if (_page > 0)
-                        TextButton(
-                          onPressed: () {
-                            _controller.previousPage(
-                              duration: motion,
-                              curve: AppMotion.standard,
-                            );
-                          },
-                          child: const Text(
-                            AppCopy.back,
-                            style: AppTypography.bodySecondary,
-                          ),
-                        )
-                      else
-                        const SizedBox(width: 72),
-                      Expanded(
-                        child: Text(
-                          '${_page + 1} / $_stepCount',
-                          textAlign: TextAlign.center,
-                          style: AppTypography.caption,
-                        ),
+                      SizedBox(
+                        width: 72,
+                        child: _page > 0
+                            ? TextButton(
+                                onPressed: () {
+                                  _controller.previousPage(
+                                    duration: motion,
+                                    curve: AppMotion.standard,
+                                  );
+                                },
+                                child: const Text(
+                                  AppCopy.back,
+                                  style: AppTypography.bodySecondary,
+                                ),
+                              )
+                            : null,
                       ),
                       TextButton(
                         onPressed: _skip,
@@ -239,88 +232,23 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     onPageChanged: _onPageChanged,
                     children: [
                       _StepScroll(
-                        child: _StepContent(
-                          kicker: 'ПРАЙМ',
-                          title: 'Меняться проще,\nкогда рядом ещё *пятеро*',
-                          body:
-                              'Система держит ритм, а не мотивация. Ежедневное действие, команда из 6 и поддержка без давления.',
-                          hero: Column(
-                            children: [
-                              const PrimeLottie(
-                                slot: PrimeLottieSlot.studyDiscussion,
-                                width: 100,
-                                height: 80,
-                              ),
-                              const SizedBox(height: AppSpacing.sm),
-                              LayoutBuilder(
-                                builder: (context, constraints) {
-                                  final short =
-                                      MediaQuery.sizeOf(context).height < 700;
-                                  return OnboardingHeroOrb(
-                                    height: short ? 140 : 180,
-                                  );
-                                },
-                              ),
-                            ],
-                          ),
-                          extra: Column(
-                            children: [
-                              const OnboardingProofPills(),
-                              const SizedBox(height: AppSpacing.lg),
-                              AppTextButton(
-                                label: 'Уже есть аккаунт? Войти',
-                                onPressed: _signIn,
-                              ),
-                            ],
-                          ),
-                        ),
+                        child: OnboardingPromiseHero(onSignIn: _signIn),
                       ),
                       _StepScroll(
                         child: _StepContent(
                           title: 'Один день — легко.\n30 дней — сложнее',
                           body:
-                              'Большинство бросает не из-за лени, а из-за потери ритма. ПРАЙМ помогает удерживать темп.',
+                              'Большинство бросает не из-за лени, а из-за потери ритма.',
                           extra: Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
-                              Text(
-                                'Сколько раз начинали?',
-                                style: AppTypography.caption,
-                              ),
-                              const SizedBox(height: AppSpacing.xs),
-                              Wrap(
-                                spacing: AppSpacing.xs,
-                                children: [
-                                  for (final option in ['1', '2-3', '4+'])
-                                    AppChip(
-                                      label: option,
-                                      selected: _attemptCount == option,
-                                      onTap: () {
-                                        AppHaptics.selection();
-                                        setState(() => _attemptCount = option);
-                                      },
-                                    ),
-                                ],
-                              ),
-                              const SizedBox(height: AppSpacing.sm),
-                              Text(
-                                'Сколько раз бросали?',
-                                style: AppTypography.caption,
-                              ),
-                              const SizedBox(height: AppSpacing.xs),
-                              Wrap(
-                                spacing: AppSpacing.xs,
-                                children: [
-                                  for (final option in ['1', '2', '3+'])
-                                    AppChip(
-                                      label: option,
-                                      selected: _quitCount == option,
-                                      onTap: () {
-                                        AppHaptics.selection();
-                                        setState(() => _quitCount = option);
-                                      },
-                                    ),
-                                ],
+                              OnboardingExperienceCard(
+                                attemptCount: _attemptCount,
+                                quitCount: _quitCount,
+                                onAttemptChanged: (v) =>
+                                    setState(() => _attemptCount = v),
+                                onQuitChanged: (v) =>
+                                    setState(() => _quitCount = v),
                               ),
                               const SizedBox(height: AppSpacing.md),
                               OnboardingInsightCard(
@@ -332,6 +260,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                 quitCount: _quitCount,
                                 attemptCount: _attemptCount,
                               ),
+                              const SizedBox(height: AppSpacing.md),
+                              OnboardingRhythmMiniStats(quitCount: _quitCount),
                             ],
                           ),
                         ),
@@ -350,28 +280,27 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       ),
                       _StepScroll(
                         child: _StepContent(
-                          title: 'Как выглядит *один день*',
+                          title: 'Как PRIME *удерживает* ритм',
                           body:
-                              'Короткое действие днём и отчёт вечером. Попробуйте отметить день — так работает механика.',
-                          extra: OnboardingDayFlow(
-                            skillId: _effectiveSkillId,
+                              'Не через контроль — через систему из трёх простых опор и мягких правил.',
+                          extra: OnboardingSoftSystemPreview(
                             programTitle: _programTitle,
                           ),
                         ),
                       ),
                       _StepScroll(
                         child: _StepContent(
-                          title: 'Команда из 6 держит темп',
+                          title: 'Шестеро — *достаточно*, чтобы не пропасть',
                           body:
-                              'Команда не контролирует — она помогает не исчезнуть после первого пропуска.',
+                              'Не контроль — поддержка, когда хочется исчезнуть после первого пропуска.',
                           extra: const OnboardingTeamRing(),
                         ),
                       ),
                       _StepScroll(
                         child: _StepContent(
-                          title: 'Ваш *прогресс* — наглядно',
+                          title: 'Один *взгляд* — весь прогресс',
                           body:
-                              '30 дней — первый цикл, а не финал. Серия, темп и Праймы показывают результат без токсичных рейтингов.',
+                              'Серия, темп и Праймы — без сравнения с другими и токсичных рейтингов.',
                           extra: OnboardingMetricsPreview(
                             skillId: _effectiveSkillId,
                             programTitle: _programTitle,
@@ -380,9 +309,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       ),
                       _StepScroll(
                         child: _StepContent(
-                          title: 'Что хотите изменить\nв *первую очередь*?',
-                          body:
-                              'Можно выбрать до трёх целей. Ответ поможет подобрать программу на вкладке «Привычки».',
+                          title: 'Что *важно* прямо сейчас?',
+                          body: 'До трёх целей — подберём программу под вас.',
                           extra: OnboardingGoalPicker(
                             selected: _selectedGoals,
                             onToggle: _toggleGoal,
@@ -391,9 +319,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       ),
                       _StepScroll(
                         child: _StepContent(
-                          title: 'Ваш план готов',
+                          title: 'Давайте начнём',
                           body:
-                              'Осталось создать аккаунт — и мы начнём собирать команду.',
+                              'Создайте аккаунт — и мы соберём команду из шести.',
                           extra: OnboardingSummaryCard(
                             programTitle: _programTitle,
                             skillId: _effectiveSkillId,
@@ -447,19 +375,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                             : AppCopy.continueLabel,
                         onPressed: _canContinue ? _next : null,
                       ),
-                      if (_page == _stepCount - 1) ...[
-                        const SizedBox(height: AppSpacing.xs),
-                        AppTextButton(
-                          label: 'Изменить программу',
-                          onPressed: () {
-                            _controller.animateToPage(
-                              2,
-                              duration: motion,
-                              curve: AppMotion.standard,
-                            );
-                          },
-                        ),
-                      ],
                     ],
                   ),
                 ),
@@ -493,17 +408,13 @@ class _StepScroll extends StatelessWidget {
 
 class _StepContent extends StatelessWidget {
   const _StepContent({
-    this.kicker,
     required this.title,
     required this.body,
-    this.hero,
     this.extra,
   });
 
-  final String? kicker;
   final String title;
   final String body;
-  final Widget? hero;
   final Widget? extra;
 
   @override
@@ -511,21 +422,6 @@ class _StepContent extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (kicker != null) ...[
-          Text(
-            kicker!,
-            style: AppTypography.caption.copyWith(
-              color: AppColors.primarySoft,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 2.4,
-            ),
-          ),
-          const SizedBox(height: AppSpacing.md),
-        ],
-        if (hero != null) ...[
-          hero!,
-          const SizedBox(height: AppSpacing.lg),
-        ],
         AppTypography.accentText(
           title,
           style: AppTypography.display.copyWith(fontSize: 30),

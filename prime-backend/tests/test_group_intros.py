@@ -81,8 +81,13 @@ async def test_group_activation_posts_member_intro_messages(monkeypatch) -> None
         messages = (await session.execute(select(ChatMessage))).scalars().all()
         assert group.status == "active"
         assert group.matrix_room_id == "!intro-room:matrix"
-        assert len(messages) == 6
-        assert len(sent_events) == 6
+        assert len(messages) == 7
+        assert any(
+            message.msgtype == "prime.system"
+            and "Первый день" in message.body
+            for message in messages
+        )
+        assert len(sent_events) == 7
         assert messages[0].body.startswith("👋 Знакомство")
         assert "Intro User 1 (@intro1)" in messages[0].body
         assert "Челябинская область" in messages[0].body

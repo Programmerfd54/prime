@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import get_settings
 from .db import get_session
+from .moderator_features import ensure_moderator_features_enabled
 from .models import AuthSession, User, utcnow
 from .security import decode_access_token_claims
 
@@ -89,6 +90,39 @@ async def get_current_user(
 async def require_moderator(
     user: User = Depends(get_current_user),
 ) -> User:
+    ensure_moderator_features_enabled()
     if not user.is_moderator:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Недостаточно прав")
     return user
+
+
+async def require_moderator_step_up(
+    current: tuple[AuthSession, User] = Depends(get_current_auth_session),
+    session: AsyncSession = Depends(get_session),
+) -> User:
+    ensure_moderator_features_enabled()
+    auth_session, user = current
+    if not user.is_moderator:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Недостаточно прав")
+    settings = get_settings()
+    if not settings.moderator_mfa_enforce:
+        return user
+    from .mfa import has_valid_step_up
+
+    if not await has_valid_step_up(session, auth_session.id, user.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Требуется повторная аутентификация модератора",
+        )
+    return user
+
+
+async def require_dev_tools_user(
+    current: tuple[AuthSession, User] = Depends(get_current_auth_session),
+    session: AsyncSession = Depends(get_session),
+) -> User:
+    if not get_settings().enable_dev_tools:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dev tools are disabled")
+    if get_settings().moderator_features_enabled:
+        return await require_moderator_step_up(current, session)
+    return current[1]

@@ -26,6 +26,8 @@ from ..models import (
     ChatMessageReaction,
     DirectConversationRead,
     DirectMessage,
+    EarlyStartConfirmation,
+    EarlyStartRequest,
     FriendRequest,
     Friendship,
     Group,
@@ -38,6 +40,7 @@ from ..models import (
     WaitingRoomEntry,
     utcnow,
 )
+from ..notifications import create_notification
 from ..regions import REGIONS
 from ..schemas import GroupCheckInRequest, HealthResponse, parse_privacy_settings
 from ..skills_catalog import SKILLS, skill_name
@@ -49,6 +52,7 @@ from .group_service import (
     ALLOWED_DOCUMENT_TYPES,
     ALLOWED_MEDIA_PREFIXES,
     ALLOWED_REACTION_EMOJIS,
+    EARLY_START_REQUEST_TTL,
     MAX_DIRECT_FILE_BYTES,
     MAX_DIRECT_IMAGE_BYTES,
     MAX_MEDIA_BYTES,
@@ -371,6 +375,18 @@ async def waiting_room_pair_invite_send(
                 content_type=skill_id,
             )
         )
+        await create_notification(
+            session,
+            friend_id,
+            "direct_message",
+            user.name or user.nickname,
+            f"Приглашение в пару · «{skill_label}»",
+            {
+                "friend_id": user.id,
+                "skill_id": skill_id,
+                "deep_link": f"prime://waiting-room/pair?code={invite_code}&skill_id={skill_id}",
+            },
+        )
         sent.append(friend_id)
 
     await session.commit()
@@ -419,6 +435,18 @@ async def waiting_room_pair_join(
     guest_entry.pair_code = invite_code
     session.add(guest_entry)
     await session.flush()
+    skill_label = skill_name(host_entry.skill_id) or "привычку"
+    await create_notification(
+        session,
+        host_entry.user_id,
+        "team_activity",
+        "Пара собрана",
+        f"@{user.nickname} принял приглашение · «{skill_label}»",
+        {
+            "skill_id": host_entry.skill_id,
+            "deep_link": f"prime://waiting-room/pair?code={invite_code}&skill_id={host_entry.skill_id}",
+        },
+    )
     await _notify_waiting_room_pair_join(
         session,
         pair_code=invite_code,
@@ -440,7 +468,7 @@ async def waiting_room_early_start(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    """Confirm early start with minimum 3 people in the same skill queue."""
+    """Create/confirm a 15-minute proposal to start with three people."""
     skill_id = str(payload.get("skill_id") or "").strip()
     filters = [WaitingRoomEntry.user_id == user.id]
     if skill_id:
@@ -454,15 +482,14 @@ async def waiting_room_early_start(
     if entry is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Очередь не найдена")
 
-    pool_count = int(
-        await session.scalar(
-            select(func.count())
-            .select_from(WaitingRoomEntry)
+    pool_entries = (
+        await session.execute(
+            select(WaitingRoomEntry)
             .where(WaitingRoomEntry.skill_id == entry.skill_id)
+            .order_by(WaitingRoomEntry.created_at.asc())
         )
-        or 0
-    )
-    if pool_count < 3:
+    ).scalars().all()
+    if len(pool_entries) < 3:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Для раннего старта нужно минимум 3 человека в очереди",
@@ -478,27 +505,127 @@ async def waiting_room_early_start(
         )
 
     now = utcnow()
-    newly_confirmed = entry.pair_start_confirmed_at is None
-    if newly_confirmed:
-        entry.pair_start_confirmed_at = now
-        session.add(entry)
-        await session.flush()
-
-    confirmed_entries = (
+    expired = (
         await session.execute(
-            select(WaitingRoomEntry)
-            .where(
-                WaitingRoomEntry.skill_id == entry.skill_id,
-                WaitingRoomEntry.pair_start_confirmed_at.is_not(None),
+            select(EarlyStartRequest).where(
+                EarlyStartRequest.skill_id == entry.skill_id,
+                EarlyStartRequest.status == "pending",
+                EarlyStartRequest.expires_at <= now,
             )
-            .order_by(WaitingRoomEntry.pair_start_confirmed_at.asc())
         )
     ).scalars().all()
+    for stale in expired:
+        stale.status = "expired"
+        stale.revision = int(stale.revision or 0) + 1
+        session.add(stale)
 
-    if len(confirmed_entries) < 3:
+    request = await session.scalar(
+        select(EarlyStartRequest)
+        .where(
+            EarlyStartRequest.skill_id == entry.skill_id,
+            EarlyStartRequest.status == "pending",
+            EarlyStartRequest.expires_at > now,
+        )
+        .order_by(EarlyStartRequest.created_at.desc())
+        .limit(1)
+    )
+    created_request = request is None
+    if request is None:
+        request = EarlyStartRequest(
+            skill_id=entry.skill_id,
+            initiator_user_id=user.id,
+            status="pending",
+            expires_at=now + EARLY_START_REQUEST_TTL,
+        )
+        session.add(request)
+        for pool_entry in pool_entries:
+            pool_entry.pair_start_confirmed_at = None
+            pool_entry.revision = int(pool_entry.revision or 0) + 1
+            session.add(pool_entry)
+        await session.flush()
+
+    confirmation = await session.scalar(
+        select(EarlyStartConfirmation).where(
+            EarlyStartConfirmation.request_id == request.id,
+            EarlyStartConfirmation.user_id == user.id,
+        )
+    )
+    confirmation_created = confirmation is None
+    if confirmation is None:
+        confirmation = EarlyStartConfirmation(
+            request_id=request.id,
+            user_id=user.id,
+        )
+        session.add(confirmation)
+        entry.pair_start_confirmed_at = now
+        entry.revision = int(entry.revision or 0) + 1
+        request.revision = int(request.revision or 0) + 1
+        session.add_all([entry, request])
+        await session.flush()
+
+    if created_request:
+        skill_label = skill_name(entry.skill_id) or "привычку"
+        deep_link = f"prime://waiting-room?skill_id={entry.skill_id}&early_start={request.id}"
+        for candidate in pool_entries:
+            if candidate.user_id == user.id:
+                continue
+            await create_notification(
+                session,
+                candidate.user_id,
+                "early_start_request",
+                f"{user.name or '@' + user.nickname} предлагает старт втроём",
+                f"«{skill_label}» · уже 1 из 3 согласились · решение действует 15 минут",
+                {
+                    "request_id": request.id,
+                    "skill_id": entry.skill_id,
+                    "initiator_user_id": user.id,
+                    "expires_at": request.expires_at.isoformat(),
+                    "deep_link": deep_link,
+                    "actions": ["confirm", "keep_waiting", "open_search"],
+                },
+            )
+
+    confirmations = (
+        await session.execute(
+            select(EarlyStartConfirmation)
+            .where(EarlyStartConfirmation.request_id == request.id)
+            .order_by(EarlyStartConfirmation.created_at.asc())
+        )
+    ).scalars().all()
+    entries_by_user = {item.user_id: item for item in pool_entries}
+    confirmations = [
+        item for item in confirmations if item.user_id in entries_by_user
+    ]
+    request.revision = int(request.revision or 0) + 1
+    session.add(request)
+
+    if len(confirmations) < 3:
+        if confirmation_created and not created_request:
+            skill_label = skill_name(entry.skill_id) or "привычку"
+            deep_link = f"prime://waiting-room?skill_id={entry.skill_id}&early_start={request.id}"
+            actor_label = user.name or f"@{user.nickname}"
+            for candidate in pool_entries:
+                if candidate.user_id == user.id:
+                    continue
+                await create_notification(
+                    session,
+                    candidate.user_id,
+                    "early_start_request",
+                    f"{actor_label} подтвердил ранний старт",
+                    f"«{skill_label}» · {len(confirmations)} из 3 · осталось подтвердить",
+                    {
+                        "request_id": request.id,
+                        "skill_id": entry.skill_id,
+                        "initiator_user_id": user.id,
+                        "expires_at": request.expires_at.isoformat(),
+                        "deep_link": deep_link,
+                        "actions": ["confirm", "keep_waiting", "open_search"],
+                    },
+                )
         await _notify_waiting_room_skill_pool(
             session,
             skill_id=entry.skill_id,
+            reason="early_start_requested" if created_request else "early_start_confirmed",
         )
         await session.commit()
         payload_data = await waiting_room_payload(
@@ -511,23 +638,34 @@ async def waiting_room_early_start(
             "started": False,
             "waiting_others_confirm": True,
             "waiting_partner_confirm": True,
-            "early_start_confirmed_count": len(confirmed_entries),
+            "early_start_confirmed_count": len(confirmations),
+            "early_start_request_id": request.id,
+            "early_start_expires_at": request.expires_at.isoformat(),
         }
 
-    formed_entries = confirmed_entries[:3]
+    formed_user_ids = [item.user_id for item in confirmations[:3]]
+    formed_entries = [
+        entries_by_user[user_id]
+        for user_id in formed_user_ids
+        if user_id in entries_by_user
+    ]
     group = await _create_group_from_early_start_entries(
         session,
         formed_entries,
     )
-    formed_user_ids = [item.user_id for item in formed_entries]
+    request.status = "formed"
+    request.revision = int(request.revision or 0) + 1
+    session.add(request)
     await _notify_waiting_room_users(
         session,
         skill_id=entry.skill_id,
         user_ids=formed_user_ids,
+        reason="early_start_formed",
     )
     await _notify_waiting_room_skill_pool(
         session,
         skill_id=entry.skill_id,
+        reason="queue_changed",
     )
     await session.commit()
     return {
@@ -564,5 +702,3 @@ async def leave_waiting_room(
         )
     await session.commit()
     return None
-
-

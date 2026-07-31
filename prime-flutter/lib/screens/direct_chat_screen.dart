@@ -21,6 +21,7 @@ import '../models/chat_message.dart';
 import '../models/user.dart';
 import '../providers/auth_provider.dart';
 import '../providers/chats_inbox_provider.dart';
+import '../providers/social_restriction_provider.dart';
 import '../core/sync/realtime_client.dart';
 import '../core/sync/waiting_room_poller.dart';
 import '../ui/components/app_chat_date_separator.dart';
@@ -34,6 +35,7 @@ import '../ui/components/profile/app_avatar.dart';
 import '../ui/states/app_connection_banner.dart';
 import '../ui/states/app_empty_state.dart';
 import '../ui/states/app_error_state.dart';
+import '../widgets/social_restriction_chat_panel.dart';
 import 'public_profile_screen.dart';
 
 class DirectChatScreen extends StatefulWidget {
@@ -100,6 +102,8 @@ class _DirectChatScreenState extends State<DirectChatScreen>
       ..addDirectMessageListener(_onDirectMessage)
       ..addDirectChatReadListener(_onDirectChatRead);
     if (mounted) setState(() => _initialized = true);
+
+    unawaited(context.read<SocialRestrictionProvider>().refresh());
 
     unawaited(
       api.peekDirectMessagesCache(widget.friend.id).then((diskCache) {
@@ -275,6 +279,7 @@ class _DirectChatScreenState extends State<DirectChatScreen>
   Future<void> _send() async {
     final me = context.read<AuthProvider>().user?.id;
     if (me == null) return;
+    if (context.read<SocialRestrictionProvider>().isWriteBlocked) return;
 
     if (_pending != null) {
       await _sendPending(me);
@@ -300,6 +305,7 @@ class _DirectChatScreenState extends State<DirectChatScreen>
       _scrollToBottom();
       widget.onMessageSent?.call();
     } catch (e) {
+      context.read<SocialRestrictionProvider>().applyFromError(e);
       // sendText returns immediately; delivery errors surface on the bubble.
       Analytics.instance.messageSendFailed(
         channel: 'direct',
@@ -699,6 +705,7 @@ class _DirectChatScreenState extends State<DirectChatScreen>
     if (!_initialized) {
       return const SizedBox.shrink();
     }
+    final readOnly = context.watch<SocialRestrictionProvider>().isWriteBlocked;
     return AppChatComposer(
       controller: _messageCtrl,
       onSend: _send,
@@ -716,6 +723,7 @@ class _DirectChatScreenState extends State<DirectChatScreen>
         _messageCtrl.selection =
             TextSelection.collapsed(offset: text.length);
       },
+      readOnly: readOnly,
     );
   }
 
@@ -762,9 +770,16 @@ class _DirectChatScreenState extends State<DirectChatScreen>
         avatar: AppAvatar(photoUrl: widget.friend.photoUrl, radius: 18, name: title),
         actions: [profileAction],
       ),
-      banner: AppConnectionBanner(
-        visible: sync.offline,
-        onRetry: () => sync.sync(forceRefresh: true),
+      banner: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          AppConnectionBanner(
+            visible: sync.offline,
+            onRetry: () => sync.sync(forceRefresh: true),
+          ),
+          const SocialRestrictionChatPanel(),
+        ],
       ),
       messageArea: _messageArea(sync),
       composer: _composerFor(sync),

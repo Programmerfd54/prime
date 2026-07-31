@@ -5,6 +5,8 @@ from uuid import uuid4
 
 from fastapi import Request, Response
 
+from .observability import request_finished, request_started
+
 
 logger = logging.getLogger("prime.requests")
 
@@ -24,12 +26,21 @@ async def request_log_middleware(
     request_id = _request_id(request)
     request.state.request_id = request_id
     response: Response | None = None
+    request_started()
     try:
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
         return response
     finally:
         elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
+        route = request.scope.get("route")
+        route_path = getattr(route, "path", request.url.path)
+        request_finished(
+            method=request.method,
+            route=route_path,
+            status_code=response.status_code if response else 500,
+            elapsed_ms=elapsed_ms,
+        )
         logger.info(
             "request",
             extra={

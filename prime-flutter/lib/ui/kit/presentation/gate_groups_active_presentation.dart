@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/groups/group_prep_state.dart';
+import '../../../core/groups/team_day_presentation.dart';
 import '../../../design/theme/prime_theme_context.dart';
 import '../../../design/tokens.dart';
 import '../../../design/visuals/charts/prime_radial_progress.dart';
@@ -27,6 +29,23 @@ class GateGroupsConfirmationCard extends StatelessWidget {
   final int? confirmedCount;
   final int total;
   final bool userConfirmed;
+
+  factory GateGroupsConfirmationCard.fromPresentation({
+    required GroupPrepPresentation prep,
+    required VoidCallback onConfirm,
+    String? skillName,
+    bool userConfirmed = false,
+  }) {
+    final total = prep.progressTotal ?? 6;
+    final confirmed = prep.progressValue ?? 0;
+    return GateGroupsConfirmationCard(
+      onConfirm: onConfirm,
+      skillName: skillName,
+      confirmedCount: confirmed,
+      total: total,
+      userConfirmed: userConfirmed,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -114,6 +133,23 @@ class GateGroupsRulesPendingCard extends StatelessWidget {
   final int total;
   final bool userAccepted;
 
+  factory GateGroupsRulesPendingCard.fromPresentation({
+    required GroupPrepPresentation prep,
+    required VoidCallback onOpen,
+    String? skillName,
+    bool userAccepted = false,
+  }) {
+    final total = prep.progressTotal ?? 6;
+    final accepted = prep.progressValue ?? 0;
+    return GateGroupsRulesPendingCard(
+      onOpen: onOpen,
+      skillName: skillName,
+      acceptedCount: accepted,
+      total: total,
+      userAccepted: userAccepted,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final p = context.prime;
@@ -183,78 +219,121 @@ class GateGroupsRulesPendingCard extends StatelessWidget {
   }
 }
 
-/// V4 — active cycle team-day pulse card.
-class GateGroupsActiveCycleCard extends StatelessWidget {
-  const GateGroupsActiveCycleCard({
+/// V4 — one active habit with team-day progress and report actions.
+class GateGroupsActiveHabitCard extends StatelessWidget {
+  const GateGroupsActiveHabitCard({
     super.key,
+    required this.title,
     required this.ready,
     required this.total,
     required this.complete,
-    required this.remaining,
-    this.waitingNames,
+    this.skillId,
+    this.waitingNames = const [],
     required this.onReport,
     this.onNudge,
+    this.onOpen,
   });
 
+  final String title;
   final int ready;
   final int total;
   final bool complete;
-  final int remaining;
-  final String? waitingNames;
+  final String? skillId;
+  final List<String> waitingNames;
   final VoidCallback onReport;
   final VoidCallback? onNudge;
+  final VoidCallback? onOpen;
+
+  factory GateGroupsActiveHabitCard.fromGroup({
+    required GroupModel group,
+    required VoidCallback onReport,
+    VoidCallback? onNudge,
+    VoidCallback? onOpen,
+  }) {
+    final day = TeamDayPresentationResolver.resolve(group);
+    return GateGroupsActiveHabitCard(
+      title: group.skillName ?? group.name,
+      ready: day.ready,
+      total: day.total,
+      complete: day.isComplete,
+      skillId: group.skillId,
+      waitingNames: day.waitingNames,
+      onReport: onReport,
+      onNudge: day.isComplete ? null : onNudge,
+      onOpen: onOpen,
+    );
+  }
+
+  static String statusLine({
+    required int ready,
+    required int total,
+    required bool complete,
+    required List<String> waitingNames,
+  }) {
+    if (complete) {
+      return '$ready/$total · день закрыт';
+    }
+    final waiting = waitingNames.take(3).join(', ');
+    if (waiting.isNotEmpty) {
+      return '$ready/$total · Ждём: $waiting';
+    }
+    return '$ready/$total';
+  }
 
   @override
   Widget build(BuildContext context) {
     final p = context.prime;
     final progress = total > 0 ? (ready / total).clamp(0.0, 1.0) : 0.0;
+    final kind = habitArtKindFor('$skillId $title');
+    final status = statusLine(
+      ready: ready,
+      total: total,
+      complete: complete,
+      waitingNames: waitingNames,
+    );
+
     return PrimeContentCard(
+      onTap: onOpen,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              HabitArtObject(kind: kind, size: 44),
+              const SizedBox(width: AppSpacing.sm),
               PrimeRadialProgress(
                 progress: progress,
                 valueLabel: '$ready/$total',
-                size: 72,
-                stroke: 8,
+                size: 48,
+                stroke: 6,
                 color: complete ? p.mint : p.brand,
               ),
-              const SizedBox(width: AppSpacing.md),
+              const SizedBox(width: AppSpacing.sm),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      AppCopy.dayClosesTogether,
-                      style: KitTypography.sectionTitle.copyWith(color: p.ink),
+                      title,
+                      style: KitTypography.cardTitle.copyWith(color: p.ink),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 2),
                     Text(
-                      complete
-                          ? 'Командный день закрыт'
-                          : AppCopy.waitingReports(remaining),
+                      status,
                       style: KitTypography.caption.copyWith(
-                        color: complete ? p.mint : p.brandSoft,
-                        fontWeight: FontWeight.w600,
+                        color: complete ? p.mint : p.inkMuted,
+                        fontWeight: complete ? FontWeight.w600 : FontWeight.w500,
                       ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      complete
-                          ? AppCopy.primesForTeamDay
-                          : waitingNames != null && waitingNames!.isNotEmpty
-                              ? 'Ждём: $waitingNames'
-                              : AppCopy.howDayCounts,
-                      style: KitTypography.caption.copyWith(color: p.inkMuted),
-                      maxLines: 3,
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ],
                 ),
               ),
+              if (onOpen != null)
+                Icon(Icons.chevron_right_rounded, color: p.inkMuted, size: 20),
             ],
           ),
           const SizedBox(height: AppSpacing.md),

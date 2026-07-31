@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../../core/home/home_state.dart';
+import 'package:prime/core/home/home_state_types.dart';
 import '../../ui/components/editorial/app_hero_module.dart';
 
 /// Renders the editorial hero for the current [HomeStateSnapshot].

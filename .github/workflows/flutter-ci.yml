@@ -1,0 +1,42 @@
+name: flutter-ci
+
+on:
+  push:
+    paths:
+      - "prime-flutter/**"
+      - ".github/workflows/flutter-ci.yml"
+  pull_request:
+    paths:
+      - "prime-flutter/**"
+      - ".github/workflows/flutter-ci.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: prime-flutter
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+
+  release-url-check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: prime-flutter
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure release API URL uses HTTPS when provided
+        run: |
+          if [ -n "${API_BASE_URL:-}" ] && [[ ! "$API_BASE_URL" =~ ^https:// ]]; then
+            echo "API_BASE_URL must use https in release builds"
+            exit 1
+          fi
+        env:
+          API_BASE_URL: https://api.example.com

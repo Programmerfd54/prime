@@ -13,6 +13,9 @@ from ..config import get_settings
 from ..db import get_session
 from ..deps import get_current_user
 from ..media import read_upload
+from ..media_scope import validate_media_url_for_scope
+from ..moderation import ModerationError, check_social_write_allowed, moderate_text_before_publish
+from ..moderation.pipeline import moderation_http_error
 from ..matrix import (
     create_room,
     download_media,
@@ -42,6 +45,7 @@ from ..regions import REGIONS
 from ..schemas import GroupCheckInRequest, HealthResponse, parse_privacy_settings
 from ..skills_catalog import SKILLS, skill_name
 from ..metrics_engine import streak_snapshot, sync_group_member_streak
+from ..notifications import create_notification, notify_group_members as push_group_members
 from ..nicknames import normalize_nickname
 from ..group_progress import compute_team_milestones, compute_team_recap, first_ready_report_date
 from . import group_service as svc
@@ -58,6 +62,7 @@ from .group_service import (
     REGION_EXPANSION_DELAY,
     WAITING_ROOM_SIZE,
     _activate_if_ready,
+    _bump_group_revision,
     _are_friends,
     _chat_message_payload,
     _chat_payloads,
@@ -77,6 +82,8 @@ from .group_service import (
     _group_payload,
     _mark_direct_chat_read,
     _maybe_match_waiting_room,
+    _notify_group_members,
+    notify_unlocked_milestones,
     _public_user_payload,
     _reaction_payloads,
     _report_payload,
@@ -287,7 +294,9 @@ async def create_report(
     if report_status == "ready" and not content_text and not attachments_data:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Добавьте текст, фото или видео")
 
-    today = date.today()
+    from ..timezone_utils import group_today
+
+    today = group_today(group)
     report = await session.scalar(
         select(HabitReport).where(
             HabitReport.group_id == group.id,
@@ -338,6 +347,39 @@ async def create_report(
                     "thumbnail_url": str(item.get("thumbnail_url") or "") or None,
                 }
             )
+    if report_status == "ready":
+        if content_text:
+            try:
+                await moderate_text_before_publish(
+                    session,
+                    user=user,
+                    text=content_text,
+                    content_type="habit_report",
+                )
+            except ModerationError as exc:
+                raise moderation_http_error(exc) from exc
+        for item in attachments_data:
+            if not isinstance(item, dict):
+                continue
+            storage_url = str(item.get("storage_url") or item.get("mxc_url") or "")
+            if storage_url and not bool(item.get("existing") or item.get("id")):
+                thumb = str(item.get("thumbnail_url") or "") or None
+                await validate_media_url_for_scope(
+                    session,
+                    owner=user,
+                    media_url=storage_url,
+                    scope_type="report",
+                    scope_id=group.id,
+                )
+                if thumb:
+                    await validate_media_url_for_scope(
+                        session,
+                        owner=user,
+                        media_url=thumb,
+                        scope_type="report",
+                        scope_id=group.id,
+                    )
+
     async def publish_report_to_chat(prefix: str) -> None:
         report_body = prefix
         if content_text:
@@ -419,6 +461,34 @@ async def create_report(
                 user_id=member_user.id,
                 today=today,
             )
+            await create_notification(
+                session,
+                member_user.id,
+                "team_day_complete",
+                "День закрыт вместе",
+                "+1 Прайм каждому — команда собрала все отчёты",
+                {
+                    "group_id": group.id,
+                    "date": today.isoformat(),
+                    "deep_link": f"prime://groups/{group.id}",
+                },
+            )
+        from .group_service import maybe_transition_cycle_to_voting
+
+        if await maybe_transition_cycle_to_voting(session, group):
+            for _, member_user in member_rows:
+                await create_notification(
+                    session,
+                    member_user.id,
+                    "group_phase",
+                    "Первый цикл завершён",
+                    "Выберите, как продолжить с командой",
+                    {
+                        "group_id": group.id,
+                        "phase": "voting",
+                        "deep_link": f"prime://groups/{group.id}",
+                    },
+                )
     else:
         await _sync_user_daily_progress(session, user)
         membership = await _user_membership(session, group.id, user.id)
@@ -430,6 +500,8 @@ async def create_report(
             today=today,
         )
 
+    _bump_group_revision(group)
+    session.add(group)
     await session.commit()
     await session.refresh(report)
     await session.refresh(user)
@@ -438,4 +510,34 @@ async def create_report(
     result["successful_days"] = user.successful_days
     result["prime_points"] = user.prime_points
     result["team_day"] = await team_day_payload(session, group, day=today)
+    result["group_revision"] = int(group.revision or 0)
+    if report_status == "ready":
+        preview = (content_text or "").strip()
+        if not preview and chat_attachments:
+            preview = f"Вложений: {len(chat_attachments)}"
+        body_text = f"@{user.nickname} отправил отчёт"
+        if preview:
+            snippet = preview if len(preview) <= 80 else f"{preview[:77]}…"
+            body_text = f"{body_text}: {snippet}"
+        await push_group_members(
+            session,
+            group_id=group.id,
+            type="team_report",
+            title=group.skill_name or group.name,
+            body=body_text,
+            exclude_user_id=user.id,
+        )
+    await _notify_group_members(
+        session,
+        group_id=group.id,
+        reason="report_updated" if not just_completed else "team_day_complete",
+    )
+    if just_completed:
+        active_ids = [row.user_id for row, _ in member_rows]
+        await notify_unlocked_milestones(
+            session,
+            group,
+            active_ids,
+            milestone_ids={"first_full_day"},
+        )
     return result

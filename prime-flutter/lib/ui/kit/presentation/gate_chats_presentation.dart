@@ -490,7 +490,7 @@ class ChatsSegmentControl extends StatelessWidget {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: KitTypography.caption.copyWith(
-                            color: i == selectedIndex ? p.ink : p.inkMuted,
+                            color: i == selectedIndex ? p.ink : p.inkSecondary,
                             fontWeight:
                                 i == selectedIndex ? FontWeight.w700 : FontWeight.w500,
                           ),

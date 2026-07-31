@@ -39,6 +39,7 @@ class PrimeImageCard extends StatelessWidget {
             borderRadius: BorderRadius.circular(AppRadius.xl),
             child: Stack(
               fit: StackFit.expand,
+              clipBehavior: Clip.hardEdge,
               children: [
                 Image(image: image, fit: BoxFit.cover),
                 DecoratedBox(
@@ -48,46 +49,61 @@ class PrimeImageCard extends StatelessWidget {
                       end: Alignment.bottomCenter,
                       colors: [
                         Colors.transparent,
-                        Colors.black.withValues(alpha: 0.08),
-                        Colors.black.withValues(alpha: 0.72),
+                        Colors.black.withValues(alpha: 0.12),
+                        Colors.black.withValues(alpha: 0.82),
                       ],
-                      stops: const [0.35, 0.62, 1.0],
+                      stops: const [0.28, 0.58, 1.0],
                     ),
                   ),
                 ),
                 Padding(
                   padding: const EdgeInsets.all(AppSpacing.md),
                   child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       if (trailing != null)
                         Align(alignment: Alignment.topRight, child: trailing),
                       const Spacer(),
-                      Text(
-                        title,
-                        style: KitTypography.cardTitle.copyWith(color: p.inkOnBrand),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      if (subtitle != null) ...[
-                        const SizedBox(height: AppSpacing.xxs),
-                        Text(
-                          subtitle!,
-                          style: KitTypography.caption.copyWith(
-                            color: p.inkOnBrand.withValues(alpha: 0.85),
+                      DecoratedBox(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(AppRadius.lg),
+                          color: Colors.black.withValues(alpha: 0.42),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.all(AppSpacing.sm),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                title,
+                                style: KitTypography.cardTitle
+                                    .copyWith(color: p.inkOnBrand),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              if (subtitle != null) ...[
+                                const SizedBox(height: AppSpacing.xxs),
+                                Text(
+                                  subtitle!,
+                                  style: KitTypography.caption.copyWith(
+                                    color: p.inkOnBrand.withValues(alpha: 0.85),
+                                  ),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
+                              if (metadata.isNotEmpty) ...[
+                                const SizedBox(height: AppSpacing.sm),
+                                Wrap(
+                                  spacing: AppSpacing.xs,
+                                  runSpacing: AppSpacing.xxs,
+                                  children: metadata,
+                                ),
+                              ],
+                            ],
                           ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
                         ),
-                      ],
-                      if (metadata.isNotEmpty) ...[
-                        const SizedBox(height: AppSpacing.sm),
-                        Wrap(
-                          spacing: AppSpacing.xs,
-                          runSpacing: AppSpacing.xxs,
-                          children: metadata,
-                        ),
-                      ],
+                      ),
                     ],
                   ),
                 ),

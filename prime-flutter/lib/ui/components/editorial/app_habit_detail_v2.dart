@@ -34,6 +34,7 @@ class AppHabitDetailSections extends StatelessWidget {
           icon: Icons.task_alt_rounded,
           title: 'Что делать каждый день',
           body: meta.dailyAction,
+          steps: meta.dailySteps,
         ),
         const _EditorialSectionCard(
           icon: Icons.calendar_today_outlined,
@@ -62,25 +63,23 @@ class AppHabitDetailSections extends StatelessWidget {
               Text(
                 meta.teamRole,
                 textAlign: TextAlign.center,
-                style: AppTypography.bodySecondary,
+                style: AppTypography.bodySecondary.copyWith(
+                  color: context.prime.inkSecondary,
+                ),
               ),
             ],
           ),
         ),
         _EditorialSectionCard(
           icon: Icons.trending_up_rounded,
-          title: 'Что изменится',
+          title: 'Что получите',
           body: meta.outcome,
         ),
+        _ReportTipsSection(tips: meta.reportTips, summary: meta.reportFormat),
         _EditorialSectionCard(
-          icon: Icons.description_outlined,
-          title: 'Формат отчёта',
-          body: meta.reportFormat,
-        ),
-        const _EditorialSectionCard(
           icon: Icons.flag_outlined,
           title: 'После 30 дней',
-          body: AppCopy.cycleContinuationFootnote,
+          body: meta.cycleNote,
         ),
         _VisualSectionCard(
           icon: Icons.show_chart_rounded,
@@ -199,6 +198,82 @@ Future<void> showHabitCompareSheet({
   );
 }
 
+class _ReportTipsSection extends StatelessWidget {
+  const _ReportTipsSection({required this.tips, required this.summary});
+
+  final HabitReportTips tips;
+  final String summary;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.prime;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+      child: PrimeContentCard(
+        padding: const EdgeInsets.all(AppSpacing.md),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _SectionHeader(icon: Icons.description_outlined, title: 'Как отчитаться'),
+            const SizedBox(height: AppSpacing.sm),
+            Text(
+              summary,
+              style: AppTypography.bodySecondary.copyWith(color: p.inkSecondary),
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            _TipRow(icon: Icons.photo_outlined, label: 'Фото', body: tips.photo),
+            const SizedBox(height: AppSpacing.xxs),
+            _TipRow(icon: Icons.videocam_outlined, label: 'Видео', body: tips.video),
+            const SizedBox(height: AppSpacing.xxs),
+            _TipRow(icon: Icons.edit_outlined, label: 'Текст', body: tips.textTemplate),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TipRow extends StatelessWidget {
+  const _TipRow({
+    required this.icon,
+    required this.label,
+    required this.body,
+  });
+
+  final IconData icon;
+  final String label;
+  final String body;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.prime;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 18, color: p.brandSoft),
+        const SizedBox(width: AppSpacing.sm),
+        Expanded(
+          child: RichText(
+            text: TextSpan(
+              style: AppTypography.bodySecondary.copyWith(color: p.inkSecondary),
+              children: [
+                TextSpan(
+                  text: '$label: ',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: p.ink,
+                  ),
+                ),
+                TextSpan(text: body),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _CompareRow extends StatelessWidget {
   const _CompareRow({
     required this.label,
@@ -284,14 +359,19 @@ class _EditorialSectionCard extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.body,
+    this.steps,
   });
 
   final IconData icon;
   final String title;
   final String body;
+  final List<String>? steps;
 
   @override
   Widget build(BuildContext context) {
+    final p = context.prime;
+    final bodyStyle =
+        AppTypography.bodySecondary.copyWith(color: p.inkSecondary);
     return Padding(
       padding: const EdgeInsets.only(bottom: AppSpacing.sm),
       child: PrimeContentCard(
@@ -301,7 +381,14 @@ class _EditorialSectionCard extends StatelessWidget {
           children: [
             _SectionHeader(icon: icon, title: title),
             const SizedBox(height: AppSpacing.sm),
-            Text(body, style: AppTypography.bodySecondary),
+            Text(body, style: bodyStyle),
+            if (steps != null && steps!.isNotEmpty) ...[
+              const SizedBox(height: AppSpacing.sm),
+              for (var i = 0; i < steps!.length; i++) ...[
+                Text('${i + 1}. ${steps![i]}', style: bodyStyle),
+                if (i < steps!.length - 1) const SizedBox(height: AppSpacing.xxs),
+              ],
+            ],
           ],
         ),
       ),
@@ -375,7 +462,10 @@ class _FaqBlock extends StatelessWidget {
                     tilePadding: EdgeInsets.zero,
                     iconColor: p.brand,
                     collapsedIconColor: p.inkMuted,
-                    title: Text(item.question, style: AppTypography.body),
+                    title: Text(
+                      item.question,
+                      style: AppTypography.body.copyWith(color: p.ink),
+                    ),
                     children: [
                       Align(
                         alignment: Alignment.centerLeft,
@@ -383,7 +473,9 @@ class _FaqBlock extends StatelessWidget {
                           padding: const EdgeInsets.only(bottom: AppSpacing.sm),
                           child: Text(
                             item.answer,
-                            style: AppTypography.bodySecondary,
+                            style: AppTypography.bodySecondary.copyWith(
+                              color: p.inkSecondary,
+                            ),
                           ),
                         ),
                       ),

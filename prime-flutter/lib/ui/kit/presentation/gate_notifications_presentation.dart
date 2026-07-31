@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_slidable/flutter_slidable.dart';
 
+import '../../../design/haptics.dart';
 import '../../../design/theme/prime_theme_context.dart';
 import '../../../design/tokens.dart';
 import '../../../design/typography.dart';
@@ -37,6 +39,8 @@ class GateNotificationCenterSheet extends StatelessWidget {
     this.onItemTap,
     this.onAcceptFriend,
     this.onDeclineFriend,
+    this.onDismiss,
+    this.onClearAll,
     this.respondingId,
     this.respondingAccept,
   });
@@ -49,6 +53,8 @@ class GateNotificationCenterSheet extends StatelessWidget {
   final ValueChanged<PrimeNotification>? onItemTap;
   final ValueChanged<PrimeNotification>? onAcceptFriend;
   final ValueChanged<PrimeNotification>? onDeclineFriend;
+  final ValueChanged<PrimeNotification>? onDismiss;
+  final VoidCallback? onClearAll;
   final String? respondingId;
   final bool? respondingAccept;
 
@@ -124,6 +130,14 @@ class GateNotificationCenterSheet extends StatelessWidget {
                     style: KitTypography.caption.copyWith(color: p.brand),
                   ),
                 ),
+              if (items.isNotEmpty && onClearAll != null)
+                TextButton(
+                  onPressed: onClearAll,
+                  child: Text(
+                    'Очистить все',
+                    style: KitTypography.caption.copyWith(color: p.inkMuted),
+                  ),
+                ),
             ],
           ),
           const SizedBox(height: AppSpacing.sm),
@@ -146,24 +160,44 @@ class GateNotificationCenterSheet extends StatelessWidget {
                   if (notification.type == PrimeNotificationType.friendRequest) {
                     final key = notification.requestId ?? notification.id;
                     final responding = respondingId == key;
-                    return _FriendRequestRow(
-                      notification: notification,
-                      acceptLoading: responding && respondingAccept == true,
-                      declineLoading: responding && respondingAccept == false,
-                      disabled: respondingId != null,
-                      onAccept: onAcceptFriend == null
+                    return _DismissibleNotification(
+                      dismissKey: notification.id,
+                      enabled: onDismiss != null && respondingId == null,
+                      onDismiss: onDismiss == null
                           ? null
-                          : () => onAcceptFriend!(notification),
-                      onDecline: onDeclineFriend == null
-                          ? null
-                          : () => onDeclineFriend!(notification),
+                          : () => onDismiss!(notification),
+                      child: _FriendRequestRow(
+                        notification: notification,
+                        acceptLoading: responding && respondingAccept == true,
+                        declineLoading: responding && respondingAccept == false,
+                        disabled: respondingId != null,
+                        onAccept: onAcceptFriend == null
+                            ? null
+                            : () => onAcceptFriend!(notification),
+                        onDecline: onDeclineFriend == null
+                            ? null
+                            : () => onDeclineFriend!(notification),
+                        onDismiss: onDismiss == null || respondingId != null
+                            ? null
+                            : () => onDismiss!(notification),
+                      ),
                     );
                   }
-                  return _NotificationRow(
-                    notification: notification,
-                    onTap: onItemTap == null
+                  return _DismissibleNotification(
+                    dismissKey: notification.id,
+                    enabled: onDismiss != null,
+                    onDismiss: onDismiss == null
                         ? null
-                        : () => onItemTap!(notification),
+                        : () => onDismiss!(notification),
+                    child: _NotificationRow(
+                      notification: notification,
+                      onTap: onItemTap == null
+                          ? null
+                          : () => onItemTap!(notification),
+                      onDismiss: onDismiss == null
+                          ? null
+                          : () => onDismiss!(notification),
+                    ),
                   );
                 },
               ),
@@ -174,11 +208,56 @@ class GateNotificationCenterSheet extends StatelessWidget {
   }
 }
 
+class _DismissibleNotification extends StatelessWidget {
+  const _DismissibleNotification({
+    required this.dismissKey,
+    required this.child,
+    required this.enabled,
+    this.onDismiss,
+  });
+
+  final String dismissKey;
+  final Widget child;
+  final bool enabled;
+  final VoidCallback? onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!enabled || onDismiss == null) return child;
+    return Slidable(
+      key: ValueKey('notification-dismiss-$dismissKey'),
+      endActionPane: ActionPane(
+        motion: const BehindMotion(),
+        extentRatio: 0.28,
+        children: [
+          SlidableAction(
+            onPressed: (_) {
+              AppHaptics.light();
+              onDismiss!();
+            },
+            backgroundColor: AppColors.error.withValues(alpha: 0.92),
+            foregroundColor: Colors.white,
+            icon: Icons.delete_outline_rounded,
+            label: 'Удалить',
+            borderRadius: BorderRadius.circular(AppRadius.lg),
+          ),
+        ],
+      ),
+      child: child,
+    );
+  }
+}
+
 class _NotificationRow extends StatelessWidget {
-  const _NotificationRow({required this.notification, this.onTap});
+  const _NotificationRow({
+    required this.notification,
+    this.onTap,
+    this.onDismiss,
+  });
 
   final PrimeNotification notification;
   final VoidCallback? onTap;
+  final VoidCallback? onDismiss;
 
   IconData get _icon => switch (notification.type) {
         PrimeNotificationType.match => Icons.groups_2_outlined,
@@ -269,6 +348,15 @@ class _NotificationRow extends StatelessWidget {
                   shape: BoxShape.circle,
                 ),
               ),
+            if (onDismiss != null)
+              IconButton(
+                tooltip: 'Удалить',
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                onPressed: onDismiss,
+                icon: Icon(Icons.close_rounded, size: 18, color: p.inkMuted),
+              ),
           ],
         ),
       ),
@@ -281,6 +369,7 @@ class _FriendRequestRow extends StatelessWidget {
     required this.notification,
     this.onAccept,
     this.onDecline,
+    this.onDismiss,
     this.acceptLoading = false,
     this.declineLoading = false,
     this.disabled = false,
@@ -289,6 +378,7 @@ class _FriendRequestRow extends StatelessWidget {
   final PrimeNotification notification;
   final VoidCallback? onAccept;
   final VoidCallback? onDecline;
+  final VoidCallback? onDismiss;
   final bool acceptLoading;
   final bool declineLoading;
   final bool disabled;
@@ -313,6 +403,15 @@ class _FriendRequestRow extends StatelessWidget {
                 formatNotificationTime(notification.createdAt),
                 style: KitTypography.caption.copyWith(color: p.inkMuted, fontSize: 11),
               ),
+              if (onDismiss != null)
+                IconButton(
+                  tooltip: 'Удалить',
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                  onPressed: disabled ? null : onDismiss,
+                  icon: Icon(Icons.close_rounded, size: 18, color: p.inkMuted),
+                ),
             ],
           ),
           const SizedBox(height: 4),

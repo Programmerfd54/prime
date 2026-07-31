@@ -14,6 +14,13 @@ from ..config import get_settings
 from ..db import get_session
 from ..deps import get_current_user
 from ..media import read_upload
+from ..media_scope import validate_media_url_for_scope
+from ..moderation import (
+    ModerationError,
+    check_social_write_allowed,
+    moderate_text_before_publish,
+)
+from ..moderation.pipeline import moderation_http_error
 from ..pagination import decode_cursor, encode_cursor
 from ..matrix import (
     create_room,
@@ -43,6 +50,7 @@ from ..models import (
 from ..regions import REGIONS
 from ..schemas import GroupCheckInRequest, HealthResponse, parse_privacy_settings
 from ..skills_catalog import SKILLS, skill_name
+from ..notifications import chat_message_preview, notify_group_members as push_group_members
 from . import group_service as svc
 from .group_service import (
     ALLOWED_DOCUMENT_TYPES,
@@ -185,18 +193,51 @@ async def chat_send_message_new(
         if existing is not None:
             return _chat_message_payload(existing, user)
 
+    offense_id = f"{user.id}:{client_id}" if client_id else None
+    if body:
+        try:
+            await moderate_text_before_publish(
+                session,
+                user=user,
+                text=body,
+                content_type="group_chat_message",
+                offense_id=offense_id,
+                draft_id=client_id,
+            )
+        except ModerationError as exc:
+            raise moderation_http_error(exc) from exc
+
+    media_url = str(url) if url else None
+    thumbnail = str(payload.get("thumbnail_url") or "") or None
+    if media_url:
+        await validate_media_url_for_scope(
+            session,
+            owner=user,
+            media_url=media_url,
+            scope_type="group",
+            scope_id=group.id,
+        )
+    if thumbnail:
+        await validate_media_url_for_scope(
+            session,
+            owner=user,
+            media_url=thumbnail,
+            scope_type="group",
+            scope_id=group.id,
+        )
+
     message = await _create_group_chat_message(
         session,
         group,
         user,
         msgtype=msgtype,
         body=body,
-        url=str(url) if url else None,
+        url=media_url,
         filename=str(payload.get("filename") or "") or None,
         content_type=str(payload.get("content_type") or "") or None,
         size_bytes=int(payload["size_bytes"]) if payload.get("size_bytes") is not None else None,
         duration_ms=int(payload["duration_ms"]) if payload.get("duration_ms") is not None else None,
-        thumbnail_url=str(payload.get("thumbnail_url") or "") or None,
+        thumbnail_url=thumbnail,
         client_id=client_id,
     )
     try:
@@ -216,6 +257,16 @@ async def chat_send_message_new(
         return _chat_message_payload(existing, user)
     await session.refresh(message)
     await _notify_group_chat_update(session, group_id=group.id, exclude_user_id=user.id)
+    if msgtype not in {"prime.system", "prime.report"}:
+        await push_group_members(
+            session,
+            group_id=group.id,
+            type="group_chat",
+            title=group.skill_name or group.name,
+            body=f"@{user.nickname}: {chat_message_preview(body, msgtype)}",
+            payload={"message_id": message.id},
+            exclude_user_id=user.id,
+        )
     return _chat_message_payload(message, user)
 
 
@@ -229,6 +280,10 @@ async def chat_toggle_reaction(
     emoji = str(payload.get("emoji") or "").strip()
     if emoji not in ALLOWED_REACTION_EMOJIS:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неподдерживаемая реакция")
+    try:
+        await check_social_write_allowed(session, user)
+    except ModerationError as exc:
+        raise moderation_http_error(exc) from exc
     message = await session.get(ChatMessage, message_id)
     if message is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Сообщение не найдено")

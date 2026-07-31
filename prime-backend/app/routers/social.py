@@ -13,6 +13,11 @@ from ..config import get_settings
 from ..db import get_session
 from ..deps import get_current_user
 from ..media import read_upload
+from ..media_scope import validate_media_url_for_scope
+from ..moderation import ModerationError, check_social_write_allowed, moderate_text_before_publish
+from ..moderation.pipeline import moderation_http_error
+from ..audit import record_audit
+from ..rate_limit import enforce as enforce_rate_limit
 from ..direct_message_events import DirectMessagePush, direct_message_hub
 from ..notifications import create_notification
 from ..pagination import decode_cursor, encode_cursor
@@ -347,6 +352,12 @@ async def _create_friend_request_for_addressee(
             "requester_nickname": requester.nickname,
         },
     )
+    await record_audit(
+        session,
+        action="friend_request.sent",
+        user_id=requester.id,
+        metadata={"addressee_id": addressee.id, "request_id": existing.id},
+    )
     await session.commit()
     await session.refresh(existing)
     return {"status": existing.status, "request_id": existing.id}
@@ -361,6 +372,14 @@ async def create_friend_request(
     nickname = normalize_nickname(str(payload.get("nickname") or ""))
     if len(nickname) < 3:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=" ")
+    settings = get_settings()
+    await enforce_rate_limit(
+        session,
+        f"friend_request:user:{user.id}",
+        limit=settings.friend_request_rate_limit_attempts,
+        window_seconds=settings.friend_request_rate_limit_window_seconds,
+        detail="Слишком много приглашений. Попробуйте позже.",
+    )
     addressee = await session.scalar(select(User).where(User.nickname == nickname))
     if addressee is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="  ")
@@ -670,6 +689,27 @@ async def send_direct_message(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Не удалось загрузить файл",
         )
+    offense_id = f"{user.id}:{client_id}" if client_id else None
+    if body:
+        try:
+            await moderate_text_before_publish(
+                session,
+                user=user,
+                text=body,
+                content_type="direct_message",
+                offense_id=offense_id,
+                draft_id=client_id,
+            )
+        except ModerationError as exc:
+            raise moderation_http_error(exc) from exc
+    if media_url:
+        await validate_media_url_for_scope(
+            session,
+            owner=user,
+            media_url=str(media_url),
+            scope_type="direct",
+            scope_id=friend_id,
+        )
     if msgtype == "m.image" and not body:
         body = "Изображение"
     if msgtype == "m.file" and not body:
@@ -722,6 +762,21 @@ async def send_direct_message(
             message=recipient_payload,
         ),
     )
+    preview = body.strip() if body.strip() else (
+        "📷 Фото" if msgtype == "m.image" else "📎 Файл"
+    )
+    await create_notification(
+        session,
+        friend_id,
+        "direct_message",
+        user.name or user.nickname,
+        preview if len(preview) <= 120 else f"{preview[:117]}…",
+        {
+            "friend_id": user.id,
+            "message_id": message.id,
+            "deep_link": f"prime://chats/direct/{user.id}",
+        },
+    )
     return _direct_message_payload(message, current_user_id=user.id)
 
 
@@ -735,6 +790,10 @@ async def direct_toggle_reaction(
     emoji = str(payload.get("emoji") or "").strip()
     if emoji not in ALLOWED_REACTION_EMOJIS:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неподдерживаемая реакция")
+    try:
+        await check_social_write_allowed(session, user)
+    except ModerationError as exc:
+        raise moderation_http_error(exc) from exc
     message = await session.get(DirectMessage, message_id)
     if message is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Сообщение не найдено")

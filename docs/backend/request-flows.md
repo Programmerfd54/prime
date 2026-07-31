@@ -22,6 +22,18 @@ notifications in the same database transaction. Group activation calls Matrix
 before the current transaction commits; this remains a known external-I/O
 coupling.
 
+Home and Groups call one `/groups/overview` read model. Its group-card portion
+loads memberships/users, today's reports, check-ins, group-day rows and cycle
+starts in five queries independent of group count. Flutter no longer requests
+one calendar per active habit. Group detail remains the source for heavier
+weekly recap, milestones and personal impact.
+
+Early start creates a durable 15-minute request and confirmation rows. The
+initiator's transaction also creates notification/outbox records for the rest
+of the queue. The third valid confirmation forms the group from current queue
+members only. Manual group change deactivates membership, appends an audit
+event, creates a new queue entry and returns that entry in one request.
+
 ## Check-in and reports
 
 Flutter dashboard → `/groups/{id}/check-in` or `/reports` → membership check →
@@ -39,8 +51,9 @@ ID, and return the existing row on retries. Direct messages already use
 
 ## Notifications and realtime
 
-Notification producers insert `notifications` and currently call the push stub
-in-process. Flutter reads `/notifications` with an opaque `(created_at,id)`
-cursor. `/events/stream` combines the in-process hub, notification polling and
-direct-message polling; reconnect replay and multi-instance fanout remain
-follow-up work.
+Notification producers insert `notifications` and `outbox_events` in one
+transaction. The outbox worker delivers through FCM HTTP v1 or APNs HTTP/2 and
+retries transient failures. Flutter reads `/notifications` with an opaque
+`(created_at,id)` cursor. `/events/stream` publishes revisioned group/queue
+state and live notification/chat events; reconnect replay and multi-instance
+fanout remain follow-up work.

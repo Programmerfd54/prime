@@ -1,11 +1,12 @@
 import json
+from collections.abc import Iterable
 from datetime import timedelta
 from sqlalchemy import select
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .direct_message_events import NotificationPush, direct_message_hub
-from .models import Notification, OutboxEvent, utcnow
+from .models import GroupMember, Notification, OutboxEvent, utcnow
 from .push import send_push
 
 
@@ -35,6 +36,10 @@ async def create_notification(
     body: str,
     payload: dict | None = None,
 ) -> Notification:
+    push_payload = {
+        **(payload or {}),
+        "type": type,
+    }
     notification = Notification(
         user_id=user_id,
         type=type,
@@ -53,7 +58,7 @@ async def create_notification(
                     "user_id": user_id,
                     "title": title,
                     "body": body,
-                    "payload": payload or {},
+                    "payload": push_payload,
                 }
             ),
         )
@@ -63,6 +68,73 @@ async def create_notification(
         NotificationPush(notification=notification_payload(notification)),
     )
     return notification
+
+
+async def notify_users(
+    session: AsyncSession,
+    user_ids: Iterable[str],
+    *,
+    type: str,
+    title: str,
+    body: str,
+    payload: dict | None = None,
+    exclude_user_id: str | None = None,
+) -> None:
+    seen: set[str] = set()
+    for user_id in user_ids:
+        if not user_id or user_id in seen:
+            continue
+        if exclude_user_id and user_id == exclude_user_id:
+            continue
+        seen.add(user_id)
+        await create_notification(session, user_id, type, title, body, payload or {})
+
+
+async def notify_group_members(
+    session: AsyncSession,
+    *,
+    group_id: str,
+    type: str,
+    title: str,
+    body: str,
+    payload: dict | None = None,
+    exclude_user_id: str | None = None,
+) -> None:
+    member_ids = list((
+        await session.execute(
+            select(GroupMember.user_id).where(
+                GroupMember.group_id == group_id,
+                GroupMember.active.is_(True),
+            )
+        )
+    ).scalars().all())
+    merged_payload = {
+        "group_id": group_id,
+        "deep_link": f"prime://groups/{group_id}",
+        **(payload or {}),
+    }
+    await notify_users(
+        session,
+        member_ids,
+        type=type,
+        title=title,
+        body=body,
+        payload=merged_payload,
+        exclude_user_id=exclude_user_id,
+    )
+
+
+def chat_message_preview(body: str, msgtype: str) -> str:
+    text = (body or "").strip()
+    if text:
+        return text if len(text) <= 120 else f"{text[:117]}…"
+    return {
+        "m.image": "📷 Фото",
+        "m.video": "🎬 Видео",
+        "m.audio": "🎤 Аудио",
+        "m.file": "📎 Файл",
+        "prime.video_note": "🎥 Видеокружок",
+    }.get(msgtype, "Новое сообщение")
 
 
 async def process_outbox_once(session: AsyncSession, *, batch_size: int = 50) -> int:

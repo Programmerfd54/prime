@@ -118,6 +118,9 @@ class ReportQueue {
   /// Number of submissions currently waiting for a reconnect.
   Future<int> pendingCount() async => (await _readAll()).length;
 
+  /// Drops all queued submissions (e.g. on logout).
+  Future<void> clear() async => _writeAll([]);
+
   /// Queues a `/reports` submission. [payload] should match the body used
   /// with [ApiClient.createReport].
   Future<String> enqueueReport(Map<String, dynamic> payload) async {

@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 
 import '../../data/api_client.dart';
 import '../../models/notification.dart';
+import '../errors/app_failure.dart';
 import '../errors/failure_mapper.dart';
 
 typedef DirectMessageListener = void Function(DirectMessagePush push);
@@ -28,9 +29,19 @@ class DirectChatReadPush {
 }
 
 class GroupUpdatePush {
-  const GroupUpdatePush({required this.groupId});
+  const GroupUpdatePush({
+    required this.groupId,
+    this.revision = 0,
+    this.phase = '',
+    this.reason = 'updated',
+    this.milestoneId,
+  });
 
   final String groupId;
+  final int revision;
+  final String phase;
+  final String reason;
+  final String? milestoneId;
 }
 
 class GroupChatUpdatePush {
@@ -51,16 +62,30 @@ class RealtimeClient extends ChangeNotifier {
   Timer? _reconnectTimer;
   bool _disposed = false;
   bool _useSse = true;
+  bool _sseConnected = false;
   String _sseBuffer = '';
   final Set<String> _seenMatchGroupIds = {};
+  final Map<String, int> _groupRevisions = {};
+  final Map<String, int> _waitingRevisions = {};
   final List<DirectMessageListener> _directMessageListeners = [];
   final List<DirectChatReadListener> _directChatReadListeners = [];
   final List<GroupUpdateListener> _groupUpdateListeners = [];
   final List<GroupChatUpdateListener> _groupChatUpdateListeners = [];
+  final Set<String> _locallyRemovedIds = {};
+  int _refreshGeneration = 0;
+  bool _clearAllPending = false;
 
   List<PrimeNotification> items = [];
   int unreadCount = 0;
   String? error;
+
+  bool get isSseConnected => _sseConnected;
+
+  void _setSseConnected(bool value) {
+    if (_sseConnected == value) return;
+    _sseConnected = value;
+    if (!_disposed) notifyListeners();
+  }
 
   void Function(String groupId)? onMatch;
   void Function(String groupId)? onGroupUpdate;
@@ -108,19 +133,22 @@ class RealtimeClient extends ChangeNotifier {
   }
 
   void _emitDirectMessage(DirectMessagePush push) {
-    for (final listener in List<DirectMessageListener>.from(_directMessageListeners)) {
+    for (final listener
+        in List<DirectMessageListener>.from(_directMessageListeners)) {
       listener(push);
     }
   }
 
   void _emitDirectChatRead(DirectChatReadPush push) {
-    for (final listener in List<DirectChatReadListener>.from(_directChatReadListeners)) {
+    for (final listener
+        in List<DirectChatReadListener>.from(_directChatReadListeners)) {
       listener(push);
     }
   }
 
   void _emitGroupUpdate(GroupUpdatePush push) {
-    for (final listener in List<GroupUpdateListener>.from(_groupUpdateListeners)) {
+    for (final listener
+        in List<GroupUpdateListener>.from(_groupUpdateListeners)) {
       listener(push);
     }
   }
@@ -154,15 +182,29 @@ class RealtimeClient extends ChangeNotifier {
     _httpClient?.close();
     _httpClient = null;
     _sseBuffer = '';
+    _setSseConnected(false);
   }
 
   void _applyNotificationPush(PrimeNotification notification) {
     if (notification.id.isEmpty) return;
+    if (_locallyRemovedIds.contains(notification.id)) return;
+    if (_clearAllPending) return;
     if (items.any((item) => item.id == notification.id)) return;
     items = [notification, ...items];
     if (!notification.read) unreadCount++;
     notifyListeners();
   }
+
+  List<PrimeNotification> _filterRemoved(List<PrimeNotification> source) {
+    if (_clearAllPending) return const [];
+    if (_locallyRemovedIds.isEmpty) return source;
+    return source
+        .where((item) => !_locallyRemovedIds.contains(item.id))
+        .toList();
+  }
+
+  int _countUnread(Iterable<PrimeNotification> source) =>
+      source.where((item) => !item.read).length;
 
   void _scheduleRefresh() {
     _refreshDebounce?.cancel();
@@ -173,13 +215,16 @@ class RealtimeClient extends ChangeNotifier {
 
   Future<void> refresh() async {
     if (_disposed) return;
+    final generation = ++_refreshGeneration;
     try {
       final data = await _api.listNotifications();
+      if (_disposed || generation != _refreshGeneration) return;
       final parsed = NotificationListResponse.fromJson(data);
-      items = parsed.items;
-      unreadCount = parsed.unreadCount;
+      items = _filterRemoved(parsed.items);
+      unreadCount = _countUnread(items);
       error = null;
     } catch (e) {
+      if (_disposed || generation != _refreshGeneration) return;
       error = FailureMapper.from(e).message;
     }
     if (!_disposed) notifyListeners();
@@ -200,6 +245,7 @@ class RealtimeClient extends ChangeNotifier {
         read: true,
         createdAt: current.createdAt,
         payload: current.payload,
+        rawType: current.rawType,
       ),
       ...items.sublist(index + 1),
     ];
@@ -239,6 +285,7 @@ class RealtimeClient extends ChangeNotifier {
           read: true,
           createdAt: item.createdAt,
           payload: item.payload,
+          rawType: item.rawType,
         ),
     ];
     unreadCount = 0;
@@ -247,6 +294,46 @@ class RealtimeClient extends ChangeNotifier {
       await _api.markAllNotificationsRead();
     } catch (_) {
       unawaited(refresh());
+    }
+  }
+
+  Future<void> dismissNotification(String notificationId) async {
+    if (notificationId.isEmpty) return;
+    _refreshGeneration++;
+    _locallyRemovedIds.add(notificationId);
+    removeNotificationLocally(notificationId);
+    try {
+      await _api.deleteNotification(notificationId);
+      _locallyRemovedIds.remove(notificationId);
+    } catch (e) {
+      _locallyRemovedIds.remove(notificationId);
+      final failure = FailureMapper.from(e);
+      if (failure is NotFoundFailure) {
+        return;
+      }
+      unawaited(refresh());
+      rethrow;
+    }
+  }
+
+  Future<void> clearAllNotifications() async {
+    if (_clearAllPending) return;
+    _refreshGeneration++;
+    _clearAllPending = true;
+    _locallyRemovedIds.addAll(items.map((item) => item.id));
+    items = [];
+    unreadCount = 0;
+    notifyListeners();
+    try {
+      await _api.clearAllNotifications();
+      _locallyRemovedIds.clear();
+    } catch (e) {
+      _clearAllPending = false;
+      _locallyRemovedIds.clear();
+      unawaited(refresh());
+      rethrow;
+    } finally {
+      _clearAllPending = false;
     }
   }
 
@@ -262,7 +349,6 @@ class RealtimeClient extends ChangeNotifier {
     final request = http.Request('GET', Uri.parse(_api.eventsStreamUrl));
     request.headers['Authorization'] = 'Bearer $token';
     request.headers['Accept'] = 'text/event-stream';
-    request.headers['Cache-Control'] = 'no-cache';
 
     try {
       final response = await client.send(request);
@@ -272,22 +358,26 @@ class RealtimeClient extends ChangeNotifier {
         _httpClient = null;
         return;
       }
+      _setSseConnected(true);
 
       _sseSubscription = response.stream.listen(
         _onSseBytes,
         onError: (_) {
           _useSse = false;
+          _setSseConnected(false);
           _scheduleRefresh();
           _scheduleSseReconnect();
         },
         onDone: () {
           _useSse = false;
+          _setSseConnected(false);
           _scheduleSseReconnect();
         },
         cancelOnError: true,
       );
     } catch (_) {
       _useSse = false;
+      _setSseConnected(false);
       client.close();
       _httpClient = null;
       _scheduleSseReconnect();
@@ -368,6 +458,16 @@ class RealtimeClient extends ChangeNotifier {
     }
 
     if (eventName == 'waiting_room_update') {
+      try {
+        final payload = jsonDecode(rawData) as Map<String, dynamic>;
+        final skillId = payload['skill_id'] as String? ?? '';
+        final revision = payload['revision'] as int? ?? 0;
+        if (skillId.isNotEmpty && revision > 0) {
+          final known = _waitingRevisions[skillId] ?? -1;
+          if (revision <= known) return;
+          _waitingRevisions[skillId] = revision;
+        }
+      } catch (_) {}
       onWaitingRoomUpdate?.call();
       return;
     }
@@ -377,7 +477,22 @@ class RealtimeClient extends ChangeNotifier {
         final payload = jsonDecode(rawData) as Map<String, dynamic>;
         final groupId = payload['group_id'] as String? ?? '';
         if (groupId.isNotEmpty) {
-          _emitGroupUpdate(GroupUpdatePush(groupId: groupId));
+          final revision = payload['revision'] as int? ?? 0;
+          final reason = payload['reason'] as String? ?? 'updated';
+          final knownRevision = _groupRevisions[groupId] ?? -1;
+          if (revision > 0 &&
+              revision <= knownRevision &&
+              reason != 'cycle_started') {
+            return;
+          }
+          if (revision > 0) _groupRevisions[groupId] = revision;
+          _emitGroupUpdate(GroupUpdatePush(
+            groupId: groupId,
+            revision: revision,
+            phase: payload['phase'] as String? ?? '',
+            reason: reason,
+            milestoneId: payload['milestone_id'] as String?,
+          ));
           onGroupUpdate?.call(groupId);
         }
       } catch (_) {}
@@ -414,7 +529,23 @@ class RealtimeClient extends ChangeNotifier {
     if (eventName == 'notification' || eventName == null) {
       try {
         final payload = jsonDecode(rawData) as Map<String, dynamic>;
-        _applyNotificationPush(PrimeNotification.fromJson(payload));
+        final notification = PrimeNotification.fromJson(payload);
+        _applyNotificationPush(notification);
+        if (notification.rawType == 'early_start_request') {
+          onWaitingRoomUpdate?.call();
+        }
+        if (notification.rawType == 'group_phase') {
+          final phase = notification.payload['phase'] as String? ?? '';
+          final groupId = notification.groupId ?? '';
+          if (groupId.isNotEmpty && phase == 'active') {
+            _emitGroupUpdate(GroupUpdatePush(
+              groupId: groupId,
+              phase: phase,
+              reason: 'cycle_started',
+            ));
+            onGroupUpdate?.call(groupId);
+          }
+        }
         if (payload['type'] == 'match') {
           final matchPayload = payload['payload'];
           if (matchPayload is Map) {

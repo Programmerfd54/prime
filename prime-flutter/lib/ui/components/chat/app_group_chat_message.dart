@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:video_player/video_player.dart';
 
+import '../../../core/chat/chat_system_grouping.dart';
 import '../../../core/media/media_urls.dart';
 import '../../../data/api_client.dart';
 import '../../../design/tokens.dart';
@@ -241,6 +242,235 @@ class _GroupMessageBody extends StatelessWidget {
   }
 }
 
+/// Shared system/nudge/celebration card for group and prep chat.
+class PrimeSystemMessageCard extends StatelessWidget {
+  const PrimeSystemMessageCard({
+    super.key,
+    required this.body,
+    this.isCelebration = false,
+    this.isNudge = false,
+    this.compact = false,
+  })  : groupKind = null,
+        messages = null;
+
+  const PrimeSystemMessageCard.grouped({
+    super.key,
+    required this.groupKind,
+    required this.messages,
+    this.compact = false,
+  })  : body = '',
+        isCelebration = false,
+        isNudge = false;
+
+  final String body;
+  final bool isCelebration;
+  final bool isNudge;
+  final bool compact;
+  final ChatSystemGroupKind? groupKind;
+  final List<Map<String, dynamic>>? messages;
+
+  bool get _isGrouped => messages != null && messages!.length > 1;
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isGrouped) {
+      return _GroupedSystemCard(
+        kind: groupKind ?? ChatSystemGroupKind.generic,
+        messages: messages!,
+        compact: compact,
+      );
+    }
+
+    final accent = isCelebration
+        ? AppColors.success
+        : (isNudge ? AppColors.habitSocial : AppColors.primary);
+    final lines = body.split('\n');
+    final headline = lines.isNotEmpty ? lines.first : body;
+    final detail = lines.length > 1 ? lines.sublist(1).join('\n').trim() : '';
+    final icon = isCelebration
+        ? Icons.emoji_events_outlined
+        : (isNudge
+            ? Icons.notifications_active_outlined
+            : Icons.check_circle_outline_rounded);
+
+    return Padding(
+      padding: EdgeInsets.symmetric(
+        vertical: compact ? AppSpacing.xxs : AppSpacing.xs,
+      ),
+      child: Container(
+        width: double.infinity,
+        padding: EdgeInsets.all(compact ? AppSpacing.sm : AppSpacing.md),
+        decoration: BoxDecoration(
+          color: accent.withValues(alpha: compact ? 0.1 : 0.12),
+          borderRadius: BorderRadius.circular(compact ? AppRadius.md : AppRadius.lg),
+          border: Border.all(color: accent.withValues(alpha: 0.28)),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(icon, color: accent, size: compact ? 18 : 20),
+            const SizedBox(width: AppSpacing.sm),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    headline,
+                    style: AppTypography.caption.copyWith(
+                      color: AppColors.textPrimary,
+                      fontWeight: FontWeight.w700,
+                      fontSize: compact ? 12 : 13,
+                    ),
+                  ),
+                  if (detail.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      detail,
+                      style: AppTypography.caption.copyWith(
+                        color: AppColors.textSecondary,
+                        fontSize: compact ? 11 : 12,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static Widget? previewForSegment(ChatDisplaySegment segment) {
+    if (segment.isSystemGroup) {
+      return PrimeSystemMessageCard.grouped(
+        groupKind: segment.kind ?? ChatSystemGroupKind.generic,
+        messages: segment.messages!,
+        compact: true,
+      );
+    }
+    final message = segment.message;
+    if (message == null) return null;
+    return previewForMessage(message);
+  }
+
+  static Widget? previewForMessage(Map<String, dynamic> message) {
+    final msgtype = message['msgtype']?.toString() ?? '';
+    final body = message['body']?.toString() ?? '';
+    if (body.isEmpty) return null;
+    final isPrimeSystem = msgtype == 'prime.system' ||
+        msgtype == 'prime.nudge' ||
+        body.startsWith('🎉 День закрыт') ||
+        body.startsWith('⏳ Осталось') ||
+        body.startsWith('✅ ') ||
+        body.startsWith('🛡️ ') ||
+        body.startsWith('🚀 ') ||
+        body.startsWith('💜 ');
+    if (!isPrimeSystem) return null;
+    return PrimeSystemMessageCard(
+      body: body,
+      isCelebration: body.startsWith('🎉') || msgtype == 'prime.system',
+      isNudge: msgtype == 'prime.nudge' || body.startsWith('⏳'),
+      compact: true,
+    );
+  }
+}
+
+class _GroupedSystemCard extends StatelessWidget {
+  const _GroupedSystemCard({
+    required this.kind,
+    required this.messages,
+    this.compact = false,
+  });
+
+  final ChatSystemGroupKind kind;
+  final List<Map<String, dynamic>> messages;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = switch (kind) {
+      ChatSystemGroupKind.participation ||
+      ChatSystemGroupKind.rulesAcceptance ||
+      ChatSystemGroupKind.celebration =>
+        AppColors.success,
+      ChatSystemGroupKind.nudge => AppColors.habitSocial,
+      ChatSystemGroupKind.report => AppColors.primary,
+      _ => AppColors.primary,
+    };
+    final icon = switch (kind) {
+      ChatSystemGroupKind.participation => Icons.how_to_reg_outlined,
+      ChatSystemGroupKind.rulesAcceptance => Icons.verified_user_outlined,
+      ChatSystemGroupKind.report => Icons.flag_outlined,
+      ChatSystemGroupKind.nudge => Icons.notifications_active_outlined,
+      ChatSystemGroupKind.celebration => Icons.emoji_events_outlined,
+      _ => Icons.info_outline_rounded,
+    };
+    final actors = messages
+        .map(systemActorLabel)
+        .whereType<String>()
+        .toList();
+    final title = systemGroupTitle(kind, count: messages.length);
+    final namesLine = actors.isNotEmpty
+        ? actors.join(' · ')
+        : messages
+            .map((m) => m['body']?.toString().split('\n').first ?? '')
+            .where((line) => line.isNotEmpty)
+            .take(3)
+            .join(' · ');
+
+    return Padding(
+      padding: EdgeInsets.symmetric(
+        vertical: compact ? AppSpacing.xxs : AppSpacing.xs,
+      ),
+      child: Container(
+        width: double.infinity,
+        padding: EdgeInsets.all(compact ? AppSpacing.sm : AppSpacing.md),
+        decoration: BoxDecoration(
+          color: accent.withValues(alpha: compact ? 0.1 : 0.12),
+          borderRadius: BorderRadius.circular(compact ? AppRadius.md : AppRadius.lg),
+          border: Border.all(color: accent.withValues(alpha: 0.28)),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(icon, color: accent, size: compact ? 18 : 20),
+            const SizedBox(width: AppSpacing.sm),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: AppTypography.caption.copyWith(
+                      color: AppColors.textPrimary,
+                      fontWeight: FontWeight.w700,
+                      fontSize: compact ? 12 : 13,
+                    ),
+                  ),
+                  if (namesLine.isNotEmpty) ...[
+                    const SizedBox(height: 3),
+                    Text(
+                      namesLine,
+                      maxLines: compact ? 2 : 3,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTypography.caption.copyWith(
+                        color: AppColors.textSecondary,
+                        fontSize: compact ? 11 : 12,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _PrimeSystemCard extends StatelessWidget {
   const _PrimeSystemCard({
     required this.body,
@@ -254,65 +484,11 @@ class _PrimeSystemCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final accent = isCelebration
-        ? AppColors.success
-        : (isNudge ? AppColors.habitSocial : AppColors.primary);
-    final lines = body.split('\n');
-    final headline = lines.isNotEmpty ? lines.first : body;
-    final detail = lines.length > 1 ? lines.sublist(1).join('\n').trim() : '';
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
-      child: Center(
-        child: Container(
-          width: double.infinity,
-          margin: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
-          padding: const EdgeInsets.all(AppSpacing.md),
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                accent.withValues(alpha: 0.16),
-                AppColors.elevatedSurface,
-              ],
-            ),
-            borderRadius: BorderRadius.circular(AppRadius.lg),
-            border: Border.all(color: accent.withValues(alpha: 0.35)),
-          ),
-          child: Column(
-            children: [
-              Icon(
-                isCelebration
-                    ? Icons.emoji_events_outlined
-                    : (isNudge
-                        ? Icons.notifications_active_outlined
-                        : Icons.info_outline),
-                color: accent,
-                size: 22,
-              ),
-              const SizedBox(height: AppSpacing.xs),
-              Text(
-                headline,
-                textAlign: TextAlign.center,
-                style: AppTypography.body.copyWith(
-                  color: AppColors.textPrimary,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              if (detail.isNotEmpty) ...[
-                const SizedBox(height: AppSpacing.xxs),
-                Text(
-                  detail,
-                  textAlign: TextAlign.center,
-                  style: AppTypography.caption.copyWith(
-                    color: AppColors.textSecondary,
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
+    return Center(
+      child: PrimeSystemMessageCard(
+        body: body,
+        isCelebration: isCelebration,
+        isNudge: isNudge,
       ),
     );
   }

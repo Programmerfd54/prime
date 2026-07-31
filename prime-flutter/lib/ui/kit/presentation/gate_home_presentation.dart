@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:prime/core/home/home_state_types.dart';
 
-import '../../../core/home/home_state.dart';
+import '../../../core/groups/group_navigation.dart';
+import '../../../core/groups/progress_labels.dart';
 import '../../../core/media/media_urls.dart';
 import '../../../design/theme/prime_theme_context.dart';
 import '../../../design/tokens.dart';
@@ -61,6 +63,7 @@ class GateHomePresentation extends StatelessWidget {
     this.waitingNeeded = 6,
     this.waitingSkillName,
     this.onFindFriends,
+    this.onNotificationNavigate,
   });
 
   final UserModel? user;
@@ -97,6 +100,7 @@ class GateHomePresentation extends StatelessWidget {
   final int waitingNeeded;
   final String? waitingSkillName;
   final VoidCallback? onFindFriends;
+  final NotificationNavigateCallback? onNotificationNavigate;
 
   String get _greeting {
     final hour = DateTime.now().hour;
@@ -121,7 +125,11 @@ class GateHomePresentation extends StatelessWidget {
           streak: streak,
           photoUrl: user?.photoUrl,
           onAvatarTap: onAvatarTap,
-          trailing: const NotificationBellButton(hasUnread: false),
+          trailing: NotificationBellButton(
+            hasUnread: false,
+            onOpenGroups: onOpenGroup,
+            onNavigate: onNotificationNavigate,
+          ),
         ),
         const SizedBox(height: AppSpacing.md),
         HomeNextStepCard(state: homeState, onPrimaryAction: onPrimaryAction),
@@ -181,7 +189,7 @@ class GateHomePresentation extends StatelessWidget {
           HomeTeamPulseCard(
             title: 'Пульс команды',
             subtitle: teamPulse?.message ??
-                '$teamReady из $teamTotal сдали отчёт сегодня',
+                ProgressLabels.report(ready: teamReady, total: teamTotal),
             teamReady: teamReady,
             teamTotal: teamTotal,
             avatars: avatars,

@@ -34,6 +34,8 @@ class WaitingRoomUpdatePush:
     """Waiting-room queue changed (e.g. pair invite accepted)."""
 
     skill_id: str
+    revision: int = 0
+    reason: str = "updated"
 
 
 @dataclass(frozen=True)
@@ -41,6 +43,10 @@ class GroupUpdatePush:
     """Group membership or intro confirmation changed."""
 
     group_id: str
+    revision: int = 0
+    phase: str = ""
+    reason: str = "updated"
+    milestone_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -68,6 +74,22 @@ class DirectMessageEventHub:
         queue: asyncio.Queue[RealtimePush] = asyncio.Queue(maxsize=64)
         self._queues.setdefault(user_id, []).append(queue)
         return queue
+
+    @property
+    def active_connections(self) -> int:
+        return sum(len(queues) for queues in self._queues.values())
+
+    @property
+    def subscribed_users(self) -> int:
+        return len(self._queues)
+
+    @property
+    def queued_events(self) -> int:
+        return sum(
+            queue.qsize()
+            for queues in self._queues.values()
+            for queue in queues
+        )
 
     def unsubscribe(self, user_id: str, queue: asyncio.Queue[RealtimePush]) -> None:
         queues = self._queues.get(user_id)

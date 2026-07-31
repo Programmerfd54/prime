@@ -1,112 +1,9 @@
 import '../../design/visuals/habit_art.dart';
 import '../../l10n/copy.dart';
 import '../../models/group.dart';
-
-/// Adaptive home phases — priority order in [HomeStateResolver.resolve].
-enum HomePhase {
-  teamMatched,
-  searchingTeam,
-  groupIntroduction,
-  groupRulesPending,
-  reportDue,
-  reportComplete,
-  returningUser,
-  newUser,
-}
-
-class HomePendingGroup {
-  const HomePendingGroup({
-    required this.groupId,
-    required this.skillName,
-    required this.status,
-  });
-
-  final String groupId;
-  final String skillName;
-  final GroupStatus status;
-}
-
-class HomeStateInput {
-  const HomeStateInput({
-    required this.hasActiveGroups,
-    required this.reportedToday,
-    required this.hasHistory,
-    required this.searching,
-    this.matchedGroupId,
-    this.pendingGroup,
-    this.peopleWaiting = 0,
-    this.needed = 6,
-    this.queueSkillName,
-    this.streak = 0,
-    this.primarySkillName,
-    this.teamDayStatus,
-    this.teamReady = 0,
-    this.teamTotal = 0,
-    this.waitingNames = const [],
-  });
-
-  final bool hasActiveGroups;
-  final bool reportedToday;
-  final bool hasHistory;
-  final bool searching;
-  final String? matchedGroupId;
-  final HomePendingGroup? pendingGroup;
-  final int peopleWaiting;
-  final int needed;
-  final String? queueSkillName;
-  final int streak;
-  final String? primarySkillName;
-  final String? teamDayStatus;
-  final int teamReady;
-  final int teamTotal;
-  final List<String> waitingNames;
-}
-
-class HomeHeroConfig {
-  const HomeHeroConfig({
-    required this.badge,
-    required this.title,
-    required this.body,
-    this.actionLabel,
-    this.progress,
-    this.progressLabel,
-    this.artKind = HabitArtKind.focus,
-  });
-
-  final String badge;
-  final String title;
-  final String body;
-  final String? actionLabel;
-  final double? progress;
-  final String? progressLabel;
-  final HabitArtKind artKind;
-}
-
-class HomeStateSnapshot {
-  const HomeStateSnapshot({
-    required this.phase,
-    required this.hero,
-    this.greetingSubtitle,
-    this.focusGroupId,
-    this.showJourneyStrip = false,
-    this.showActiveChallenges = false,
-    this.showCalendar = false,
-    this.showReportComposer = false,
-    this.showNoGroupEmpty = false,
-    this.showWaitingCompanion = false,
-  });
-
-  final HomePhase phase;
-  final HomeHeroConfig hero;
-  final String? greetingSubtitle;
-  final String? focusGroupId;
-  final bool showJourneyStrip;
-  final bool showActiveChallenges;
-  final bool showCalendar;
-  final bool showReportComposer;
-  final bool showNoGroupEmpty;
-  final bool showWaitingCompanion;
-}
+import '../groups/group_prep_state.dart';
+import 'home_state_types.dart';
+export 'home_state_types.dart';
 
 class HomeStateResolver {
   const HomeStateResolver._();
@@ -118,6 +15,31 @@ class HomeStateResolver {
     final artKind = habitArtKindFor(skillName ?? 'generic');
 
     final pending = input.pendingGroup;
+    final prepGroup = input.pendingGroupModel;
+    if (prepGroup != null &&
+        (prepGroup.status == GroupStatus.introduction ||
+            prepGroup.status == GroupStatus.rulesPending)) {
+      final prep = GroupPrepStateResolver.resolve(
+        group: prepGroup,
+        currentUserId: input.currentUserId,
+      );
+      return HomeStateSnapshot(
+        phase: prepGroup.status == GroupStatus.introduction
+            ? HomePhase.groupIntroduction
+            : HomePhase.groupRulesPending,
+        greetingSubtitle: prep.subtitle,
+        focusGroupId: prepGroup.id,
+        hero: HomeHeroConfig(
+          badge: prepGroup.status == GroupStatus.introduction
+              ? 'Знакомство'
+              : 'Командный договор',
+          title: prep.title,
+          body: prep.progressLabel ?? prep.subtitle,
+          actionLabel: prep.primaryLabel,
+          artKind: HabitArtKind.social,
+        ),
+      );
+    }
     if (pending?.status == GroupStatus.introduction) {
       return HomeStateSnapshot(
         phase: HomePhase.groupIntroduction,

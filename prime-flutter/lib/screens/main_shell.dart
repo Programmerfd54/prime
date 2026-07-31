@@ -5,6 +5,8 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/analytics/analytics.dart';
+import '../core/groups/group_navigation.dart';
+import '../core/notifications/native_push_service.dart';
 import '../core/sync/realtime_client.dart';
 import '../core/sync/waiting_room_poller.dart';
 import '../data/api_client.dart';
@@ -15,6 +17,7 @@ import '../providers/chats_inbox_provider.dart';
 import '../core/pending/pending_search.dart';
 import '../models/skill.dart';
 import '../providers/auth_provider.dart';
+import '../providers/social_restriction_provider.dart';
 import '../ui/components/app_bottom_navigation.dart';
 import '../ui/components/app_navigation_rail.dart';
 import '../ui/components/app_snackbar.dart';
@@ -46,6 +49,7 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   int _index = 2;
   SkillModel? _selectedGroupSkill;
   int _groupsRefreshToken = 0;
+  bool _groupsPreferSearchTab = false;
   String? _lastMatchedSnackGroupId;
   WaitingRoomPoller? _poller;
   RealtimeClient? _realtime;
@@ -101,11 +105,18 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
       _realtime!.onGroupUpdate = _onGroupUpdate;
       _realtime!.addDirectMessageListener(_onDirectMessageInbox);
       _realtime!.start();
+      unawaited(
+        NativePushService.instance.start(
+          context.read<ApiClient>(),
+          onOpen: _onNativePushOpen,
+        ),
+      );
       _consumePendingSearch();
       Future<void>.delayed(const Duration(milliseconds: 500), () {
         if (!mounted) return;
         _poller!.start();
         unawaited(context.read<ChatsInboxProvider>().ensureLoaded());
+        unawaited(context.read<SocialRestrictionProvider>().refresh());
       });
     });
   }
@@ -152,6 +163,41 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     unawaited(inbox.ensureLoaded(force: true));
   }
 
+  void _onNativePushOpen(Map<String, dynamic> payload) {
+    if (!mounted) return;
+    final intent = parsePushPayload(payload);
+    unawaited(context.read<ApiClient>().invalidateGroupsCache());
+    setState(() {
+      _groupsRefreshToken += 1;
+      _groupsPreferSearchTab = intent.preferSearchTab;
+      if (intent.skillId != null && intent.skillId!.isNotEmpty) {
+        _selectedGroupSkill = SkillModel.fromJson({
+          'id': intent.skillId,
+          'name': payload['skill_name'] as String? ?? 'Программа',
+          'description': '',
+          'category': 'focus',
+        });
+      }
+      _setIndex(1);
+    });
+    _refreshWaitingRoom();
+    if (intent.groupId != null && intent.groupId!.isNotEmpty) {
+      unawaited(
+        openGroupDetail(
+          context,
+          groupId: intent.groupId!,
+          host: ({preferSearchTab = false, skillId}) {
+            if (!mounted) return;
+            setState(() {
+              _groupsPreferSearchTab = preferSearchTab;
+              _groupsRefreshToken += 1;
+            });
+          },
+        ),
+      );
+    }
+  }
+
   /// Restores the last selected tab so a browser refresh (web) or app
   /// relaunch lands the user back where they left off, defaulting to
   /// "Главная" (index 2) when nothing was persisted yet.
@@ -186,9 +232,10 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   Future<void> _consumePendingSearch() async {
     final skillId = await PendingSearch.read();
     if (skillId == null || !mounted) return;
+    final api = context.read<ApiClient>();
     await PendingSearch.clear();
     try {
-      final skills = await context.read<ApiClient>().listSkills();
+      final skills = await api.listSkills();
       if (!mounted) return;
       final match = skills.cast<Map<String, dynamic>>().firstWhere(
             (s) => s['id'] == skillId,
@@ -221,6 +268,7 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     _poller?.pause();
     _realtime?.removeDirectMessageListener(_onDirectMessageInbox);
     _realtime?.stop();
+    NativePushService.instance.stop();
     super.dispose();
   }
 
@@ -232,6 +280,11 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
       case AppLifecycleState.resumed:
         poller.resume();
         _realtime?.start();
+        unawaited(_reconcileMembershipIfNeeded());
+        unawaited(context.read<ApiClient>().invalidateGroupsCache());
+        if (mounted) {
+          setState(() => _groupsRefreshToken += 1);
+        }
         unawaited(context.read<ChatsInboxProvider>().ensureLoaded(force: true));
       case AppLifecycleState.inactive:
       case AppLifecycleState.paused:
@@ -240,6 +293,17 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
         poller.pause();
         _realtime?.stop();
     }
+  }
+
+  Future<void> _reconcileMembershipIfNeeded() async {
+    if (!mounted) return;
+    final api = context.read<ApiClient>();
+    try {
+      final overview = await api.groupsOverview(forceRefresh: true);
+      if (overview['membership_consistent'] == true) return;
+      await api.reconcileMembership();
+      if (mounted) setState(() => _groupsRefreshToken += 1);
+    } catch (_) {}
   }
 
   void _onRealtimeMatch(String groupId) {
@@ -289,19 +353,68 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   }
 
   void _openGroupsTab() {
-    setState(() => _setIndex(1));
+    setState(() {
+      _groupsPreferSearchTab = false;
+      _setIndex(1);
+    });
+  }
+
+  void _onNotificationNavigate({
+    String? groupId,
+    String? skillId,
+    bool preferSearchTab = false,
+  }) {
+    setState(() {
+      _groupsPreferSearchTab = preferSearchTab;
+      _groupsRefreshToken += 1;
+      if (skillId != null && skillId.isNotEmpty) {
+        _selectedGroupSkill = SkillModel.fromJson({
+          'id': skillId,
+          'name': 'Программа',
+          'description': '',
+          'category': 'focus',
+        });
+      }
+      _setIndex(groupId != null ? 1 : 2);
+    });
+    _refreshWaitingRoom();
+    if (groupId != null && groupId.isNotEmpty) {
+      unawaited(
+        openGroupDetail(
+          context,
+          groupId: groupId,
+          host: ({preferSearchTab = false, skillId}) {
+            if (!mounted) return;
+            setState(() {
+              _groupsPreferSearchTab = preferSearchTab;
+              _groupsRefreshToken += 1;
+            });
+          },
+        ),
+      );
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _groupsPreferSearchTab) {
+        setState(() => _groupsPreferSearchTab = false);
+      }
+    });
   }
 
   void _openGroupsForSkill(SkillModel _) {
     setState(() {
       _selectedGroupSkill = null;
       _groupsRefreshToken += 1;
+      _groupsPreferSearchTab = true;
       _setIndex(1);
     });
   }
 
   void _selectDestination(int i) {
-    setState(() => _setIndex(i));
+    setState(() {
+      if (i == 1) _groupsPreferSearchTab = false;
+      _setIndex(i);
+      if (i == 3) _groupsRefreshToken += 1;
+    });
     if (i == 3) {
       unawaited(context.read<ChatsInboxProvider>().ensureLoaded());
     }
@@ -320,15 +433,18 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
       GroupsScreen(
         preselectedSkill: _selectedGroupSkill,
         refreshToken: _groupsRefreshToken,
+        preferSearchTab: _groupsPreferSearchTab,
       ),
       DashboardScreen(
         onOpenHabits: () => setState(() => _setIndex(0)),
         onOpenChats: () => _selectDestination(3),
         onOpenGroups: _openGroupsTab,
+        onNotificationNavigate: _onNotificationNavigate,
         refreshToken: _groupsRefreshToken,
       ),
       ChatsScreen(
         openFriendSearch: _openFriendSearch,
+        refreshToken: _groupsRefreshToken,
         onFriendSearchOpened: () {
           if (_openFriendSearch) {
             setState(() => _openFriendSearch = false);

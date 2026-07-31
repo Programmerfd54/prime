@@ -7,6 +7,7 @@ import '../../../design/typography.dart';
 import '../../../design/visuals/charts/charts.dart';
 import '../../../design/visuals/habit_art.dart';
 import '../../../l10n/copy.dart';
+import '../../../core/groups/group_member_today_status.dart';
 import '../../../models/group.dart';
 import '../../kit/components/prime_content_card.dart';
 import '../../kit/tokens/kit_surfaces.dart';
@@ -96,7 +97,8 @@ class AppGroupMatchedBanner extends StatelessWidget {
                     const SizedBox(height: AppSpacing.xxs),
                     Text(
                       'Подтвердите участие и перейдите к правилам',
-                      style: KitTypography.caption.copyWith(color: p.inkSecondary),
+                      style:
+                          KitTypography.caption.copyWith(color: p.inkSecondary),
                     ),
                   ],
                 ),
@@ -128,11 +130,20 @@ class AppGroupDetailHero extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = context.prime;
-    final kind = habitArtKindFor(group.skillName ?? group.name);
+    final kind = habitArtKindFor(
+      '${group.skillId} ${group.skillName ?? group.name}',
+    );
     final accent = habitArtAccent(kind);
     final confirmed =
         group.members.where((m) => m.confirmedParticipation).length;
-    final progress = group.maxMembers == 0 ? 0.0 : confirmed / group.maxMembers;
+    final activeMembers =
+        group.members.where((member) => member.active).toList();
+    final reported =
+        activeMembers.where((member) => member.reportStatus == 'ready').length;
+    final isActive = group.status == GroupStatus.active;
+    final progressTotal = isActive ? activeMembers.length : group.maxMembers;
+    final progressValue = isActive ? reported : confirmed;
+    final progress = progressTotal == 0 ? 0.0 : progressValue / progressTotal;
 
     return PrimeContentCard(
       child: Row(
@@ -181,8 +192,8 @@ class AppGroupDetailHero extends StatelessWidget {
                   children: [
                     PrimeRadialProgress(
                       progress: progress.clamp(0.0, 1.0),
-                      valueLabel: '$confirmed/${group.maxMembers}',
-                      caption: 'подтвердили',
+                      valueLabel: '$progressValue/$progressTotal',
+                      caption: isActive ? 'отчётов сегодня' : 'подтвердили',
                       size: 68,
                       stroke: 7,
                       color: accent,
@@ -190,7 +201,9 @@ class AppGroupDetailHero extends StatelessWidget {
                     const SizedBox(width: AppSpacing.sm),
                     Expanded(
                       child: Text(
-                        '${group.membersCount} участников в команде',
+                        isActive
+                            ? 'День ${group.cycleDay} из 30 · команда видит общий ритм'
+                            : '${group.membersCount} участников в команде',
                         style: AppTypography.bodySecondary.copyWith(
                           color: p.inkSecondary,
                         ),
@@ -293,12 +306,16 @@ class AppGroupMemberRow extends StatelessWidget {
 
   final MemberModel member;
   final VoidCallback? onTap;
+
   /// When set, controls which confirmation flag drives the status icon.
   final GroupStatus? statusPhase;
 
   bool get _isReady {
     if (statusPhase == GroupStatus.rulesPending) {
       return member.acceptedRules;
+    }
+    if (statusPhase == null) {
+      return member.reportStatus == 'ready';
     }
     return member.confirmedParticipation;
   }
@@ -349,10 +366,14 @@ class AppGroupMemberRow extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
-                    if (profile?.nickname.isNotEmpty == true)
+                    if (statusPhase == null ||
+                        profile?.nickname.isNotEmpty == true)
                       Text(
-                        '@${profile!.nickname}',
-                        style: AppTypography.caption.copyWith(color: p.inkMuted),
+                        statusPhase == null
+                            ? _activeStatus(member)
+                            : '@${profile!.nickname}',
+                        style:
+                            AppTypography.caption.copyWith(color: p.inkMuted),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -372,6 +393,9 @@ class AppGroupMemberRow extends StatelessWidget {
       ),
     );
   }
+
+  static String _activeStatus(MemberModel member) =>
+      GroupMemberTodayStatus.resolve(member).label;
 }
 
 /// Intro phase — team matched, confirm participation.
@@ -390,8 +414,7 @@ class AppGroupIntroPanel extends StatelessWidget {
     final p = context.prime;
     final confirmed =
         group.members.where((m) => m.confirmedParticipation).length;
-    final progress =
-        group.maxMembers == 0 ? 0.0 : confirmed / group.maxMembers;
+    final progress = group.maxMembers == 0 ? 0.0 : confirmed / group.maxMembers;
 
     return Container(
       width: double.infinity,
@@ -458,9 +481,8 @@ class AppGroupIntroPanel extends StatelessWidget {
               padding: const EdgeInsets.only(bottom: AppSpacing.sm),
               child: AppGroupIntroParticipantTile(
                 member: member,
-                onTap: member.profile == null
-                    ? null
-                    : () => onOpenProfile(member),
+                onTap:
+                    member.profile == null ? null : () => onOpenProfile(member),
               ),
             ),
           ),
@@ -478,14 +500,14 @@ class _TimezoneContractRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = context.prime;
-    final regions = <String>{
-      if (group.regionName?.isNotEmpty == true) group.regionName!,
-      for (final m in group.members)
-        if (m.profile?.regionName?.isNotEmpty == true) m.profile!.regionName!,
-    };
-    final label = regions.isEmpty
-        ? 'Отчёты отправляются вечером по местному времени каждого участника'
-        : 'Регионы команды: ${regions.join(', ')} · вечерний отчёт по местному времени';
+    final teamDay = group.teamDay;
+    final tz = teamDay?.referenceTimezone;
+    final closesAt = teamDay?.closesAt?.toLocal();
+    final label = tz != null && tz.isNotEmpty
+        ? closesAt != null
+            ? 'Командный день · $tz · закрывается ${_formatCloseTime(closesAt)}'
+            : 'Командный день синхронизирован по $tz'
+        : 'Отчёты отправляются вечером по командному дню группы';
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(AppSpacing.sm),
@@ -512,6 +534,12 @@ class _TimezoneContractRow extends StatelessWidget {
       ),
     );
   }
+
+  static String _formatCloseTime(DateTime closesAt) {
+    final h = closesAt.hour.toString().padLeft(2, '0');
+    final m = closesAt.minute.toString().padLeft(2, '0');
+    return '$h:$m';
+  }
 }
 
 /// Rich participant tile for intro phase.
@@ -529,9 +557,7 @@ class AppGroupIntroParticipantTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = context.prime;
     final profile = member.profile;
-    final name = profile?.name.isNotEmpty == true
-        ? profile!.name
-        : 'Участник';
+    final name = profile?.name.isNotEmpty == true ? profile!.name : 'Участник';
 
     return Material(
       color: Colors.transparent,
@@ -597,7 +623,8 @@ class AppGroupIntroParticipantTile extends StatelessWidget {
                           if (profile?.city != null) profile!.city,
                           if (profile?.age != null) '${profile!.age} лет',
                         ].join(' · '),
-                        style: AppTypography.caption.copyWith(color: p.inkMuted),
+                        style:
+                            AppTypography.caption.copyWith(color: p.inkMuted),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -707,9 +734,17 @@ class AppGroupCycleCompletionPanel extends StatelessWidget {
   const AppGroupCycleCompletionPanel({
     super.key,
     required this.group,
+    this.onContinueTogether,
+    this.onNewSkill,
+    this.onHarder,
+    this.onRecovery,
   });
 
   final GroupModel group;
+  final VoidCallback? onContinueTogether;
+  final VoidCallback? onNewSkill;
+  final VoidCallback? onHarder;
+  final VoidCallback? onRecovery;
 
   int get _cycleDays {
     final start = group.cycleStartAt;
@@ -721,9 +756,8 @@ class AppGroupCycleCompletionPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = context.prime;
-    final bestStreak = group.members
-        .map((m) => m.bestStreak)
-        .fold(0, (a, b) => a > b ? a : b);
+    final bestStreak =
+        group.members.map((m) => m.bestStreak).fold(0, (a, b) => a > b ? a : b);
     return PrimeContentCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -740,6 +774,12 @@ class AppGroupCycleCompletionPanel extends StatelessWidget {
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: AppSpacing.md),
+          Text(
+            'Вы прошли первый цикл вместе. Это результат команды — не только личной силы воли.',
+            style: AppTypography.bodySecondary.copyWith(color: p.inkSecondary),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: AppSpacing.md),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
@@ -751,12 +791,43 @@ class AppGroupCycleCompletionPanel extends StatelessWidget {
                 label: 'Лучшая серия',
                 value: '$bestStreak',
               ),
-              _CompletionStat(
+              const _CompletionStat(
                 label: 'Цикл',
                 value: '30',
               ),
             ],
           ),
+          const SizedBox(height: AppSpacing.md),
+          if (onContinueTogether != null)
+            AppPrimaryButton(
+              label: 'Продолжить с этой командой',
+              icon: Icons.groups_rounded,
+              onPressed: onContinueTogether,
+            ),
+          if (onNewSkill != null) ...[
+            const SizedBox(height: AppSpacing.sm),
+            AppSecondaryButton(
+              label: 'Выбрать новую привычку',
+              icon: Icons.psychology_alt_outlined,
+              onPressed: onNewSkill,
+            ),
+          ],
+          if (onHarder != null) ...[
+            const SizedBox(height: AppSpacing.sm),
+            AppSecondaryButton(
+              label: 'Сделать следующий цикл сложнее',
+              icon: Icons.trending_up_rounded,
+              onPressed: onHarder,
+            ),
+          ],
+          if (onRecovery != null) ...[
+            const SizedBox(height: AppSpacing.sm),
+            AppSecondaryButton(
+              label: 'Взять неделю восстановления',
+              icon: Icons.spa_outlined,
+              onPressed: onRecovery,
+            ),
+          ],
           const SizedBox(height: AppSpacing.md),
           Text(
             AppCopy.cycleContinuationFootnote,
@@ -799,10 +870,14 @@ class AppGroupVotingPanel extends StatelessWidget {
     super.key,
     required this.onContinueTogether,
     required this.onNewSkill,
+    required this.onHarder,
+    required this.onRecovery,
   });
 
   final VoidCallback onContinueTogether;
   final VoidCallback onNewSkill;
+  final VoidCallback onHarder;
+  final VoidCallback onRecovery;
 
   @override
   Widget build(BuildContext context) {
@@ -832,6 +907,16 @@ class AppGroupVotingPanel extends StatelessWidget {
             label: 'Выйти и развивать новую привычку',
             onPressed: onNewSkill,
           ),
+          const SizedBox(height: AppSpacing.xs),
+          AppSecondaryButton(
+            label: 'Повысить сложность',
+            onPressed: onHarder,
+          ),
+          const SizedBox(height: AppSpacing.xs),
+          AppSecondaryButton(
+            label: 'Неделя восстановления',
+            onPressed: onRecovery,
+          ),
         ],
       ),
     );
@@ -858,11 +943,12 @@ class AppGroupActiveCycleHero extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = context.prime;
-    final kind = habitArtKindFor(group.skillName ?? group.name);
+    final kind = habitArtKindFor(
+      '${group.skillId} ${group.skillName ?? group.name}',
+    );
     final accent = habitArtAccent(kind);
     final cycleDay = cycleDayFromStart(group.cycleStartAt);
-    final progress =
-        cycleDay != null ? (cycleDay / 30).clamp(0.0, 1.0) : null;
+    final progress = cycleDay != null ? (cycleDay / 30).clamp(0.0, 1.0) : null;
 
     return PrimeContentCard(
       onTap: onTap,
@@ -1000,9 +1086,7 @@ class AppSearchQueueChip extends StatelessWidget {
               Text(
                 '$filled/$needed',
                 style: AppTypography.caption.copyWith(
-                  color: selected
-                      ? AppColors.primarySoft
-                      : AppColors.textMuted,
+                  color: selected ? AppColors.primarySoft : AppColors.textMuted,
                   fontWeight: FontWeight.w600,
                 ),
               ),
@@ -1048,8 +1132,8 @@ class AppSearchTimeline extends StatelessWidget {
       final end = expansion.add(const Duration(hours: 11));
       final start = expansion.subtract(
         Duration(
-          minutes: (expansion.difference(DateTime.now()).inMinutes)
-              .clamp(1, 720),
+          minutes:
+              (expansion.difference(DateTime.now()).inMinutes).clamp(1, 720),
         ),
       );
       if (start.isBefore(end)) return (start, end);
@@ -1121,8 +1205,7 @@ class AppSearchTimeline extends StatelessWidget {
                           height: 4,
                           decoration: BoxDecoration(
                             color: AppColors.elevatedSurface,
-                            borderRadius:
-                                BorderRadius.circular(AppRadius.pill),
+                            borderRadius: BorderRadius.circular(AppRadius.pill),
                           ),
                         ),
                       ),
@@ -1134,8 +1217,7 @@ class AppSearchTimeline extends StatelessWidget {
                           height: 4,
                           decoration: BoxDecoration(
                             color: AppColors.primary.withValues(alpha: 0.75),
-                            borderRadius:
-                                BorderRadius.circular(AppRadius.pill),
+                            borderRadius: BorderRadius.circular(AppRadius.pill),
                           ),
                         ),
                       ),
@@ -1288,7 +1370,7 @@ class AppGroupActiveSearchesBanner extends StatelessWidget {
         children: [
           Row(
             children: [
-              HabitArtObject(kind: HabitArtKind.social, size: 48),
+              const HabitArtObject(kind: HabitArtKind.social, size: 48),
               const SizedBox(width: AppSpacing.sm),
               Expanded(
                 child: Text(
@@ -1359,9 +1441,7 @@ class AppGroupListRow extends StatelessWidget {
                 ? AppColors.selectedSurface.withValues(alpha: 0.75)
                 : AppColors.surfaceSoft.withValues(alpha: 0.55),
             border: Border.all(
-              color: active
-                  ? accent.withValues(alpha: 0.45)
-                  : AppColors.border,
+              color: active ? accent.withValues(alpha: 0.45) : AppColors.border,
             ),
           ),
           child: Padding(

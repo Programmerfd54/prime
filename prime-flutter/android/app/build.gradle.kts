@@ -7,6 +7,11 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+val fcmEnabled = file("google-services.json").exists()
+if (fcmEnabled) {
+    apply(plugin = "com.google.gms.google-services")
+}
+
 val keystoreProperties = Properties()
 val keystorePropertiesFile = rootProject.file("key.properties")
 if (keystorePropertiesFile.exists()) {
@@ -23,14 +28,24 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    buildFeatures {
+        buildConfig = true
+    }
+
     defaultConfig {
-        applicationId = "com.prime.prime"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
+        // Must match package_name in android/app/google-services.json (Firebase Android app).
+        applicationId = "inpr1me.ru"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        buildConfigField("boolean", "FCM_ENABLED", fcmEnabled.toString())
+    }
+
+    sourceSets {
+        getByName("main") {
+            java.srcDir(if (fcmEnabled) "src/fcm/kotlin" else "src/nofcm/kotlin")
+        }
     }
 
     signingConfigs {
@@ -55,6 +70,14 @@ android {
 kotlin {
     compilerOptions {
         jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+    }
+}
+
+dependencies {
+    if (fcmEnabled) {
+        implementation(platform("com.google.firebase:firebase-bom:34.17.0"))
+        implementation("com.google.firebase:firebase-messaging")
+        implementation("androidx.core:core-ktx:1.15.0")
     }
 }
 

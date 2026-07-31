@@ -9,6 +9,7 @@ import '../data/api_client.dart';
 import '../ui/kit/presentation/gate_chats_presentation.dart';
 import '../ui/kit/presentation/profile_surfaces.dart';
 import '../design/routes.dart';
+import '../design/theme/prime_theme_context.dart';
 import '../design/tokens.dart';
 import '../design/visuals/ambient_and_progress.dart';
 import '../l10n/copy.dart';
@@ -40,12 +41,14 @@ class ChatsScreen extends StatefulWidget {
     this.openFriendSearch = false,
     this.onFriendSearchOpened,
     this.onOpenGroups,
+    this.refreshToken = 0,
   });
 
   final VoidCallback? onFindFriend;
   final bool openFriendSearch;
   final VoidCallback? onFriendSearchOpened;
   final VoidCallback? onOpenGroups;
+  final int refreshToken;
 
   @override
   State<ChatsScreen> createState() => _ChatsScreenState();
@@ -129,6 +132,32 @@ class _ChatsScreenState extends State<ChatsScreen> {
         if (mounted) _openFriendSearchSheet();
       });
     }
+    if (widget.refreshToken != oldWidget.refreshToken) {
+      unawaited(_load(force: true));
+    }
+  }
+
+  static bool _groupHasTeamChat(GroupModel group) {
+    return switch (group.status) {
+      GroupStatus.introduction ||
+      GroupStatus.rulesPending ||
+      GroupStatus.active ||
+      GroupStatus.rotating ||
+      GroupStatus.voting =>
+        true,
+      _ => false,
+    };
+  }
+
+  static int _teamChatSortRank(GroupStatus status) {
+    return switch (status) {
+      GroupStatus.active => 0,
+      GroupStatus.rulesPending => 1,
+      GroupStatus.introduction => 2,
+      GroupStatus.rotating => 3,
+      GroupStatus.voting => 4,
+      _ => 5,
+    };
   }
 
   Future<void> _load({bool force = false}) async {
@@ -138,26 +167,27 @@ class _ChatsScreenState extends State<ChatsScreen> {
     try {
       final api = context.read<ApiClient>();
       final results = await Future.wait<Object>([
-        api.listGroups(),
+        api.groupsOverview(forceRefresh: force),
         api.listFriends().catchError((_) => <dynamic>[]),
       ]);
-      final groupRows = results[0] as List<dynamic>;
+      final overview = results[0] as Map<String, dynamic>;
+      final groupRows = overview['groups'] as List<dynamic>? ?? const [];
       final friendRows = results[1] as List<dynamic>;
       if (!mounted) return;
+      final teamGroups = groupRows
+          .map((item) => GroupModel.fromJson(item as Map<String, dynamic>))
+          .where(_groupHasTeamChat)
+          .toList()
+        ..sort(
+          (a, b) => _teamChatSortRank(a.status)
+              .compareTo(_teamChatSortRank(b.status)),
+        );
       setState(() {
         _friends = friendRows
             .whereType<Map>()
             .map((row) => UserPublic.fromJson(Map<String, dynamic>.from(row)))
             .toList();
-        _teamGroups = groupRows
-            .map((item) => GroupModel.fromJson(item as Map<String, dynamic>))
-            .where(
-              (g) =>
-                  g.status == GroupStatus.active &&
-                  g.matrixRoomId != null &&
-                  g.matrixRoomId!.isNotEmpty,
-            )
-            .toList();
+        _teamGroups = teamGroups;
         final chats = inbox.chats;
         if (_selectedFriend != null &&
             !chats.any((c) => c.friend.id == _selectedFriend!.id)) {
@@ -175,6 +205,19 @@ class _ChatsScreenState extends State<ChatsScreen> {
         });
       }
     }
+  }
+
+  String _teamChatSubtitle(GroupModel group) {
+    if (group.status == GroupStatus.active) {
+      return _teamDaySubtitle(group);
+    }
+    return switch (group.status) {
+      GroupStatus.introduction => 'Знакомство · подтвердите участие',
+      GroupStatus.rulesPending => 'Командный договор · примите правила',
+      GroupStatus.rotating => 'Добор участников · чат команды открыт',
+      GroupStatus.voting => 'Голосование · обсудите следующий шаг',
+      _ => 'Командный чат',
+    };
   }
 
   String _teamDaySubtitle(GroupModel group) {
@@ -268,6 +311,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
         ),
       ),
     );
+    if (mounted) unawaited(_load(force: true));
   }
 
   Widget _teamSegment({required bool split}) {
@@ -283,6 +327,7 @@ class _ChatsScreenState extends State<ChatsScreen> {
       );
     }
 
+    final p = context.prime;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -290,19 +335,23 @@ class _ChatsScreenState extends State<ChatsScreen> {
           padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
           child: Text(
             'Команда',
-            style: KitTypography.sectionTitle.copyWith(color: AppColors.textPrimary),
+            style: KitTypography.sectionTitle.copyWith(color: p.ink),
           ),
         ),
         for (final group in _teamGroups)
           _chatListRow(
             title: group.skillName ?? group.name,
-            subtitle: _teamDaySubtitle(group),
+            subtitle: _teamChatSubtitle(group),
             initial: (group.skillName ?? group.name).isNotEmpty
                 ? (group.skillName ?? group.name)[0].toUpperCase()
                 : '?',
             time: group.cycleStartAt != null
                 ? 'День ${AppGroupActiveCycleHero.cycleDayFromStart(group.cycleStartAt)}'
-                : null,
+                : switch (group.status) {
+                    GroupStatus.introduction => '6/6',
+                    GroupStatus.rulesPending => 'Договор',
+                    _ => null,
+                  },
             onTap: () => _openGroupChat(group),
           ),
       ],

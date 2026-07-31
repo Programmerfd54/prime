@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
@@ -7,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
+import '../core/chat/chat_system_grouping.dart';
 import '../core/errors/failure_mapper.dart';
 import '../core/media/media_validation.dart';
 import '../core/sync/chat_sync_controller.dart';
@@ -16,11 +18,11 @@ import '../design/routes.dart';
 import '../design/theme/prime_theme_context.dart';
 import '../design/tokens.dart';
 import '../design/typography.dart';
-import '../design/visuals/ambient_and_progress.dart';
 import '../design/visuals/charts/charts.dart';
 import '../l10n/copy.dart';
 import '../models/group.dart';
 import '../providers/auth_provider.dart';
+import '../providers/social_restriction_provider.dart';
 import '../ui/components/app_chat_date_separator.dart';
 import '../ui/components/app_compact_button.dart';
 import '../ui/components/app_header.dart';
@@ -32,7 +34,7 @@ import '../ui/components/editorial/app_group_editorial.dart';
 import '../ui/states/app_connection_banner.dart';
 import '../ui/states/app_error_state.dart';
 import '../ui/states/app_loading_state.dart';
-import '../ui/kit/presentation/profile_surfaces.dart';
+import '../widgets/social_restriction_chat_panel.dart';
 import 'group_detail_screen.dart';
 
 class GroupChatScreen extends StatefulWidget {
@@ -74,6 +76,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     _syncCtrl = ChatSyncController(context.read<ApiClient>())
       ..addListener(_onSyncChanged)
       ..start(kind: ChatChannelKind.group, channelId: widget.groupId);
+    unawaited(context.read<SocialRestrictionProvider>().refresh());
     _loadGroup();
   }
 
@@ -154,6 +157,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
   }
 
   Future<void> _send() async {
+    if (context.read<SocialRestrictionProvider>().isWriteBlocked) return;
     if (_pending != null) {
       await _sendPendingAttachment();
       return;
@@ -175,6 +179,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
       _scrollToBottom();
     } catch (e) {
       if (!mounted) return;
+      context.read<SocialRestrictionProvider>().applyFromError(e);
       if (_controller.text.trim().isEmpty) _controller.text = draft;
       showAppSnackBar(context, FailureMapper.from(e).message);
     } finally {
@@ -479,20 +484,24 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
   }
 
   List<_GroupListItem> _buildItems(List<Map<String, dynamic>> messages) {
-    final items = <_GroupListItem>[];
-    DateTime? lastDay;
-    for (final message in messages) {
-      final date = _messageDate(message);
-      if (date != null) {
-        final day = DateTime(date.year, date.month, date.day);
-        if (lastDay == null || day != lastDay) {
-          items.add(_GroupListItem.separator(_dateSeparatorLabel(date)));
-          lastDay = day;
-        }
+    final segments = buildChatDisplaySegments(
+      messages,
+      includeDateSeparators: true,
+      messageDate: _messageDate,
+      dateSeparatorLabel: _dateSeparatorLabel,
+    );
+    return segments.map((segment) {
+      if (segment.isSeparator) {
+        return _GroupListItem.separator(segment.separatorLabel!);
       }
-      items.add(_GroupListItem.message(message));
-    }
-    return items;
+      if (segment.isSystemGroup) {
+        return _GroupListItem.systemGroup(
+          segment.messages!,
+          segment.kind ?? ChatSystemGroupKind.generic,
+        );
+      }
+      return _GroupListItem.message(segment.message!);
+    }).toList();
   }
 
   bool _isOwnMessage(
@@ -684,6 +693,8 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
     final messages = sync?.messages ?? const <Map<String, dynamic>>[];
     final items = _buildItems(messages);
 
+    final readOnly = context.watch<SocialRestrictionProvider>().isWriteBlocked;
+
     return AppChatShell(
       appBar: AppChatAppBar(
         title: widget.groupName,
@@ -706,7 +717,14 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
           ),
         ],
       ),
-      banner: AppConnectionBanner(visible: offline, onRetry: _sync),
+      banner: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          AppConnectionBanner(visible: offline, onRetry: _sync),
+          const SocialRestrictionChatPanel(),
+        ],
+      ),
       header: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -753,6 +771,12 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
                         if (item.isSeparator) {
                           return AppChatDateSeparator(label: item.separatorLabel!);
                         }
+                        if (item.isSystemGroup) {
+                          return PrimeSystemMessageCard.grouped(
+                            groupKind: item.systemGroupKind!,
+                            messages: item.systemGroupMessages!,
+                          );
+                        }
                         final msg = item.message!;
                         final failed = msg['_status'] == 'failed';
                         final clientId = msg['client_id']?.toString();
@@ -787,6 +811,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
         uploading: _uploading || _sending,
         uploadProgress: _uploadProgress,
         onCancelUpload: _cancelUpload,
+        readOnly: readOnly,
       ),
       showScrollToBottom: _showScrollToBottom && messages.isNotEmpty,
       onScrollToBottom: _scrollToBottom,
@@ -796,15 +821,34 @@ class _GroupChatScreenState extends State<GroupChatScreen> with WidgetsBindingOb
 }
 
 class _GroupListItem {
-  const _GroupListItem._({this.message, this.separatorLabel});
+  const _GroupListItem._({
+    this.message,
+    this.separatorLabel,
+    this.systemGroupMessages,
+    this.systemGroupKind,
+  });
 
   factory _GroupListItem.message(Map<String, dynamic> message) =>
       _GroupListItem._(message: message);
 
-  factory _GroupListItem.separator(String label) => _GroupListItem._(separatorLabel: label);
+  factory _GroupListItem.separator(String label) =>
+      _GroupListItem._(separatorLabel: label);
+
+  factory _GroupListItem.systemGroup(
+    List<Map<String, dynamic>> messages,
+    ChatSystemGroupKind kind,
+  ) =>
+      _GroupListItem._(
+        systemGroupMessages: messages,
+        systemGroupKind: kind,
+      );
 
   final Map<String, dynamic>? message;
   final String? separatorLabel;
+  final List<Map<String, dynamic>>? systemGroupMessages;
+  final ChatSystemGroupKind? systemGroupKind;
 
   bool get isSeparator => separatorLabel != null;
+  bool get isSystemGroup =>
+      systemGroupMessages != null && systemGroupMessages!.length > 1;
 }

@@ -5,21 +5,28 @@ import json
 import secrets
 
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_session
 from ..deps import get_current_user
 from ..media import read_upload
+from ..audit import record_audit
 from ..models import (
+    DeviceToken,
     Group,
     GroupDay,
     GroupMember,
     HabitReport,
+    MediaUpload,
+    ModerationAppeal,
+    ModerationDecision,
     PrimeEvent,
     User,
+    UserRestriction,
     UserSkillFavorite,
+    utcnow,
 )
 from ..metrics_engine import (
     report_gap_days,
@@ -30,9 +37,13 @@ from ..skills_catalog import skill_name
 from ..team_day import team_completed_dates, team_pending_dates
 from ..nicknames import validate_nickname
 from ..regions import is_valid_region
+from ..moderation import ModerationError, check_social_write_allowed, moderate_text_before_publish
+from ..moderation.pipeline import moderation_http_error
 from ..schemas import (
     DEFAULT_PRIVACY_SETTINGS,
     ChangePasswordRequest,
+    EmailPreferencesResponse,
+    UpdateEmailPreferencesRequest,
     UpdateOnboardingPreferencesRequest,
     UpdateUserRequest,
     UserResponse,
@@ -210,11 +221,23 @@ async def update_me(
     session: AsyncSession = Depends(get_session),
 ) -> User:
     data = payload.model_dump(exclude_unset=True)
+    # Avatars are set only via POST /me/avatar — reject client-supplied URLs.
+    data.pop("photo_url", None)
     if "region_code" in data and not is_valid_region(data["region_code"]):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="   ",
         )
+    if "timezone" in data:
+        from ..timezone_utils import normalize_timezone
+
+        normalized = normalize_timezone(data.get("timezone"))
+        if data["timezone"] is not None and normalized is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Недопустимый часовой пояс",
+            )
+        data["timezone"] = normalized
     if "nickname" in data:
         nickname = validate_nickname(data["nickname"])
         existing = await session.scalar(select(User).where(User.nickname == nickname, User.id != user.id))
@@ -233,6 +256,24 @@ async def update_me(
                 if key in incoming:
                     merged[key] = bool(incoming[key])
         data["privacy_settings"] = json.dumps(merged)
+
+    social_fields = ("name", "nickname", "about")
+    if any(field in data for field in social_fields):
+        try:
+            await check_social_write_allowed(session, user)
+        except ModerationError as exc:
+            raise moderation_http_error(exc) from exc
+        for field in social_fields:
+            if field in data and isinstance(data[field], str) and data[field].strip():
+                try:
+                    await moderate_text_before_publish(
+                        session,
+                        user=user,
+                        text=data[field],
+                        content_type=f"profile_{field}",
+                    )
+                except ModerationError as exc:
+                    raise moderation_http_error(exc) from exc
 
     for key, value in data.items():
         setattr(user, key, value)
@@ -349,6 +390,30 @@ async def update_preferences(
     await session.commit()
     await session.refresh(user)
     return merged
+
+
+@router.get("/me/email-preferences", response_model=EmailPreferencesResponse)
+async def get_email_preferences(
+    user: User = Depends(get_current_user),
+) -> EmailPreferencesResponse:
+    return EmailPreferencesResponse(marketing_emails_opt_in=user.marketing_emails_opt_in)
+
+
+@router.patch("/me/email-preferences", response_model=EmailPreferencesResponse)
+async def update_email_preferences(
+    payload: UpdateEmailPreferencesRequest,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> EmailPreferencesResponse:
+    user.marketing_emails_opt_in = payload.marketing_emails_opt_in
+    if payload.marketing_emails_opt_in:
+        user.marketing_emails_unsubscribed_at = None
+    else:
+        user.marketing_emails_unsubscribed_at = utcnow()
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
+    return EmailPreferencesResponse(marketing_emails_opt_in=user.marketing_emails_opt_in)
 
 
 @router.get("/me/favorites")
@@ -495,6 +560,12 @@ async def delete_me(
     if user.photo_url and "/avatar/" in user.photo_url:
         old_avatar = AVATAR_DIR / Path(user.photo_url.rsplit("/", 1)[-1]).name
     await revoke_user_sessions(session, user.id)
+    await session.execute(delete(DeviceToken).where(DeviceToken.user_id == user.id))
+    await session.execute(delete(MediaUpload).where(MediaUpload.owner_user_id == user.id))
+    await session.execute(delete(UserRestriction).where(UserRestriction.user_id == user.id))
+    await session.execute(delete(ModerationAppeal).where(ModerationAppeal.user_id == user.id))
+    await session.execute(delete(ModerationDecision).where(ModerationDecision.actor_user_id == user.id))
+    await record_audit(session, action="account.deleted", user_id=user.id)
     ts = int(datetime.now(timezone.utc).timestamp())
     user.email = f"deleted+{ts}+{user.id}@deleted.local"
     user.nickname = f"deleted_{user.id[:8]}"

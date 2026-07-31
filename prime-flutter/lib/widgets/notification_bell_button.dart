@@ -4,25 +4,29 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../core/errors/app_failure.dart';
+import '../core/errors/failure_mapper.dart';
+import '../core/groups/group_navigation.dart';
 import '../core/sync/realtime_client.dart';
 import '../data/api_client.dart';
 import '../design/motion.dart';
 import '../design/tokens.dart';
 import '../models/notification.dart';
 import '../providers/chats_inbox_provider.dart';
-import '../ui/components/app_dialog.dart';
 import 'notification_center_sheet.dart';
 
 class NotificationBellButton extends StatefulWidget {
   final bool hasUnread;
   final double iconSize;
   final VoidCallback? onOpenGroups;
+  final NotificationNavigateCallback? onNavigate;
 
   const NotificationBellButton({
     super.key,
     this.hasUnread = false,
     this.iconSize = 34,
     this.onOpenGroups,
+    this.onNavigate,
   });
 
   @override
@@ -97,24 +101,87 @@ class _NotificationBellButtonState extends State<NotificationBellButton>
     super.dispose();
   }
 
+  Future<String?> _resolveFriendRequestId(PrimeNotification notification) async {
+    final direct = notification.requestId;
+    if (direct != null && direct.isNotEmpty) return direct;
+
+    final api = context.read<ApiClient>();
+    final raw = await api.listFriendRequests();
+    if (!mounted) return null;
+    final requests = raw['requests'] as List<dynamic>? ?? const [];
+    final requesterId = notification.requesterId;
+    final nickname = notification.requesterNickname ?? notification.title;
+
+    for (final item in requests) {
+      if (item is! Map) continue;
+      final id = item['id']?.toString();
+      if (id == null || id.isEmpty) continue;
+      if (requesterId != null &&
+          item['requester'] is Map &&
+          item['requester']['id']?.toString() == requesterId) {
+        return id;
+      }
+      if (item['requester'] is Map &&
+          item['requester']['nickname']?.toString() == nickname) {
+        return id;
+      }
+    }
+    return null;
+  }
+
   Future<void> _respondFriendRequest(
     PrimeNotification notification,
     bool accept,
   ) async {
-    final requestId = notification.requestId;
-    if (requestId == null || requestId.isEmpty) return;
     final api = context.read<ApiClient>();
     final realtime = context.read<RealtimeClient>();
-    await api.respondFriendRequest(requestId, accept);
+    final requestId = await _resolveFriendRequestId(notification);
+    if (!mounted) return;
+    if (requestId == null || requestId.isEmpty) {
+      throw const NotFoundFailure(
+        message: 'Заявка уже обработана или недоступна',
+      );
+    }
+    try {
+      await api.respondFriendRequest(requestId, accept);
+    } catch (e) {
+      final failure = FailureMapper.from(e);
+      if (failure is NotFoundFailure) {
+        unawaited(realtime.refresh());
+        throw const NotFoundFailure(
+          message: 'Заявка уже обработана или недоступна',
+        );
+      }
+      rethrow;
+    }
+    if (!mounted) return;
     if (accept) {
       final inbox = context.read<ChatsInboxProvider>();
       inbox.invalidate();
       unawaited(inbox.ensureLoaded(force: true));
     }
     unawaited(realtime.markRead(notification.id));
-    if (mounted && accept && Navigator.of(context).canPop()) {
+    if (accept && Navigator.of(context).canPop()) {
       Navigator.of(context).pop();
     }
+  }
+
+  void _navigateFromNotification(PrimeNotification notification) {
+    final payload = {
+      ...notification.payload,
+      'group_id': notification.groupId ?? notification.payload['group_id'],
+      'type': notification.rawType,
+    };
+    final intent = parsePushPayload(payload);
+    if (widget.onNavigate != null) {
+      widget.onNavigate!(
+        groupId: intent.groupId,
+        skillId: intent.skillId,
+        preferSearchTab: intent.preferSearchTab,
+      );
+      return;
+    }
+    widget.onOpenGroups?.call();
   }
 
   Future<void> _onNotificationTap(PrimeNotification notification) async {
@@ -124,17 +191,12 @@ class _NotificationBellButtonState extends State<NotificationBellButton>
     }
     if (!mounted) return;
 
-    if (notification.type == PrimeNotificationType.match) {
-      Navigator.of(context).pop();
-      widget.onOpenGroups?.call();
-      return;
-    }
-
     if (notification.type == PrimeNotificationType.friendRequest) {
       return;
     }
 
     Navigator.of(context).pop();
+    _navigateFromNotification(notification);
   }
 
   Future<void> _showNotifications() async {

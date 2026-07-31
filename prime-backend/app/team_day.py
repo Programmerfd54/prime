@@ -14,6 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import Group, GroupDay, GroupMember, HabitReport, PrimeEvent, User, utcnow
+from .timezone_utils import group_today, team_day_metadata
 
 TEAM_DAY_PRIME_REASON = "Полный день команды"
 TEAM_DAY_COMPLETE_MSG = "🎉 День закрыт всей командой — +1 Прайм каждому"
@@ -90,7 +91,7 @@ async def recompute_group_day(
     Returns (group_day, just_completed) where just_completed is True only on
     the transition pending/missed → complete.
     """
-    day = day or date.today()
+    day = day or group_today(group)
     member_ids = await _active_member_ids(session, group.id)
     ready_ids = await _ready_user_ids(session, group.id, day)
     ready_among_active = ready_ids & set(member_ids)
@@ -103,12 +104,13 @@ async def recompute_group_day(
     group_day.ready_count = ready_count
 
     just_completed = False
+    current_team_day = group_today(group)
     if member_count > 0 and ready_count >= member_count:
         if previous_status != "complete":
             just_completed = True
             group_day.completed_at = utcnow()
         group_day.status = "complete"
-    elif day < date.today():
+    elif day < current_team_day:
         group_day.status = "missed"
         group_day.completed_at = None
     else:
@@ -122,16 +124,16 @@ async def recompute_group_day(
 
 async def finalize_stale_group_days(
     session: AsyncSession,
-    group_id: str,
+    group: Group,
     *,
     today: date | None = None,
 ) -> int:
     """Lazy rollover: mark past pending GroupDays as missed."""
-    today = today or date.today()
+    today = today or group_today(group)
     rows = (
         await session.execute(
             select(GroupDay).where(
-                GroupDay.group_id == group_id,
+                GroupDay.group_id == group.id,
                 GroupDay.status == "pending",
                 GroupDay.day_date < today,
             )
@@ -150,8 +152,8 @@ async def team_day_payload(
     day: date | None = None,
     members: list[dict] | None = None,
 ) -> dict:
-    day = day or date.today()
-    await finalize_stale_group_days(session, group.id, today=day)
+    day = day or group_today(group)
+    await finalize_stale_group_days(session, group, today=day)
     group_day, _ = await recompute_group_day(session, group, day)
 
     if members is None:
@@ -193,6 +195,7 @@ async def team_day_payload(
         "closed_at": group_day.completed_at.isoformat()
         if group_day.completed_at
         else None,
+        **team_day_metadata(group, day),
     }
 
 

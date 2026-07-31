@@ -142,4 +142,57 @@ void main() {
     expect(failure.message, AppCopy.notFound);
     expect(failure.message.toLowerCase(), isNot(contains('not found')));
   });
+
+  test('maps SOCIAL_WRITE_RESTRICTED moderation detail', () {
+    final failure = FailureMapper.from(
+      dio(
+        status: 403,
+        data: {
+          'detail': {
+            'code': 'SOCIAL_WRITE_RESTRICTED',
+            'message': 'Публикация временно ограничена.',
+            'expires_at': '2030-01-01T12:00:00.000Z',
+          },
+        },
+      ),
+    );
+    expect(failure, isA<SocialWriteRestrictedFailure>());
+    expect(failure.message, 'Публикация временно ограничена.');
+    expect(
+      (failure as SocialWriteRestrictedFailure).expiresAt.toUtc(),
+      DateTime.utc(2030, 1, 1, 12),
+    );
+  });
+
+  test('maps PROFANITY_REJECTED moderation detail', () {
+    final failure = FailureMapper.from(
+      dio(
+        status: 403,
+        data: {
+          'detail': {
+            'code': 'PROFANITY_REJECTED',
+            'message': 'Сообщение не опубликовано.',
+          },
+        },
+      ),
+    );
+    expect(failure, isA<ProfanityRejectedFailure>());
+    expect(failure.message, 'Сообщение не опубликовано.');
+  });
+
+  test('maps PROFANITY_QUARANTINED moderation detail', () {
+    final failure = FailureMapper.from(
+      dio(
+        status: 403,
+        data: {
+          'detail': {
+            'code': 'PROFANITY_QUARANTINED',
+            'message': 'Текст отправлен на проверку.',
+          },
+        },
+      ),
+    );
+    expect(failure, isA<ProfanityQuarantinedFailure>());
+    expect(failure.message, 'Текст отправлен на проверку.');
+  });
 }

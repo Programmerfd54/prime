@@ -11,9 +11,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
+from ..audit import record_audit
 from ..db import get_session
 from ..deps import get_current_auth_session
-from ..mailer import build_password_reset_email, build_verification_email, send_email
+from ..email_templates import build_password_reset_email, build_verification_email
+from ..mailer import public_list_unsubscribe_url, send_email
 from ..models import AuthSession, EmailVerificationCode, PasswordResetToken, User, utcnow
 from ..nicknames import validate_nickname
 from ..rate_limit import enforce as enforce_rate_limit
@@ -124,8 +126,7 @@ def _hash_verification_code(user_id: str, code: str) -> str:
 
 
 def _expose_verification_code() -> bool:
-    settings = get_settings()
-    return settings.email_verification_expose_code or settings.enable_dev_tools
+    return get_settings().email_verification_expose_code
 
 
 async def _seconds_until_resend_allowed(session: AsyncSession, user_id: str) -> int:
@@ -171,10 +172,12 @@ async def _issue_verification_code(
     )
     await session.commit()
 
-    subject, text_body, html_body = build_verification_email(
+    subject, text_body, html_body, unsubscribe_url = build_verification_email(
         name=user.name,
         code=code,
         ttl_minutes=settings.email_verification_code_ttl_minutes,
+        user_id=user.id,
+        email=user.email,
     )
     background_tasks.add_task(
         send_email,
@@ -182,6 +185,7 @@ async def _issue_verification_code(
         subject=subject,
         text_body=text_body,
         html_body=html_body,
+        list_unsubscribe_url=public_list_unsubscribe_url(unsubscribe_url),
     )
     logger.info(
         "email_verification_code_issued",
@@ -210,6 +214,7 @@ def _dev_passwordless_allowed(email: str) -> bool:
 @router.get("/nickname-available/{nickname}", response_model=NicknameAvailabilityResponse)
 async def nickname_available(
     nickname: str,
+    email: str | None = None,
     session: AsyncSession = Depends(get_session),
     request: Request = None,
 ) -> NicknameAvailabilityResponse:
@@ -232,7 +237,17 @@ async def nickname_available(
             detail=str(exc),
         ) from exc
     owner = await session.scalar(select(User).where(User.nickname == normalized))
-    return NicknameAvailabilityResponse(available=owner is None)
+    if owner is None:
+        return NicknameAvailabilityResponse(available=True)
+    if email is not None:
+        normalized_email = email.strip().lower()
+        if (
+            normalized_email
+            and owner.email == normalized_email
+            and owner.email_verified_at is None
+        ):
+            return NicknameAvailabilityResponse(available=True)
+    return NicknameAvailabilityResponse(available=False)
 
 
 @router.get("/email-available", response_model=EmailAvailabilityResponse)
@@ -261,9 +276,8 @@ async def email_available(
     user = await session.scalar(select(User).where(User.email == normalized))
     if user is None:
         return EmailAvailabilityResponse(available=True, pending_verification=False)
-    if user.email_verified_at is not None:
-        return EmailAvailabilityResponse(available=False, pending_verification=False)
-    return EmailAvailabilityResponse(available=False, pending_verification=True)
+    # Anti-enumeration: do not distinguish verified vs pending on a public endpoint.
+    return EmailAvailabilityResponse(available=False, pending_verification=False)
 
 
 @router.post(
@@ -508,12 +522,31 @@ async def login(
         and payload.developer_mode
         and _dev_passwordless_allowed(payload.email)
     )
-    if user is None or not (password_ok or dev_passwordless_ok):
+    if user is None:
         await _record_auth_failure(session, request, payload.email)
+        await record_audit(
+            session,
+            action="auth.login.failed",
+            metadata={"email_hash": _fingerprint(payload.email), "reason": "unknown_email"},
+        )
+        await session.commit()
+        logger.info("login_failed_unknown_email", extra={"email_hash": _fingerprint(payload.email)})
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Аккаунт с этой почтой не найден. Нужно зарегистрироваться.",
+        )
+    if not (password_ok or dev_passwordless_ok):
+        await _record_auth_failure(session, request, payload.email)
+        await record_audit(
+            session,
+            action="auth.login.failed",
+            metadata={"email_hash": _fingerprint(payload.email)},
+        )
+        await session.commit()
         logger.info("login_failed", extra={"email_hash": _fingerprint(payload.email)})
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Неверная почта или пароль",
+            detail="Неверный пароль",
         )
 
     if user.email_verified_at is None:
@@ -533,7 +566,10 @@ async def login(
             "developer_mode": dev_passwordless_ok,
         },
     )
-    return await _issue_tokens(session, user, request)
+    tokens = await _issue_tokens(session, user, request)
+    await record_audit(session, action="auth.login.success", user_id=user.id)
+    await session.commit()
+    return tokens
 
 
 def _hash_reset_token(token: str) -> str:
@@ -584,10 +620,12 @@ async def forgot_password(
         )
     )
     await session.commit()
-    subject, text_body, html_body = build_password_reset_email(
+    subject, text_body, html_body, unsubscribe_url = build_password_reset_email(
         name=user.name,
         token=raw_token,
         ttl_minutes=settings.password_reset_token_ttl_minutes,
+        user_id=user.id,
+        email=user.email,
     )
     if background_tasks is not None:
         background_tasks.add_task(
@@ -596,6 +634,7 @@ async def forgot_password(
             subject=subject,
             text_body=text_body,
             html_body=html_body,
+            list_unsubscribe_url=public_list_unsubscribe_url(unsubscribe_url),
         )
     logger.info(
         "password_reset_token_created",

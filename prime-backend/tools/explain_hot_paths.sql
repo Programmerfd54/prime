@@ -35,3 +35,25 @@ FROM direct_messages
 WHERE conversation_key = :conversation_key
 ORDER BY created_at DESC, id DESC
 LIMIT 51;
+
+-- Batched /groups/overview member state.
+EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
+SELECT gm.group_id, gm.user_id, gm.role, gm.active, gm.created_at, u.nickname
+FROM group_members gm
+JOIN users u ON u.id = gm.user_id
+WHERE gm.group_id = ANY(:group_ids)
+  AND gm.active IS TRUE
+ORDER BY gm.group_id, gm.created_at ASC;
+
+EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
+SELECT group_id, user_id, status, support_given
+FROM habit_reports
+WHERE group_id = ANY(:group_ids)
+  AND report_date = CURRENT_DATE;
+
+EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
+SELECT group_id, user_id, kind, created_at
+FROM group_check_ins
+WHERE group_id = ANY(:group_ids)
+  AND check_in_date = CURRENT_DATE
+ORDER BY group_id, created_at DESC;

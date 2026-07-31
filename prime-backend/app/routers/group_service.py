@@ -1,6 +1,7 @@
 """Shared helpers extracted from routers/misc.py."""
 from datetime import date, datetime, timedelta, timezone
 import asyncio
+import json
 import mimetypes
 from pathlib import Path
 from uuid import uuid4
@@ -11,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
 from ..direct_message_events import DirectChatReadPush, direct_message_hub
-from ..notifications import create_notification
+from ..notifications import create_notification, notify_group_members as push_group_members
 from ..matrix import (
     create_room,
     ensure_matrix_user,
@@ -25,11 +26,15 @@ from ..models import (
     DirectConversationRead,
     DirectMessage,
     DirectMessageReaction,
+    EarlyStartConfirmation,
+    EarlyStartRequest,
     FriendRequest,
     Friendship,
     Group,
     GroupCheckIn,
+    GroupDay,
     GroupMember,
+    GroupMembershipEvent,
     HabitReport,
     PrimeEvent,
     ReportAttachment,
@@ -41,6 +46,7 @@ from ..group_progress import compute_team_milestones, compute_team_recap, first_
 from ..metrics_engine import streak_snapshot, sync_group_member_streak
 from ..nicknames import normalize_nickname
 from ..regions import is_valid_region, region_name
+from ..timezone_utils import group_today, team_day_metadata
 from ..schemas import parse_privacy_settings
 from ..skills_catalog import SKILLS, skill_name
 
@@ -53,6 +59,7 @@ PARTIAL_GROUP_START_DELAY = timedelta(
 )
 MIN_GROUP_MEMBERS = get_settings().group_min_members
 EARLY_START_MIN_MEMBERS = 3
+EARLY_START_REQUEST_TTL = timedelta(minutes=15)
 MAX_MEDIA_BYTES = 100 * 1024 * 1024
 MAX_DIRECT_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_DIRECT_FILE_BYTES = 25 * 1024 * 1024
@@ -164,7 +171,7 @@ async def _notify_waiting_room_pair_join(
     for user_id in member_ids:
         direct_message_hub.publish_waiting_room_update(
             user_id,
-            WaitingRoomUpdatePush(skill_id=skill_id),
+            WaitingRoomUpdatePush(skill_id=skill_id, reason="pair_joined"),
         )
 
 
@@ -173,6 +180,7 @@ async def _notify_waiting_room_skill_pool(
     *,
     skill_id: str,
     exclude_user_id: str | None = None,
+    reason: str = "updated",
 ) -> None:
     """Push waiting_room_update SSE to everyone in the same skill queue."""
     from ..direct_message_events import WaitingRoomUpdatePush, direct_message_hub
@@ -180,15 +188,19 @@ async def _notify_waiting_room_skill_pool(
     filters = [WaitingRoomEntry.skill_id == skill_id]
     if exclude_user_id:
         filters.append(WaitingRoomEntry.user_id != exclude_user_id)
-    member_ids = (
+    rows = (
         await session.execute(
-            select(WaitingRoomEntry.user_id).where(*filters)
+            select(WaitingRoomEntry.user_id, WaitingRoomEntry.revision).where(*filters)
         )
-    ).scalars().all()
-    for user_id in member_ids:
+    ).all()
+    for user_id, revision in rows:
         direct_message_hub.publish_waiting_room_update(
             user_id,
-            WaitingRoomUpdatePush(skill_id=skill_id),
+            WaitingRoomUpdatePush(
+                skill_id=skill_id,
+                revision=int(revision or 0),
+                reason=reason,
+            ),
         )
 
 
@@ -197,6 +209,7 @@ async def _notify_waiting_room_users(
     *,
     skill_id: str,
     user_ids: list[str],
+    reason: str = "updated",
 ) -> None:
     """Push waiting_room_update SSE to explicit users (e.g. after group formation)."""
     from ..direct_message_events import WaitingRoomUpdatePush, direct_message_hub
@@ -208,7 +221,7 @@ async def _notify_waiting_room_users(
         seen.add(user_id)
         direct_message_hub.publish_waiting_room_update(
             user_id,
-            WaitingRoomUpdatePush(skill_id=skill_id),
+            WaitingRoomUpdatePush(skill_id=skill_id, reason=reason),
         )
 
 
@@ -217,6 +230,9 @@ async def _notify_group_members(
     *,
     group_id: str,
     exclude_user_id: str | None = None,
+    include_user_ids: list[str] | None = None,
+    reason: str = "updated",
+    milestone_id: str | None = None,
 ) -> None:
     """Push group_update SSE so intro confirmation counts stay in sync."""
     from ..direct_message_events import GroupUpdatePush, direct_message_hub
@@ -227,14 +243,93 @@ async def _notify_group_members(
     ]
     if exclude_user_id:
         filters.append(GroupMember.user_id != exclude_user_id)
-    member_ids = (
+    member_ids = list((
         await session.execute(select(GroupMember.user_id).where(*filters))
-    ).scalars().all()
+    ).scalars().all())
+    for user_id in include_user_ids or []:
+        if user_id and user_id not in member_ids:
+            member_ids.append(user_id)
+    group = await session.get(Group, group_id)
+    revision = int(group.revision or 0) if group is not None else 0
+    phase = group.status if group is not None else ""
     for user_id in member_ids:
         direct_message_hub.publish_group_update(
             user_id,
-            GroupUpdatePush(group_id=group_id),
+            GroupUpdatePush(
+                group_id=group_id,
+                revision=revision,
+                phase=phase,
+                reason=reason,
+                milestone_id=milestone_id,
+            ),
         )
+
+
+async def notify_unlocked_milestones(
+    session: AsyncSession,
+    group: Group,
+    active_member_ids: list[str],
+    *,
+    milestone_ids: set[str],
+) -> None:
+    if not milestone_ids:
+        return
+    milestones = await compute_team_milestones(session, group.id, active_member_ids)
+    for item in milestones.get("items", []):
+        milestone_id = str(item.get("id") or "")
+        if milestone_id not in milestone_ids or not item.get("unlocked"):
+            continue
+        await _notify_group_members(
+            session,
+            group_id=group.id,
+            reason="milestone_unlocked",
+            milestone_id=milestone_id,
+        )
+        title = str(item.get("title") or "Командная веха")
+        await push_group_members(
+            session,
+            group_id=group.id,
+            type="milestone",
+            title=group.skill_name or group.name,
+            body=f"Открыта веха: {title}",
+            payload={"milestone_id": milestone_id},
+        )
+
+
+def _bump_group_revision(group: Group) -> int:
+    group.revision = int(group.revision or 0) + 1
+    return group.revision
+
+
+def _bump_waiting_revision(entry: WaitingRoomEntry) -> int:
+    entry.revision = int(entry.revision or 0) + 1
+    return entry.revision
+
+
+def _record_membership_event(
+    session: AsyncSession,
+    *,
+    group_id: str,
+    user_id: str,
+    event_type: str,
+    reason: str,
+    actor_user_id: str | None = None,
+    from_active: bool | None = None,
+    to_active: bool | None = None,
+    metadata: dict | None = None,
+) -> None:
+    session.add(
+        GroupMembershipEvent(
+            group_id=group_id,
+            user_id=user_id,
+            actor_user_id=actor_user_id,
+            event_type=event_type,
+            reason=reason,
+            from_active=from_active,
+            to_active=to_active,
+            metadata_json=json.dumps(metadata or {}, ensure_ascii=False),
+        )
+    )
 
 
 async def _pending_match_group_for_user(
@@ -414,20 +509,55 @@ async def _early_start_payload_fields(
     *,
     people_waiting: int,
 ) -> dict:
-    my_confirmed = entry.pair_start_confirmed_at is not None
-    confirmed_count = int(
-        await session.scalar(
-            select(func.count())
-            .select_from(WaitingRoomEntry)
-            .where(
-                WaitingRoomEntry.skill_id == entry.skill_id,
-                WaitingRoomEntry.pair_start_confirmed_at.is_not(None),
-            )
+    now = utcnow()
+    request = await session.scalar(
+        select(EarlyStartRequest)
+        .where(
+            EarlyStartRequest.skill_id == entry.skill_id,
+            EarlyStartRequest.status == "pending",
+            EarlyStartRequest.expires_at > now,
         )
-        or 0
+        .order_by(EarlyStartRequest.created_at.desc())
+        .limit(1)
     )
+    proposer_name = None
+    if request is not None:
+        my_confirmed = await session.scalar(
+            select(EarlyStartConfirmation.id).where(
+                EarlyStartConfirmation.request_id == request.id,
+                EarlyStartConfirmation.user_id == entry.user_id,
+            )
+        ) is not None
+        confirmed_count = int(
+            await session.scalar(
+                select(func.count())
+                .select_from(EarlyStartConfirmation)
+                .where(EarlyStartConfirmation.request_id == request.id)
+            )
+            or 0
+        )
+        proposer = await session.get(User, request.initiator_user_id)
+        if proposer is not None:
+            proposer_name = proposer.name or proposer.nickname
+    else:
+        # Compatibility with pre-migration queue rows.
+        my_confirmed = entry.pair_start_confirmed_at is not None
+        confirmed_count = int(
+            await session.scalar(
+                select(func.count())
+                .select_from(WaitingRoomEntry)
+                .where(
+                    WaitingRoomEntry.skill_id == entry.skill_id,
+                    WaitingRoomEntry.pair_start_confirmed_at.is_not(None),
+                )
+            )
+            or 0
+        )
     can_start = people_waiting >= EARLY_START_MIN_MEMBERS
     waiting_others = my_confirmed and confirmed_count < EARLY_START_MIN_MEMBERS
+    expires_at = request.expires_at if request is not None else None
+    if expires_at is not None and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
     return {
         "can_start_early": can_start,
         "can_start_as_pair": can_start,
@@ -440,6 +570,18 @@ async def _early_start_payload_fields(
         "pair_start_partner_confirmed": confirmed_count >= EARLY_START_MIN_MEMBERS,
         "pair_start_waiting_partner": waiting_others,
         "pair_partner_in_queue": people_waiting >= EARLY_START_MIN_MEMBERS,
+        "early_start_request_id": request.id if request is not None else None,
+        "early_start_proposer_name": proposer_name,
+        "early_start_expires_at": expires_at.isoformat() if expires_at is not None else None,
+        "early_start_seconds_remaining": max(
+            0,
+            int((expires_at - now).total_seconds()),
+        ) if expires_at is not None else 0,
+        "early_start_deep_link": (
+            f"prime://waiting-room?skill_id={entry.skill_id}&early_start={request.id}"
+            if request is not None
+            else None
+        ),
     }
 
 
@@ -447,9 +589,17 @@ async def _create_group_from_early_start_entries(
     session: AsyncSession,
     entries: list[WaitingRoomEntry],
 ) -> Group:
+    def confirmation_time(item: WaitingRoomEntry) -> datetime:
+        value = item.pair_start_confirmed_at or item.created_at
+        return (
+            value.replace(tzinfo=timezone.utc)
+            if value.tzinfo is None
+            else value.astimezone(timezone.utc)
+        )
+
     ordered = sorted(
         entries,
-        key=lambda item: item.pair_start_confirmed_at or item.created_at,
+        key=confirmation_time,
     )[:EARLY_START_MIN_MEMBERS]
     if len(ordered) < EARLY_START_MIN_MEMBERS:
         raise HTTPException(
@@ -681,24 +831,220 @@ def _team_pulse(
     }
 
 
-async def _group_payload(session: AsyncSession, group: Group) -> dict:
+async def _personal_result_payload(
+    session: AsyncSession,
+    *,
+    group: Group,
+    user_id: str,
+) -> dict:
+    today = group_today(group)
+    period_start = today - timedelta(days=6)
+    ready_days = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(HabitReport)
+            .where(
+                HabitReport.group_id == group.id,
+                HabitReport.user_id == user_id,
+                HabitReport.status == "ready",
+                HabitReport.report_date >= period_start,
+            )
+        )
+        or 0
+    )
+    cycle_ready_days = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(HabitReport)
+            .where(
+                HabitReport.group_id == group.id,
+                HabitReport.user_id == user_id,
+                HabitReport.status == "ready",
+            )
+        )
+        or 0
+    )
+    team_days = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(GroupDay)
+            .where(
+                GroupDay.group_id == group.id,
+                GroupDay.status == "complete",
+                GroupDay.day_date >= period_start,
+            )
+        )
+        or 0
+    )
+    support_given = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(ChatMessage)
+            .where(
+                ChatMessage.group_id == group.id,
+                ChatMessage.sender_user_id == user_id,
+                ChatMessage.msgtype == "prime.support",
+                ChatMessage.created_at >= datetime.combine(
+                    period_start,
+                    datetime.min.time(),
+                ).replace(tzinfo=timezone.utc),
+            )
+        )
+        or 0
+    )
+    support_received = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(ChatMessage)
+            .where(
+                ChatMessage.group_id == group.id,
+                ChatMessage.msgtype == "prime.support",
+                ChatMessage.filename == user_id,
+                ChatMessage.created_at >= datetime.combine(
+                    period_start,
+                    datetime.min.time(),
+                ).replace(tzinfo=timezone.utc),
+            )
+        )
+        or 0
+    )
+    hard_dates = set(
+        (
+            await session.execute(
+                select(GroupCheckIn.check_in_date).where(
+                    GroupCheckIn.group_id == group.id,
+                    GroupCheckIn.user_id == user_id,
+                    GroupCheckIn.kind.in_(("support", "hard")),
+                    GroupCheckIn.check_in_date >= period_start,
+                )
+            )
+        ).scalars().all()
+    )
+    recovered_days = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(HabitReport)
+            .where(
+                HabitReport.group_id == group.id,
+                HabitReport.user_id == user_id,
+                HabitReport.status == "ready",
+                HabitReport.report_date.in_(hard_dates),
+            )
+        )
+        or 0
+    ) if hard_dates else 0
+    if ready_days >= 6:
+        message = (
+            f"Вы выполнили {ready_days} из 7 дней. "
+            f"Команда поддержала вас {support_received} раз."
+        )
+    elif recovered_days > 0:
+        message = (
+            f"В {recovered_days} сложных "
+            f"{'день' if recovered_days == 1 else 'дня'} вы всё равно продолжили."
+        )
+    else:
+        message = (
+            f"За неделю вы закрыли {ready_days} из 7 действий, "
+            f"а команда — {team_days} общих дней."
+        )
+    return {
+        "period_start": period_start.isoformat(),
+        "period_end": today.isoformat(),
+        "ready_days": ready_days,
+        "cycle_ready_days": cycle_ready_days,
+        "team_days": team_days,
+        "support_given": support_given,
+        "support_received": support_received,
+        "recovered_hard_days": recovered_days,
+        "message": message,
+    }
+
+
+async def maybe_transition_cycle_to_voting(
+    session: AsyncSession,
+    group: Group,
+) -> bool:
+    """Move active groups into voting after day 30 team day logic."""
+    if group.status != "active":
+        return False
+    from ..group_progress import first_ready_report_date
+
+    cycle_start = await first_ready_report_date(session, group.id)
+    if cycle_start is None:
+        return False
+    today = group_today(group)
+    cycle_day = max(1, (today - cycle_start).days + 1)
+    if cycle_day < 30:
+        return False
+    group.status = "voting"
+    _bump_group_revision(group)
+    session.add(group)
+    await session.flush()
+    return True
+
+
+async def _group_payload(
+    session: AsyncSession,
+    group: Group,
+    *,
+    current_user_id: str | None = None,
+) -> dict:
     rows = await session.execute(
         select(GroupMember, User)
         .join(User, User.id == GroupMember.user_id)
-        .where(GroupMember.group_id == group.id)
+        .where(
+            GroupMember.group_id == group.id,
+            GroupMember.active.is_(True),
+        )
         .order_by(GroupMember.created_at.asc())
     )
+    today = group_today(group)
     today_reports = (
         await session.execute(
             select(HabitReport).where(
                 HabitReport.group_id == group.id,
-                HabitReport.report_date == date.today(),
+                HabitReport.report_date == today,
             )
         )
     ).scalars().all()
     report_status_by_user = {report.user_id: report.status for report in today_reports}
+    check_in_rows = (
+        await session.execute(
+            select(GroupCheckIn, User)
+            .join(User, User.id == GroupCheckIn.user_id)
+            .where(
+                GroupCheckIn.group_id == group.id,
+                GroupCheckIn.check_in_date == today,
+            )
+            .order_by(GroupCheckIn.created_at.desc())
+        )
+    ).all()
+    check_in_by_user = {item.user_id: item for item, _ in check_in_rows}
+    report_message_by_user: dict[str, str] = {}
+    if group.status == "active":
+        chat_rows = (
+            await session.execute(
+                select(ChatMessage)
+                .where(
+                    ChatMessage.group_id == group.id,
+                    func.date(ChatMessage.created_at) >= today,
+                )
+                .order_by(ChatMessage.created_at.desc())
+            )
+        ).scalars().all()
+        for message in chat_rows:
+            if not _looks_like_report_chat_message(message):
+                continue
+            if message.sender_user_id not in report_message_by_user:
+                report_message_by_user[message.sender_user_id] = message.id
     members = []
+    seen_user_ids: set[str] = set()
     for member, member_user in rows.all():
+        if member.user_id in seen_user_ids:
+            continue
+        seen_user_ids.add(member.user_id)
+        check_in = check_in_by_user.get(member.user_id)
         members.append(
             {
                 "id": member.id,
@@ -710,21 +1056,13 @@ async def _group_payload(session: AsyncSession, group: Group) -> dict:
                 "streak": member.streak,
                 "best_streak": member.best_streak,
                 "report_status": report_status_by_user.get(member.user_id, "not_ready"),
+                "check_in_kind": check_in.kind if check_in is not None else None,
+                "check_in_at": check_in.created_at.isoformat() if check_in is not None else None,
+                "last_report_message_id": report_message_by_user.get(member.user_id),
                 "profile": _public_user_payload(member_user),
             }
         )
 
-    check_in_rows = (
-        await session.execute(
-            select(GroupCheckIn, User)
-            .join(User, User.id == GroupCheckIn.user_id)
-            .where(
-                GroupCheckIn.group_id == group.id,
-                GroupCheckIn.check_in_date == date.today(),
-            )
-            .order_by(GroupCheckIn.created_at.desc())
-        )
-    ).all()
     check_ins = [
         {
             "user_id": check_in.user_id,
@@ -748,8 +1086,28 @@ async def _group_payload(session: AsyncSession, group: Group) -> dict:
 
     from ..team_day import finalize_stale_group_days, team_day_payload
 
-    await finalize_stale_group_days(session, group.id)
+    await finalize_stale_group_days(session, group)
     team_day = await team_day_payload(session, group, members=members)
+
+    my_today_report = None
+    personal_result = None
+    if current_user_id:
+        report = next(
+            (item for item in today_reports if item.user_id == current_user_id),
+            None,
+        )
+        if report is not None:
+            my_today_report = await _report_payload(session, report)
+        if group.status in {"active", "rotating", "voting", "completed"}:
+            personal_result = await _personal_result_payload(
+                session,
+                group=group,
+                user_id=current_user_id,
+            )
+
+    cycle_day = 1
+    if cycle_start is not None:
+        cycle_day = max(1, min(30, (today - cycle_start).days + 1))
 
     return {
         "id": group.id,
@@ -757,22 +1115,270 @@ async def _group_payload(session: AsyncSession, group: Group) -> dict:
         "skill_id": group.skill_id,
         "skill_name": skill_name(group.skill_id),
         "status": group.status,
+        "revision": int(group.revision or 0),
         "is_private": True,
         "invite_code": None,
         "city": None,
         "region_code": group.region_code,
         "region_name": region_name(group.region_code),
+        "reference_timezone": group.reference_timezone,
         "is_cross_region": group.is_cross_region,
         "max_members": group.max_members,
         "matrix_room_id": group.matrix_room_id,
         "cycle_start_at": cycle_start.isoformat() if cycle_start else None,
+        "cycle_day": cycle_day,
         "members_count": len(members),
         "members": members,
         "team_pulse": _team_pulse(members, check_ins, team_day=team_day),
         "team_day": team_day,
         "team_recap": team_recap,
         "team_milestones": team_milestones,
+        "my_today_report": my_today_report,
+        "personal_result": personal_result,
     }
+
+
+async def _group_overview_payloads(
+    session: AsyncSession,
+    groups: list[Group],
+    *,
+    current_user_id: str,
+) -> list[dict]:
+    """Build lightweight group cards in a fixed number of SQL queries.
+
+    Detail-only recap, milestones, attachments and personal-impact data stay
+    on ``GET /groups/{id}``. Home/Groups need only today's member state.
+    """
+    if not groups:
+        return []
+    group_ids = [group.id for group in groups]
+    today_by_group = {group.id: group_today(group) for group in groups}
+    unique_dates = set(today_by_group.values())
+
+    member_rows = (
+        await session.execute(
+            select(GroupMember, User)
+            .join(User, User.id == GroupMember.user_id)
+            .where(
+                GroupMember.group_id.in_(group_ids),
+                GroupMember.active.is_(True),
+            )
+            .order_by(GroupMember.group_id, GroupMember.created_at.asc())
+        )
+    ).all()
+    reports = (
+        await session.execute(
+            select(HabitReport).where(
+                HabitReport.group_id.in_(group_ids),
+                HabitReport.report_date.in_(unique_dates),
+            )
+        )
+    ).scalars().all()
+    check_in_rows = (
+        await session.execute(
+            select(GroupCheckIn, User)
+            .join(User, User.id == GroupCheckIn.user_id)
+            .where(
+                GroupCheckIn.group_id.in_(group_ids),
+                GroupCheckIn.check_in_date.in_(unique_dates),
+            )
+            .order_by(GroupCheckIn.group_id, GroupCheckIn.created_at.desc())
+        )
+    ).all()
+    group_days = (
+        await session.execute(
+            select(GroupDay).where(
+                GroupDay.group_id.in_(group_ids),
+                GroupDay.day_date.in_(unique_dates),
+            )
+        )
+    ).scalars().all()
+    cycle_starts = (
+        await session.execute(
+            select(
+                HabitReport.group_id,
+                func.min(HabitReport.report_date),
+            )
+            .where(
+                HabitReport.group_id.in_(group_ids),
+                HabitReport.status == "ready",
+            )
+            .group_by(HabitReport.group_id)
+        )
+    ).all()
+
+    reports_by_group_user = {}
+    for report in reports:
+        group_today_date = today_by_group.get(report.group_id)
+        if group_today_date is None or report.report_date != group_today_date:
+            continue
+        reports_by_group_user[(report.group_id, report.user_id)] = report
+    check_ins_by_group_user = {}
+    for check_in, check_in_user in check_in_rows:
+        group_today_date = today_by_group.get(check_in.group_id)
+        if group_today_date is None or check_in.check_in_date != group_today_date:
+            continue
+        check_ins_by_group_user[(check_in.group_id, check_in.user_id)] = (
+            check_in,
+            check_in_user,
+        )
+    day_by_group = {
+        item.group_id: item
+        for item in group_days
+        if item.day_date == today_by_group.get(item.group_id)
+    }
+    cycle_start_by_group = {
+        group_id: cycle_start
+        for group_id, cycle_start in cycle_starts
+    }
+    members_by_group: dict[str, list[dict]] = {
+        group_id: [] for group_id in group_ids
+    }
+    seen_by_group: dict[str, set[str]] = {
+        group_id: set() for group_id in group_ids
+    }
+    for member, member_user in member_rows:
+        if member.user_id in seen_by_group[member.group_id]:
+            continue
+        seen_by_group[member.group_id].add(member.user_id)
+        report = reports_by_group_user.get((member.group_id, member.user_id))
+        check_in_row = check_ins_by_group_user.get(
+            (member.group_id, member.user_id)
+        )
+        check_in = check_in_row[0] if check_in_row is not None else None
+        members_by_group[member.group_id].append(
+            {
+                "id": member.id,
+                "user_id": member.user_id,
+                "role": member.role,
+                "confirmed_participation": member.confirmed_participation,
+                "accepted_rules": member.accepted_rules,
+                "active": True,
+                "streak": member.streak,
+                "best_streak": member.best_streak,
+                "report_status": report.status if report is not None else "not_ready",
+                "check_in_kind": check_in.kind if check_in is not None else None,
+                "check_in_at": (
+                    check_in.created_at.isoformat()
+                    if check_in is not None
+                    else None
+                ),
+                "profile": _public_user_payload(member_user),
+            }
+        )
+
+    payloads: list[dict] = []
+    for group in groups:
+        members = members_by_group[group.id]
+        today = today_by_group[group.id]
+        ready_count = sum(
+            1 for member in members if member["report_status"] == "ready"
+        )
+        member_count = len(members)
+        stored_day = day_by_group.get(group.id)
+        day_complete = member_count > 0 and ready_count >= member_count
+        day_status = (
+            "complete"
+            if day_complete
+            else stored_day.status
+            if stored_day is not None
+            else "pending"
+        )
+        waiting_for = [
+            {
+                "user_id": member["user_id"],
+                "name": member["profile"]["name"]
+                or member["profile"]["nickname"]
+                or "Участник",
+                "nickname": member["profile"]["nickname"] or "",
+            }
+            for member in members
+            if member["report_status"] != "ready"
+        ]
+        team_day = {
+            "date": today.isoformat(),
+            "status": day_status,
+            "ready_count": ready_count,
+            "member_count": member_count,
+            "waiting_for": waiting_for,
+            "closed_at": (
+                stored_day.completed_at.isoformat()
+                if stored_day is not None
+                and stored_day.completed_at is not None
+                else None
+            ),
+            **team_day_metadata(group, today),
+        }
+        check_ins = [
+            {
+                "user_id": check_in.user_id,
+                "name": check_in_user.name,
+                "nickname": check_in_user.nickname,
+                "kind": check_in.kind,
+                "created_at": check_in.created_at.isoformat(),
+            }
+            for check_in, check_in_user in check_in_rows
+            if check_in.group_id == group.id
+        ]
+        my_report = reports_by_group_user.get((group.id, current_user_id))
+        cycle_start = cycle_start_by_group.get(group.id)
+        cycle_day = (
+            max(1, min(30, (today - cycle_start).days + 1))
+            if cycle_start is not None
+            else 1
+        )
+        payloads.append(
+            {
+                "id": group.id,
+                "name": group.name,
+                "skill_id": group.skill_id,
+                "skill_name": skill_name(group.skill_id),
+                "status": group.status,
+                "revision": int(group.revision or 0),
+                "is_private": True,
+                "invite_code": None,
+                "city": None,
+                "region_code": group.region_code,
+                "region_name": region_name(group.region_code),
+                "reference_timezone": group.reference_timezone,
+                "is_cross_region": group.is_cross_region,
+                "max_members": group.max_members,
+                "matrix_room_id": group.matrix_room_id,
+                "cycle_start_at": (
+                    cycle_start.isoformat()
+                    if cycle_start is not None
+                    else None
+                ),
+                "cycle_day": cycle_day,
+                "members_count": member_count,
+                "members": members,
+                "team_pulse": _team_pulse(
+                    members,
+                    check_ins,
+                    team_day=team_day,
+                ),
+                "team_day": team_day,
+                "team_recap": None,
+                "team_milestones": None,
+                "my_today_report": (
+                    {
+                        "date": my_report.report_date.isoformat(),
+                        "status": my_report.status,
+                        "completed": my_report.status == "ready",
+                        "reported": my_report.status == "ready",
+                        "prime_awarded": day_status == "complete",
+                        "support_given": my_report.support_given,
+                        "content_text": "",
+                        "attachments": [],
+                        "reports": [],
+                    }
+                    if my_report is not None
+                    else None
+                ),
+                "personal_result": None,
+            }
+        )
+    return payloads
 
 
 async def _current_group_for_user(session: AsyncSession, user_id: str) -> Group | None:
@@ -849,12 +1455,21 @@ async def _create_group(
     await session.flush()
 
     for index, member_user in enumerate(users):
-        session.add(
-            GroupMember(
-                group_id=group.id,
-                user_id=member_user.id,
-                role="creator" if index == 0 else "member",
-            )
+        membership = GroupMember(
+            group_id=group.id,
+            user_id=member_user.id,
+            role="creator" if index == 0 else "member",
+        )
+        session.add(membership)
+        _record_membership_event(
+            session,
+            group_id=group.id,
+            user_id=member_user.id,
+            actor_user_id=users[0].id if users else None,
+            event_type="joined",
+            reason="matched",
+            from_active=False,
+            to_active=True,
         )
 
     await session.flush()
@@ -887,25 +1502,52 @@ async def _activate_if_ready(session: AsyncSession, group: Group) -> None:
     if len(members) < group.max_members:
         return
 
+    users = (
+        await session.execute(
+            select(User)
+            .join(GroupMember, GroupMember.user_id == User.id)
+            .where(GroupMember.group_id == group.id, GroupMember.active.is_(True))
+            .order_by(
+                case((GroupMember.role == "creator", 0), else_=1),
+                GroupMember.created_at.asc(),
+            )
+        )
+    ).scalars().all()
+
     if group.status == "introduction" and all(m.confirmed_participation for m in members):
         group.status = "rules_pending"
+        _bump_group_revision(group)
         session.add(group)
         await session.flush()
+        if users:
+            await _create_group_chat_message(
+                session,
+                group,
+                users[0],
+                body="✅ Все подтвердили участие. Командный договор открыт.",
+                msgtype="prime.system",
+            )
+        for member_user in users:
+            await create_notification(
+                session,
+                member_user.id,
+                "group_phase",
+                "Все подтвердили участие",
+                "Примите командный договор — и первый день начнётся",
+                {
+                    "group_id": group.id,
+                    "phase": "rules_pending",
+                    "deep_link": f"prime://groups/{group.id}",
+                },
+            )
 
     if group.status == "rules_pending" and all(m.accepted_rules for m in members):
-        users = (
-            await session.execute(
-                select(User)
-                .join(GroupMember, GroupMember.user_id == User.id)
-                .where(GroupMember.group_id == group.id, GroupMember.active.is_(True))
-                .order_by(
-                    case((GroupMember.role == "creator", 0), else_=1),
-                    GroupMember.created_at.asc(),
-                )
-            )
-        ).scalars().all()
+        from ..timezone_utils import ensure_group_reference_timezone
+
         await _ensure_group_matrix_room(session, group)
+        await ensure_group_reference_timezone(session, group)
         group.status = "active"
+        _bump_group_revision(group)
         session.add(group)
         await session.flush()
         for member_user in users:
@@ -914,6 +1556,27 @@ async def _activate_if_ready(session: AsyncSession, group: Group) -> None:
                 group,
                 member_user,
                 body=_group_intro_body(member_user),
+            )
+        if users:
+            await _create_group_chat_message(
+                session,
+                group,
+                users[0],
+                body="🚀 Договор принят всеми. Первый день цикла начался.",
+                msgtype="prime.system",
+            )
+        for member_user in users:
+            await create_notification(
+                session,
+                member_user.id,
+                "group_phase",
+                "Первый день открыт",
+                "Командный договор принят всеми — время первого действия",
+                {
+                    "group_id": group.id,
+                    "phase": "active",
+                    "deep_link": f"prime://groups/{group.id}",
+                },
             )
 
 
@@ -949,11 +1612,16 @@ async def _fill_group_vacancies(session: AsyncSession, group: Group) -> None:
             await session.delete(candidate)
             continue
         session.add(
-            GroupMember(
-                group_id=group.id,
-                user_id=candidate.user_id,
-                role="member",
-            )
+            GroupMember(group_id=group.id, user_id=candidate.user_id, role="member")
+        )
+        _record_membership_event(
+            session,
+            group_id=group.id,
+            user_id=candidate.user_id,
+            event_type="joined",
+            reason="vacancy_fill",
+            from_active=False,
+            to_active=True,
         )
         await session.delete(candidate)
         excluded_user_ids.add(candidate.user_id)
@@ -961,7 +1629,8 @@ async def _fill_group_vacancies(session: AsyncSession, group: Group) -> None:
 
     if active_count < group.max_members:
         group.status = "introduction"
-        session.add(group)
+    _bump_group_revision(group)
+    session.add(group)
     await session.flush()
 
 async def _maybe_match_waiting_room(
@@ -1159,6 +1828,12 @@ async def waiting_room_payload(
             "early_start_waiting_others": False,
             "early_start_pending": False,
             "early_start_needed_confirmations": EARLY_START_MIN_MEMBERS,
+            "early_start_request_id": None,
+            "early_start_proposer_name": None,
+            "early_start_expires_at": None,
+            "early_start_seconds_remaining": 0,
+            "early_start_deep_link": None,
+            "revision": 0,
             "pair_partner_in_queue": False,
             "pair_start_confirmed": False,
             "pair_start_partner_confirmed": False,
@@ -1199,6 +1874,7 @@ async def waiting_room_payload(
         "allow_other_regions": entry.allow_other_regions,
         "expansion_available_at": expansion_available_at.isoformat(),
         "partial_start_available_at": partial_start_available_at.isoformat(),
+        "revision": int(entry.revision or 0),
         **live_fields,
         **early_fields,
     }
@@ -1373,7 +2049,7 @@ async def _maybe_award_chat_support(
         return False
     if message.sender_user_id == supporter.id:
         return False
-    today = date.today()
+    today = group_today(group)
     already = await session.scalar(
         select(PrimeEvent.id).where(
             PrimeEvent.user_id == supporter.id,

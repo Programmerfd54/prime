@@ -13,6 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import get_settings
 from ..db import get_session
 from ..deps import get_current_user
+from ..moderation import ModerationError, moderate_text_before_publish
+from ..moderation.pipeline import moderation_http_error
 from ..matrix import (
     create_room,
     download_media,
@@ -194,6 +196,23 @@ async def local_media(
     )
 
 
+@router.get("/media/assets/{asset_id}/status")
+async def media_asset_status(
+    asset_id: str,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    asset = await session.scalar(select(LocalMediaAsset).where(LocalMediaAsset.id == asset_id))
+    if asset is None or asset.owner_user_id != user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Медиафайл не найден")
+    return {
+        "id": asset.id,
+        "status": asset.processing_status,
+        "published_media_url": asset.published_media_url,
+        "last_scan_error": asset.last_scan_error,
+    }
+
+
 @router.get("/skills")
 async def skills(
     category: str | None = None,
@@ -236,6 +255,15 @@ async def create_custom_skill(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Создание своих привычек откроется после 10 Праймов",
         )
+    try:
+        await moderate_text_before_publish(
+            session,
+            user=user,
+            text=f"{payload.name} {payload.description}",
+            content_type="custom_skill",
+        )
+    except ModerationError as exc:
+        raise moderation_http_error(exc) from exc
     skill = CustomSkill(
         user_id=user.id,
         name=payload.name.strip(),

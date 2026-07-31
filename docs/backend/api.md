@@ -17,10 +17,11 @@ Critical route groups:
 |---|---|
 | Auth | `/auth/register`, `/verify-email`, `/login`, `/refresh`, `/logout`, password reset |
 | Profile | `/users/me`, stats, preferences, favorites, avatar, shields |
-| Matching | `/groups/waiting-room*`, `/groups`, `/groups/current`, group detail |
-| Group activity | check-in, intro/rules, reports/calendar, group chat |
+| Matching | `/groups/waiting-room*`, `/groups/overview`, `/groups/current`, group detail |
+| Group activity | check-in, one-tap support, intro/rules, reports/calendar, group chat |
 | Social | friend requests, `/friends`, `/direct-chats*` |
-| Notifications | `/notifications`, read endpoints, `/devices/register`, `/events/stream` |
+| Notifications | `/notifications`, read endpoints, `/devices/register`, `/devices/unregister`, `/events/stream` |
+| Operations | moderator-only `/ops/metrics` |
 
 Media routes require a valid access token: `/media/{server}/{id}` is allowed
 only for a matching group/direct/report record, `/local-media/{id}` applies the
@@ -42,3 +43,33 @@ Compatibility changes in this handoff:
   original message.
 - Errors preserve `detail` and add `error.code`, `error.message`,
   `error.requestId`, `error.retryable` and `error.fields`.
+
+Team-cycle additions:
+
+- `GET /groups/overview` is the Home/Groups read model. It returns `groups`,
+  `active`, `preparing`, `waiting_room`, `membership_consistent` and a maximum
+  `revision`. Group cards are assembled in five SQL queries regardless of the
+  number of groups; recap, milestones and personal impact remain on group
+  detail.
+- `GET /groups/{id}` adds `revision`, `cycle_day`, current member
+  `report_status`/`check_in_kind`, `my_today_report`, `team_day`,
+  `team_pulse`, weekly recap/milestones and `personal_result`.
+- `POST /groups/{id}/support` accepts `target_user_id` and optional `message`.
+  It creates one durable `prime.support` chat event, an addressed notification
+  and a revisioned realtime event. Sender/recipient has a ten-minute cooldown.
+- `POST /groups/{id}/vote` is available only in `completed`/`voting` phases.
+  Accepted choices are `continue_together`, `new_skill`, `harder` and
+  `recovery`. The choice is audited, written to team chat and emitted as a
+  revisioned group update.
+- `POST /groups/{id}/intro/change` deactivates the old membership, writes
+  membership history, immediately creates the new queue state and returns that
+  state. The client does not need a page refresh.
+- `GET /groups/membership-history` exposes the authenticated user's immutable
+  join/leave/fill history for support and reconciliation.
+- `POST /groups/waiting-room/early-start` creates or confirms a 15-minute
+  proposal. The first call notifies the other eligible users with request ID,
+  expiry, deep link and actions; three current confirmations atomically form a
+  three-person group.
+- Group and queue SSE messages carry `revision`, `phase` and `reason`. Clients
+  ignore stale/duplicate revisions and poll preparation state only when SSE is
+  disconnected.

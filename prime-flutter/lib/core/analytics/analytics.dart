@@ -1,5 +1,7 @@
 import 'dart:developer' as developer;
 
+import 'package:flutter/foundation.dart';
+
 /// Typed analytics facade. Default sink logs in debug; no PII.
 class Analytics {
   Analytics._();
@@ -163,7 +165,9 @@ class DebugAnalyticsSink implements AnalyticsSink {
 
   @override
   void track(AnalyticsEvent event) {
-    developer.log('${event.name} ${event.props}', name: 'analytics');
+    if (kDebugMode) {
+      developer.log('${event.name} ${event.props}', name: 'analytics');
+    }
   }
 }
 

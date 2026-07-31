@@ -16,6 +16,14 @@ rate-limit buckets, audit events and the notification outbox. `0004_private_medi
 adds ownership/scope metadata for local private media. Both migrations are
 additive and should be applied before serving the new API build.
 
+`0005_team_realtime_product.sql` adds group/queue revisions, push provider
+routing, immutable membership history, expiring early-start proposals and
+their confirmations, plus composite indexes for batched group-card reads.
+
+`0006_moderation_and_media_scope.sql` adds moderation decisions, temporary
+social-write restrictions, appeals and explicit ownership/scope metadata for
+uploaded media.
+
 The current test suite uses SQLite metadata creation and therefore does not
 execute PostgreSQL migrations. CI and deployment must run the API startup (or
 the migration smoke command documented in `docs/backend/runbooks.md`) against

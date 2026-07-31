@@ -5,6 +5,7 @@ import '../../screens/account_settings_screen.dart';
 import '../../screens/avatar_screen.dart';
 import '../../screens/group_detail_screen.dart';
 import 'app_gate.dart';
+import 'auth_required_route.dart';
 import 'route_loaders.dart';
 
 /// Central route table for PRIME.
@@ -16,11 +17,10 @@ import 'route_loaders.dart';
 /// the current browser path and calls [onGenerateInitialRoutes] with it, so
 /// the correct screen (and a sane back-stack) gets rebuilt from scratch.
 ///
-/// [AppGate] remains the single authority over the onboarding → auth →
-/// profile-setup → [MainShell] flow: named routes never render an
-/// authenticated screen directly, they only ask the gate to preselect a
-/// [MainShell] tab (see [tabIndexForRoute]) once the user is actually
-/// signed in.
+/// [AppGate] owns onboarding → auth → profile-setup → [MainShell]. Tab routes
+/// preselect a shell tab via [tabIndexForRoute]; detail routes that need a
+/// session are wrapped in [AuthRequiredRoute], which shows [AppGate] when the
+/// user is signed out instead of rendering the target screen directly.
 abstract final class AppRoutes {
   const AppRoutes._();
 
@@ -135,14 +135,16 @@ abstract final class AppRoutes {
       return const AppGate();
     }
     if (path == settings) {
-      return const AccountSettingsScreen();
+      return const AuthRequiredRoute(child: AccountSettingsScreen());
     }
     if (path == avatar) {
-      return const AvatarScreen();
+      return const AuthRequiredRoute(child: AvatarScreen());
     }
     if (path.startsWith(_groupPrefix)) {
       final id = path.substring(_groupPrefix.length);
-      return GroupDetailScreen(groupId: id);
+      return AuthRequiredRoute(
+        child: GroupDetailScreen(groupId: id),
+      );
     }
     if (path.startsWith(_skillDetailPrefix)) {
       final id = path.substring(_skillDetailPrefix.length);
@@ -150,15 +152,15 @@ abstract final class AppRoutes {
     }
     if (path.startsWith(_chatGroupPrefix)) {
       final id = path.substring(_chatGroupPrefix.length);
-      return GroupChatRouteLoader(groupId: id);
+      return AuthRequiredRoute(child: GroupChatRouteLoader(groupId: id));
     }
     if (path.startsWith(_chatDirectPrefix)) {
       final id = path.substring(_chatDirectPrefix.length);
-      return DirectChatRouteLoader(friendId: id);
+      return AuthRequiredRoute(child: DirectChatRouteLoader(friendId: id));
     }
     if (path.startsWith(_publicProfilePrefix)) {
       final id = path.substring(_publicProfilePrefix.length);
-      return PublicProfileRouteLoader(userId: id);
+      return AuthRequiredRoute(child: PublicProfileRouteLoader(userId: id));
     }
     return const AppGate();
   }

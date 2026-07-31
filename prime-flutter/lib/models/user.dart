@@ -1,3 +1,4 @@
+import '../core/features/moderator_features.dart';
 import '../core/profile/privacy_settings.dart';
 
 class UserModel {
@@ -20,6 +21,7 @@ class UserModel {
   final String? matrixUserId;
   final bool isModerator;
   final bool emailVerified;
+  final bool marketingEmailsOptIn;
   final DateTime createdAt;
   final Map<String, bool> privacySettings;
 
@@ -43,6 +45,7 @@ class UserModel {
     this.matrixUserId,
     required this.isModerator,
     this.emailVerified = true,
+    this.marketingEmailsOptIn = true,
     required this.createdAt,
     Map<String, bool>? privacySettings,
   }) : privacySettings = privacySettings ?? Map.from(defaultPrivacySettings);
@@ -65,9 +68,12 @@ class UserModel {
         streakShields: j['streak_shields'] as int? ?? 0,
         shieldPending: j['shield_pending'] as bool? ?? false,
         matrixUserId: j['matrix_user_id'] as String?,
-        isModerator: j['is_moderator'] as bool? ?? false,
+        isModerator: ModeratorFeatures.enabled
+            ? (j['is_moderator'] as bool? ?? false)
+            : false,
         // Older API builds omit the flag; assume verified so they keep working.
         emailVerified: j['email_verified'] as bool? ?? true,
+        marketingEmailsOptIn: j['marketing_emails_opt_in'] as bool? ?? true,
         createdAt: DateTime.parse(j['created_at'] as String),
         privacySettings: parsePrivacySettings(j['privacy_settings']),
       );
@@ -92,11 +98,12 @@ class UserModel {
         'matrix_user_id': matrixUserId,
         'is_moderator': isModerator,
         'email_verified': emailVerified,
+        'marketing_emails_opt_in': marketingEmailsOptIn,
         'created_at': createdAt.toIso8601String(),
         'privacy_settings': privacySettings,
       };
 
-  UserModel copyWith({String? about}) => UserModel(
+  UserModel copyWith({String? about, bool? marketingEmailsOptIn}) => UserModel(
         id: id,
         nickname: nickname,
         email: email,
@@ -116,6 +123,7 @@ class UserModel {
         matrixUserId: matrixUserId,
         isModerator: isModerator,
         emailVerified: emailVerified,
+        marketingEmailsOptIn: marketingEmailsOptIn ?? this.marketingEmailsOptIn,
         createdAt: createdAt,
         privacySettings: privacySettings,
       );

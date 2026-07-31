@@ -4,8 +4,12 @@ import 'dart:developer' as dev;
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/painting.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/media/media_urls.dart';
+import '../core/mood/mood_state.dart';
+import '../core/notifications/native_push_service.dart';
+import '../core/pending/report_queue.dart';
 import '../core/errors/app_failure.dart';
 import '../core/errors/failure_mapper.dart';
 import '../core/sync/user_personalization_sync.dart';
@@ -13,10 +17,17 @@ import '../data/api_client.dart';
 import '../data/auth_storage.dart';
 import '../models/email_verification.dart';
 import '../models/user.dart';
+import '../l10n/copy.dart';
+
+import 'package:flutter/foundation.dart';
 
 void _log(String msg) {
-  dev.log(msg, name: 'auth');
+  if (kDebugMode) {
+    dev.log(msg, name: 'auth');
+  }
 }
+
+const _tabIndexPrefsKey = 'prime_main_tab_index';
 
 /// Глобальное состояние авторизации.
 class AuthProvider extends ChangeNotifier {
@@ -54,6 +65,12 @@ class AuthProvider extends ChangeNotifier {
   Future<void> handleUnauthorized() async {
     if (_disposed || _user == null) return;
     _log('Unauthorized mid-session — clearing auth');
+    try {
+      await NativePushService.instance.unregister();
+    } catch (_) {
+      // Best-effort; local session must still clear.
+    }
+    await _clearLocalUserData();
     await _storage.clear();
     await api.clearResponseCache();
     api.setAuthToken(null);
@@ -259,8 +276,13 @@ class AuthProvider extends ChangeNotifier {
     } catch (e) {
       _log('Login error: $e');
       if (e is DioException && e.response?.statusCode == 403) {
-        // Password was right — the signup was simply never confirmed.
-        throw EmailNotVerifiedFailure(debugDetail: e.message);
+        final detail = _loginForbiddenDetail(e);
+        if (_isEmailVerificationRequired(detail)) {
+          throw EmailNotVerifiedFailure(
+            message: detail ?? AppCopy.emailNotVerified,
+            debugDetail: e.message,
+          );
+        }
       }
       rethrow;
     } finally {
@@ -280,6 +302,17 @@ class AuthProvider extends ChangeNotifier {
     _user = user;
     _offlineMode = false;
     await _storage.saveCachedUser(user);
+    _safeNotify();
+  }
+
+  Future<void> updateMarketingEmailsOptIn(bool enabled) async {
+    final j = await api.updateEmailPreferences(marketingEmailsOptIn: enabled);
+    final current = _user;
+    if (current == null) return;
+    _user = current.copyWith(
+      marketingEmailsOptIn: j['marketing_emails_opt_in'] as bool? ?? enabled,
+    );
+    await _storage.saveCachedUser(_user!);
     _safeNotify();
   }
 
@@ -340,10 +373,12 @@ class AuthProvider extends ChangeNotifier {
 
   Future<void> logout() async {
     try {
+      await NativePushService.instance.unregister();
       await api.logoutSession();
     } catch (_) {
       // Local logout must complete even when the network is unavailable.
     }
+    await _clearLocalUserData();
     await _storage.clear();
     await api.clearResponseCache();
     api.setAuthToken(null);
@@ -352,4 +387,30 @@ class AuthProvider extends ChangeNotifier {
     _developerMode = false;
     _safeNotify();
   }
+
+  Future<void> _clearLocalUserData() async {
+    await ReportQueue.instance.clear();
+    await MoodState.clear();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_tabIndexPrefsKey);
+  }
+}
+
+String? _loginForbiddenDetail(DioException error) {
+  final data = error.response?.data;
+  if (data is! Map) return null;
+  final detail = data['detail'];
+  if (detail is String) return detail.trim().isEmpty ? null : detail.trim();
+  if (detail is Map && detail['message'] is String) {
+    return (detail['message'] as String).trim();
+  }
+  return null;
+}
+
+bool _isEmailVerificationRequired(String? detail) {
+  if (detail == null || detail.isEmpty) return false;
+  final lower = detail.toLowerCase();
+  return detail.contains('Подтвердите почту') ||
+      (lower.contains('verify') && lower.contains('email')) ||
+      (lower.contains('confirm') && lower.contains('email'));
 }

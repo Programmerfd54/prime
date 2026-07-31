@@ -5,12 +5,12 @@ import time
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
 
 from ..db import SessionLocal, get_session
-from ..deps import get_current_user
+from ..deps import get_current_auth_session, get_current_user
 from ..direct_message_events import (
     DirectChatReadPush,
     DirectMessagePush,
@@ -20,7 +20,7 @@ from ..direct_message_events import (
     WaitingRoomUpdatePush,
     direct_message_hub,
 )
-from ..models import DeviceToken, DirectMessage, Notification, User, utcnow
+from ..models import AuthSession, DeviceToken, DirectMessage, Notification, User, utcnow
 from ..notifications import notification_payload
 from ..pagination import decode_cursor, encode_cursor
 
@@ -143,6 +143,40 @@ async def mark_all_notifications_read(
     return {"status": "ok"}
 
 
+@router.delete("/notifications/{notification_id}")
+async def delete_notification(
+    notification_id: str,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    notification = await session.scalar(
+        select(Notification).where(
+            Notification.id == notification_id,
+            Notification.user_id == user.id,
+        )
+    )
+    if notification is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Уведомление не найдено",
+        )
+    await session.delete(notification)
+    await session.commit()
+    return {"status": "ok"}
+
+
+@router.post("/notifications/clear")
+async def clear_notifications(
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    result = await session.execute(
+        delete(Notification).where(Notification.user_id == user.id)
+    )
+    await session.commit()
+    return {"status": "ok", "deleted": int(result.rowcount or 0)}
+
+
 @router.post("/devices/register")
 async def register_device(
     payload: dict,
@@ -151,6 +185,7 @@ async def register_device(
 ) -> dict:
     token = str(payload.get("token") or "").strip()
     platform = str(payload.get("platform") or "").strip().lower()
+    provider = str(payload.get("provider") or "fcm").strip().lower()
     if platform not in {"ios", "android", "web"}:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -161,20 +196,69 @@ async def register_device(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Токен устройства обязателен",
         )
+    if provider not in {"fcm", "apns"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Некорректный push-провайдер",
+        )
 
     existing = await session.scalar(select(DeviceToken).where(DeviceToken.token == token))
+    if existing is not None and existing.user_id != user.id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Токен устройства уже привязан к другому аккаунту",
+        )
     if existing is None:
-        existing = DeviceToken(user_id=user.id, platform=platform, token=token)
+        existing = DeviceToken(
+            user_id=user.id,
+            platform=platform,
+            provider=provider,
+            token=token,
+        )
     else:
-        existing.user_id = user.id
         existing.platform = platform
+        existing.provider = provider
         existing.updated_at = utcnow()
     session.add(existing)
     await session.commit()
     return {"status": "ok"}
 
 
-async def _notification_stream(user_id: str):
+@router.post("/devices/unregister", status_code=status.HTTP_204_NO_CONTENT)
+async def unregister_device(
+    payload: dict,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    token = str(payload.get("token") or "").strip()
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Токен устройства обязателен",
+        )
+    await session.execute(
+        delete(DeviceToken).where(
+            DeviceToken.user_id == user.id,
+            DeviceToken.token == token,
+        )
+    )
+    await session.commit()
+    return None
+
+
+async def _session_still_valid(session: AsyncSession, *, user_id: str, auth_session_id: str) -> bool:
+    row = await session.scalar(
+        select(AuthSession).where(
+            AuthSession.id == auth_session_id,
+            AuthSession.user_id == user_id,
+            AuthSession.revoked_at.is_(None),
+            AuthSession.expires_at > utcnow(),
+        )
+    )
+    return row is not None
+
+
+async def _notification_stream(user_id: str, auth_session_id: str):
     seen_ids: set[str] | None = None
     last_heartbeat = time.monotonic()
     last_direct_message_at: datetime | None = None
@@ -209,13 +293,23 @@ async def _notification_stream(user_id: str):
                     yield f"event: direct_chat_read\ndata: {payload}\n\n"
                 elif isinstance(push, WaitingRoomUpdatePush):
                     payload = json.dumps(
-                        {"skill_id": push.skill_id},
+                        {
+                            "skill_id": push.skill_id,
+                            "revision": push.revision,
+                            "reason": push.reason,
+                        },
                         ensure_ascii=False,
                     )
                     yield f"event: waiting_room_update\ndata: {payload}\n\n"
                 elif isinstance(push, GroupUpdatePush):
                     payload = json.dumps(
-                        {"group_id": push.group_id},
+                        {
+                            "group_id": push.group_id,
+                            "revision": push.revision,
+                            "phase": push.phase,
+                            "reason": push.reason,
+                            "milestone_id": push.milestone_id,
+                        },
                         ensure_ascii=False,
                     )
                     yield f"event: group_update\ndata: {payload}\n\n"
@@ -241,6 +335,12 @@ async def _notification_stream(user_id: str):
 
             try:
                 async with SessionLocal() as session:
+                    if not await _session_still_valid(
+                        session,
+                        user_id=user_id,
+                        auth_session_id=auth_session_id,
+                    ):
+                        break
                     if last_direct_message_at is None:
                         last_direct_message_at = await session.scalar(
                             select(func.max(DirectMessage.created_at)).where(
@@ -309,9 +409,12 @@ async def _notification_stream(user_id: str):
 
 
 @router.get("/events/stream")
-async def events_stream(user: User = Depends(get_current_user)) -> StreamingResponse:
+async def events_stream(
+    current: tuple = Depends(get_current_auth_session),
+) -> StreamingResponse:
+    auth_session, user = current
     return StreamingResponse(
-        _notification_stream(user.id),
+        _notification_stream(user.id, auth_session.id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

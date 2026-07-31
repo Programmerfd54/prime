@@ -2,6 +2,8 @@
 .env.*
 !.env.example
 !.env.local.example
+secrets/*
+!secrets/.gitkeep
 logs/*.log
 logs/*.log.*
 uploads/private-media/

@@ -268,6 +268,8 @@ async def create_db_schema() -> None:
             """,
             "CREATE INDEX IF NOT EXISTS ix_email_verification_codes_user_id ON email_verification_codes (user_id)",
             "CREATE INDEX IF NOT EXISTS ix_email_verification_codes_expires_at ON email_verification_codes (expires_at)",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS marketing_emails_opt_in BOOLEAN NOT NULL DEFAULT TRUE",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS marketing_emails_unsubscribed_at TIMESTAMPTZ",
             """
             CREATE TABLE IF NOT EXISTS custom_skills (
                 id VARCHAR(36) PRIMARY KEY,

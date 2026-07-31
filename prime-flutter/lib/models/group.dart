@@ -1,4 +1,7 @@
+import 'package:prime/core/groups/group_members.dart';
+
 import 'user.dart';
+import 'report.dart';
 
 enum GroupStatus {
   forming,
@@ -98,8 +101,9 @@ class TeamWaitingMember {
   final String name;
   final String nickname;
 
-  String get displayName =>
-      name.trim().isNotEmpty ? name : (nickname.isNotEmpty ? '@$nickname' : 'Участник');
+  String get displayName => name.trim().isNotEmpty
+      ? name
+      : (nickname.isNotEmpty ? '@$nickname' : 'Участник');
 
   factory TeamWaitingMember.fromJson(Map<String, dynamic> json) =>
       TeamWaitingMember(
@@ -117,6 +121,8 @@ class TeamDayModel {
     required this.memberCount,
     this.waitingFor = const [],
     this.closedAt,
+    this.referenceTimezone,
+    this.closesAt,
   });
 
   final DateTime date;
@@ -125,6 +131,8 @@ class TeamDayModel {
   final int memberCount;
   final List<TeamWaitingMember> waitingFor;
   final DateTime? closedAt;
+  final String? referenceTimezone;
+  final DateTime? closesAt;
 
   bool get isComplete => status == 'complete';
   bool get isPending => status == 'pending';
@@ -150,6 +158,10 @@ class TeamDayModel {
           .toList(),
       closedAt: json['closed_at'] != null
           ? DateTime.tryParse(json['closed_at'] as String)
+          : null,
+      referenceTimezone: json['reference_timezone'] as String?,
+      closesAt: json['closes_at'] != null
+          ? DateTime.tryParse(json['closes_at'] as String)
           : null,
     );
   }
@@ -234,8 +246,7 @@ class TeamMilestoneModel {
   final bool unlocked;
   final DateTime? unlockedAt;
 
-  double get progress =>
-      target == 0 ? 0 : (current / target).clamp(0.0, 1.0);
+  double get progress => target == 0 ? 0 : (current / target).clamp(0.0, 1.0);
 
   factory TeamMilestoneModel.fromJson(Map<String, dynamic> json) =>
       TeamMilestoneModel(
@@ -266,6 +277,37 @@ class TeamMilestonesModel {
   }
 }
 
+class PersonalResultModel {
+  const PersonalResultModel({
+    required this.readyDays,
+    required this.cycleReadyDays,
+    required this.teamDays,
+    required this.supportGiven,
+    required this.supportReceived,
+    required this.recoveredHardDays,
+    required this.message,
+  });
+
+  final int readyDays;
+  final int cycleReadyDays;
+  final int teamDays;
+  final int supportGiven;
+  final int supportReceived;
+  final int recoveredHardDays;
+  final String message;
+
+  factory PersonalResultModel.fromJson(Map<String, dynamic> json) =>
+      PersonalResultModel(
+        readyDays: json['ready_days'] as int? ?? 0,
+        cycleReadyDays: json['cycle_ready_days'] as int? ?? 0,
+        teamDays: json['team_days'] as int? ?? 0,
+        supportGiven: json['support_given'] as int? ?? 0,
+        supportReceived: json['support_received'] as int? ?? 0,
+        recoveredHardDays: json['recovered_hard_days'] as int? ?? 0,
+        message: json['message'] as String? ?? '',
+      );
+}
+
 class MemberModel {
   final String id;
   final String userId;
@@ -276,6 +318,9 @@ class MemberModel {
   final int streak;
   final int bestStreak;
   final String reportStatus;
+  final String? checkInKind;
+  final DateTime? checkInAt;
+  final String? lastReportMessageId;
   final UserPublic? profile;
 
   MemberModel({
@@ -288,6 +333,9 @@ class MemberModel {
     required this.streak,
     required this.bestStreak,
     required this.reportStatus,
+    this.checkInKind,
+    this.checkInAt,
+    this.lastReportMessageId,
     this.profile,
   });
 
@@ -304,6 +352,11 @@ class MemberModel {
         streak: j['streak'] as int? ?? 0,
         bestStreak: j['best_streak'] as int? ?? 0,
         reportStatus: j['report_status'] as String? ?? 'not_ready',
+        checkInKind: j['check_in_kind'] as String?,
+        checkInAt: j['check_in_at'] != null
+            ? DateTime.tryParse(j['check_in_at'] as String)
+            : null,
+        lastReportMessageId: j['last_report_message_id'] as String?,
         profile: j['profile'] != null
             ? UserPublic.fromJson(j['profile'] as Map<String, dynamic>)
             : null,
@@ -324,6 +377,9 @@ class MemberModel {
         streak: streak,
         bestStreak: bestStreak,
         reportStatus: reportStatus,
+        checkInKind: checkInKind,
+        checkInAt: checkInAt,
+        lastReportMessageId: lastReportMessageId,
         profile: profile,
       );
 }
@@ -334,6 +390,7 @@ class GroupModel {
   final String skillId;
   final String? skillName;
   final GroupStatus status;
+  final int revision;
   final bool isPrivate;
   final String? inviteCode;
   final String? city;
@@ -343,12 +400,15 @@ class GroupModel {
   final int maxMembers;
   final String? matrixRoomId;
   final DateTime? cycleStartAt;
+  final int cycleDay;
   final int membersCount;
   final List<MemberModel> members;
   final TeamPulseModel? teamPulse;
   final TeamDayModel? teamDay;
   final TeamRecapModel? teamRecap;
   final TeamMilestonesModel? teamMilestones;
+  final CalendarDay? myTodayReport;
+  final PersonalResultModel? personalResult;
 
   GroupModel({
     required this.id,
@@ -356,6 +416,7 @@ class GroupModel {
     required this.skillId,
     this.skillName,
     required this.status,
+    this.revision = 0,
     required this.isPrivate,
     this.inviteCode,
     this.city,
@@ -365,12 +426,15 @@ class GroupModel {
     required this.maxMembers,
     this.matrixRoomId,
     this.cycleStartAt,
+    this.cycleDay = 1,
     required this.membersCount,
     required this.members,
     this.teamPulse,
     this.teamDay,
     this.teamRecap,
     this.teamMilestones,
+    this.myTodayReport,
+    this.personalResult,
   });
 
   factory GroupModel.fromJson(Map<String, dynamic> j) => GroupModel(
@@ -379,6 +443,7 @@ class GroupModel {
         skillId: j['skill_id'] as String,
         skillName: j['skill_name'] as String?,
         status: _statusFromJson(j['status'] as String?),
+        revision: j['revision'] as int? ?? 0,
         isPrivate: j['is_private'] as bool? ?? false,
         inviteCode: j['invite_code'] as String?,
         city: j['city'] as String?,
@@ -390,10 +455,13 @@ class GroupModel {
         cycleStartAt: j['cycle_start_at'] != null
             ? DateTime.parse(j['cycle_start_at'] as String)
             : null,
+        cycleDay: j['cycle_day'] as int? ?? 1,
         membersCount: j['members_count'] as int? ?? 0,
-        members: (j['members'] as List<dynamic>? ?? [])
-            .map((m) => MemberModel.fromJson(m as Map<String, dynamic>))
-            .toList(),
+        members: distinctMembersByUserId(
+          (j['members'] as List<dynamic>? ?? [])
+              .map((m) => MemberModel.fromJson(m as Map<String, dynamic>))
+              .toList(),
+        ),
         teamPulse: TeamPulseModel.fromJson(
           j['team_pulse'] as Map<String, dynamic>?,
         ),
@@ -406,6 +474,16 @@ class GroupModel {
         teamMilestones: j['team_milestones'] != null
             ? TeamMilestonesModel.fromJson(
                 j['team_milestones'] as Map<String, dynamic>,
+              )
+            : null,
+        myTodayReport: j['my_today_report'] != null
+            ? CalendarDay.fromJson(
+                j['my_today_report'] as Map<String, dynamic>,
+              )
+            : null,
+        personalResult: j['personal_result'] != null
+            ? PersonalResultModel.fromJson(
+                j['personal_result'] as Map<String, dynamic>,
               )
             : null,
       );
@@ -422,6 +500,7 @@ class GroupModel {
         skillId: skillId,
         skillName: skillName,
         status: status ?? this.status,
+        revision: revision,
         isPrivate: isPrivate,
         inviteCode: inviteCode,
         city: city,
@@ -431,12 +510,15 @@ class GroupModel {
         maxMembers: maxMembers,
         matrixRoomId: matrixRoomId ?? this.matrixRoomId,
         cycleStartAt: cycleStartAt,
+        cycleDay: cycleDay,
         membersCount: membersCount ?? this.membersCount,
         members: members ?? this.members,
         teamPulse: teamPulse,
         teamDay: teamDay,
         teamRecap: teamRecap,
         teamMilestones: teamMilestones,
+        myTodayReport: myTodayReport,
+        personalResult: personalResult,
       );
 }
 
@@ -473,7 +555,8 @@ class WaitingRoomSlot {
   final int regionColorSeed;
   final int joinedAgoSeconds;
 
-  factory WaitingRoomSlot.fromJson(Map<String, dynamic> json) => WaitingRoomSlot(
+  factory WaitingRoomSlot.fromJson(Map<String, dynamic> json) =>
+      WaitingRoomSlot(
         letter: json['letter'] as String? ?? '?',
         regionCode: json['region_code'] as String?,
         regionColorSeed: json['region_color_seed'] as int? ?? 0,
@@ -583,6 +666,12 @@ class WaitingRoomStatus {
   final bool earlyStartWaitingOthers;
   final bool earlyStartPending;
   final int earlyStartNeededConfirmations;
+  final int revision;
+  final String? earlyStartRequestId;
+  final String? earlyStartProposerName;
+  final DateTime? earlyStartExpiresAt;
+  final int earlyStartSecondsRemaining;
+  final String? earlyStartDeepLink;
 
   WaitingRoomStatus({
     required this.inQueue,
@@ -611,6 +700,12 @@ class WaitingRoomStatus {
     this.earlyStartWaitingOthers = false,
     this.earlyStartPending = false,
     this.earlyStartNeededConfirmations = 3,
+    this.revision = 0,
+    this.earlyStartRequestId,
+    this.earlyStartProposerName,
+    this.earlyStartExpiresAt,
+    this.earlyStartSecondsRemaining = 0,
+    this.earlyStartDeepLink,
   });
 
   WaitingRoomStatus copyWith({
@@ -648,6 +743,12 @@ class WaitingRoomStatus {
         earlyStartWaitingOthers: earlyStartWaitingOthers,
         earlyStartPending: earlyStartPending,
         earlyStartNeededConfirmations: earlyStartNeededConfirmations,
+        revision: revision,
+        earlyStartRequestId: earlyStartRequestId,
+        earlyStartProposerName: earlyStartProposerName,
+        earlyStartExpiresAt: earlyStartExpiresAt,
+        earlyStartSecondsRemaining: earlyStartSecondsRemaining,
+        earlyStartDeepLink: earlyStartDeepLink,
       );
 
   factory WaitingRoomStatus.fromJson(Map<String, dynamic> j) =>
@@ -691,13 +792,21 @@ class WaitingRoomStatus {
         earlyStartConfirmed: j['early_start_confirmed'] as bool? ??
             j['pair_start_confirmed'] as bool? ??
             false,
-        earlyStartConfirmedCount:
-            j['early_start_confirmed_count'] as int? ?? 0,
+        earlyStartConfirmedCount: j['early_start_confirmed_count'] as int? ?? 0,
         earlyStartWaitingOthers: j['early_start_waiting_others'] as bool? ??
             j['pair_start_waiting_partner'] as bool? ??
             false,
         earlyStartPending: j['early_start_pending'] as bool? ?? false,
         earlyStartNeededConfirmations:
             j['early_start_needed_confirmations'] as int? ?? 3,
+        revision: j['revision'] as int? ?? 0,
+        earlyStartRequestId: j['early_start_request_id'] as String?,
+        earlyStartProposerName: j['early_start_proposer_name'] as String?,
+        earlyStartExpiresAt: j['early_start_expires_at'] != null
+            ? DateTime.tryParse(j['early_start_expires_at'] as String)
+            : null,
+        earlyStartSecondsRemaining:
+            j['early_start_seconds_remaining'] as int? ?? 0,
+        earlyStartDeepLink: j['early_start_deep_link'] as String?,
       );
 }

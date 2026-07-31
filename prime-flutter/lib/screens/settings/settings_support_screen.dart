@@ -10,7 +10,7 @@ import '../../ui/components/settings/settings_presentation.dart';
 class SettingsSupportScreen extends StatelessWidget {
   const SettingsSupportScreen({super.key});
 
-  static const _supportEmail = 'support@inpr1me.ru';
+  static const _supportEmail = 'noreply@inpr1me.ru';
   static const _supportChatUrl = 'https://t.me/inpr1me_support';
 
   Future<void> _openUri(BuildContext context, Uri uri, String fallback) async {

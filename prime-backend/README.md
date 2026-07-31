@@ -75,7 +75,7 @@ SMTP_USERNAME=noreply@inpr1me.ru
 SMTP_PASSWORD=<пароль-приложения>
 MAIL_FROM=noreply@inpr1me.ru
 MAIL_FROM_NAME=ПРАЙМ
-MAIL_REPLY_TO=support@inpr1me.ru
+MAIL_REPLY_TO=noreply@inpr1me.ru
 EMAIL_VERIFICATION_EXPOSE_CODE=false
 ```
 

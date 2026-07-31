@@ -38,6 +38,12 @@ cd ../prime-backend
 uvicorn app.main:app --reload --port 8080
 ```
 
+### Android push (FCM)
+
+Полная доставка push на Android включается файлом `android/app/google-services.json`
+(скачать из Firebase Console). Без него приложение работает в degraded-режиме:
+SSE + in-app уведомления. Подробнее: [android/README_FCM.md](android/README_FCM.md).
+
 ## Структура
 
 ```

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/errors/failure_mapper.dart';
+import '../../core/features/moderator_features.dart';
 import '../../core/profile/privacy_presets.dart';
 import '../../core/profile/theme_mode_controller.dart';
 import '../../data/api_client.dart';
@@ -9,6 +10,7 @@ import '../../design/routes.dart';
 import '../../design/tokens.dart';
 import '../../design/visuals/ambient_and_progress.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/social_restriction_provider.dart';
 import '../../ui/components/app_dialog.dart';
 import '../../ui/components/app_header.dart';
 import '../../ui/components/app_scaffold.dart';
@@ -18,6 +20,7 @@ import '../../ui/components/settings/settings_presentation.dart';
 import '../../ui/kit/tokens/kit_surfaces.dart';
 import 'settings_account_detail_screen.dart';
 import 'settings_appearance_screen.dart';
+import 'settings_moderator_security_screen.dart';
 import 'settings_privacy_screen.dart';
 import 'settings_ritual_screen.dart';
 import 'settings_support_screen.dart';
@@ -102,6 +105,20 @@ class AccountSettingsScreen extends StatelessWidget {
               ),
             ),
             const SizedBox(height: AppSpacing.sm),
+            if (ModeratorFeatures.enabled && user?.isModerator == true) ...[
+              SettingsHubCard(
+                icon: Icons.admin_panel_settings_outlined,
+                title: 'Безопасность модератора',
+                subtitle: 'TOTP и резервные коды',
+                accent: KitAccent.neutral,
+                onTap: () => Navigator.of(context).push(
+                  PrimeRoute.sharedAxis(
+                    builder: (_) => const SettingsModeratorSecurityScreen(),
+                  ),
+                ),
+              ),
+              const SizedBox(height: AppSpacing.sm),
+            ],
             SettingsHubCard(
               icon: Icons.support_agent_outlined,
               title: 'Поддержка',
@@ -166,6 +183,7 @@ class AccountSettingsScreen extends StatelessWidget {
       destructive: true,
     );
     if (confirmed != true || !context.mounted) return;
+    context.read<SocialRestrictionProvider>().clear();
     await context.read<AuthProvider>().logout();
   }
 

@@ -152,6 +152,7 @@ class UserResponse(BaseModel):
     city: str | None
     region_code: str | None
     region_name: str | None = None
+    timezone: str | None = None
     age: int | None
     profile_completed: bool
     prime_points: int
@@ -163,6 +164,7 @@ class UserResponse(BaseModel):
     matrix_user_id: str | None
     is_moderator: bool
     email_verified: bool = True
+    marketing_emails_opt_in: bool = True
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -185,6 +187,10 @@ class UserResponse(BaseModel):
             return data
         if "email_verified" not in payload:
             payload["email_verified"] = payload.get("email_verified_at") is not None
+        from .moderator_features import moderator_features_enabled
+
+        if not moderator_features_enabled():
+            payload["is_moderator"] = False
         return payload
 
 
@@ -201,6 +207,14 @@ class GroupCheckInRequest(BaseModel):
         return normalized
 
 
+class EmailPreferencesResponse(BaseModel):
+    marketing_emails_opt_in: bool
+
+
+class UpdateEmailPreferencesRequest(BaseModel):
+    marketing_emails_opt_in: bool
+
+
 class UpdateUserRequest(BaseModel):
     name: str | None = Field(default=None, max_length=120)
     nickname: str | None = Field(default=None, max_length=33)
@@ -208,6 +222,7 @@ class UpdateUserRequest(BaseModel):
     photo_url: str | None = Field(default=None, max_length=500)
     city: str | None = Field(default=None, max_length=120)
     region_code: str | None = Field(default=None, max_length=8)
+    timezone: str | None = Field(default=None, max_length=64)
     age: int | None = Field(default=None, ge=13, le=120)
     privacy_settings: dict | None = None
 
