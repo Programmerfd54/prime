@@ -267,6 +267,10 @@ async def _notification_stream(user_id: str, auth_session_id: str):
     queue = direct_message_hub.subscribe(user_id)
 
     try:
+        # Flush response headers immediately. Without an initial SSE comment,
+        # clients wait for the first 15-second heartbeat before they can mark
+        # the realtime connection as established.
+        yield ": connected\n\n"
         while True:
             try:
                 push = await asyncio.wait_for(queue.get(), timeout=15.0)

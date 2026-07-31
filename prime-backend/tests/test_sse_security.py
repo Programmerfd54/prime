@@ -130,7 +130,11 @@ async def test_notification_stream_closes_after_session_revoke(
         await revoke_session(session, auth_row)
         await session.commit()
         chunks = await asyncio.wait_for(task, timeout=3.0)
-        assert any("heartbeat" in chunk for chunk in chunks) or chunks == []
+        assert any(
+            marker in chunk
+            for chunk in chunks
+            for marker in ("connected", "heartbeat")
+        ) or chunks == []
     finally:
         await session.close()
         await engine.dispose()

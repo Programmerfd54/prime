@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import statistics
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -84,9 +85,15 @@ def run_health_load(base_url: str, total: int, concurrency: int) -> list[Result]
     return results
 
 
-def run_user_flow(base_url: str, users: int, concurrency: int) -> list[Result]:
+def run_user_flow(
+    base_url: str,
+    users: int,
+    concurrency: int,
+    tokens: list[str] | None = None,
+) -> list[Result]:
     stamp = int(time.time())
     password = "PrimeLoad123"
+    token_lock = threading.Lock()
 
     def one(i: int) -> list[Result]:
         nickname = f"load{stamp}_{i}"
@@ -128,6 +135,9 @@ def run_user_flow(base_url: str, users: int, concurrency: int) -> list[Result]:
         token = (verify_body or {}).get("access_token")
         if not token:
             return results
+        if tokens is not None:
+            with token_lock:
+                tokens.append(token)
 
         result, _ = timed(
             "me",
@@ -323,6 +333,10 @@ def main() -> None:
     parser.add_argument("--users", type=int, default=30)
     parser.add_argument("--user-concurrency", type=int, default=10)
     parser.add_argument(
+        "--tokens-output",
+        help="Write issued access tokens to this JSON file (staging tests only).",
+    )
+    parser.add_argument(
         "--moderation-probe",
         action="store_true",
         help="Run authenticated restriction endpoint probe after user flow.",
@@ -330,13 +344,24 @@ def main() -> None:
     args = parser.parse_args()
 
     results: list[Result] = []
+    tokens: list[str] = []
     results.extend(run_health_load(args.base_url, args.health_total, args.health_concurrency))
     if not args.health_only:
-        results.extend(run_user_flow(args.base_url, args.users, args.user_concurrency))
+        results.extend(
+            run_user_flow(
+                args.base_url,
+                args.users,
+                args.user_concurrency,
+                tokens=tokens if args.tokens_output else None,
+            )
+        )
         results.extend(run_friend_flow(args.base_url))
         if args.moderation_probe:
             results.extend(run_moderation_probe(args.base_url, "loadmoduser", "LoadTest123!"))
     print_summary(results)
+    if args.tokens_output:
+        with open(args.tokens_output, "w", encoding="utf-8") as output:
+            json.dump(tokens, output)
 
 
 if __name__ == "__main__":
