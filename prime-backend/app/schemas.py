@@ -1,8 +1,9 @@
 from datetime import datetime
 import json
 
-from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
+from pydantic import BaseModel, EmailStr, Field, field_serializer, field_validator, model_validator
 
+from .matrix import mxc_to_http
 from .nicknames import validate_nickname
 from .regions import is_valid_region, region_name
 
@@ -161,6 +162,10 @@ class UserResponse(BaseModel):
     streak_shields: int = 0
     shield_pending: bool = False
     privacy_settings: dict = Field(default_factory=dict)
+
+    @field_serializer("photo_url")
+    def serialize_photo_url(self, value: str | None) -> str | None:
+        return mxc_to_http(value)
     matrix_user_id: str | None
     is_moderator: bool
     email_verified: bool = True

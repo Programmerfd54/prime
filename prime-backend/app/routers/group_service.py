@@ -731,7 +731,7 @@ def _user_payload(user: User) -> dict:
         "nickname": user.nickname,
         "name": user.name,
         "about": user.about,
-        "photo_url": user.photo_url,
+        "photo_url": mxc_to_http(user.photo_url),
         "city": user.city,
         "region_code": user.region_code,
         "region_name": region_name(user.region_code),

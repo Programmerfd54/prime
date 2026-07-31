@@ -12,6 +12,7 @@ python-json-logger==4.1.0
 python-multipart==0.0.20
 httpx==0.28.1
 redis==5.2.1
+boto3==1.35.99
 h2==4.3.0
 cryptography==49.0.0
 Pillow==12.2.0

@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import get_settings
 from .models import LocalMediaAsset, User
+from .object_storage import presigned_download_url, storage_configured, store_media
 from .secret_box import decrypt_secret, encrypt_secret
 
 logger = logging.getLogger("prime.matrix")
@@ -123,6 +124,8 @@ async def _store_local_media(
 
 
 def mxc_to_http(mxc_url: str | None) -> str | None:
+    if mxc_url and mxc_url.startswith("s3://"):
+        return presigned_download_url(mxc_url)
     if not mxc_url or not mxc_url.startswith("mxc://"):
         if mxc_url and mxc_url.startswith("local://"):
             return f"/api/v1/local-media/{quote(mxc_url.removeprefix('local://'), safe='')}"
@@ -387,6 +390,29 @@ async def upload_media(
     scope_id: str | None = None,
 ) -> str:
     from .media_scope import record_media_upload
+
+    if storage_configured():
+        try:
+            media_url = await store_media(
+                data=data,
+                user_id=user.id,
+                scope_type=scope_type,
+                filename=filename,
+                content_type=content_type,
+            )
+            await record_media_upload(
+                session,
+                owner=user,
+                media_url=media_url,
+                scope_type=scope_type,
+                scope_id=scope_id,
+            )
+            return media_url
+        except Exception:
+            logger.exception(
+                "s3_media_upload_failed_falling_back_to_matrix",
+                extra={"user_id": user.id, "scope_type": scope_type},
+            )
 
     user_token = _access_token(user)
     if not matrix_available() or not user_token:

@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..db import get_session
 from ..deps import get_current_user
 from ..media import read_upload
+from ..object_storage import delete_media, storage_configured, store_media
 from ..audit import record_audit
 from ..models import (
     DeviceToken,
@@ -307,6 +308,27 @@ async def upload_avatar(
     )
     extension = ALLOWED_AVATAR_TYPES[content_type]
 
+    if storage_configured():
+        old_url = user.photo_url
+        stored_url = await store_media(
+            data=content,
+            user_id=user.id,
+            scope_type="avatar",
+            filename=f"avatar{extension}",
+            content_type=content_type,
+        )
+        user.photo_url = stored_url
+        session.add(user)
+        try:
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            await delete_media(stored_url, user_id=user.id)
+            raise
+        await session.refresh(user)
+        await delete_media(old_url, user_id=user.id)
+        return user
+
     AVATAR_DIR.mkdir(parents=True, exist_ok=True)
     filename = f"{user.id}-{uuid4().hex}{extension}"
     path = AVATAR_DIR / filename
@@ -332,6 +354,7 @@ async def delete_avatar(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> User:
+    old_url = user.photo_url
     old_path = None
     if user.photo_url and "/avatar/" in user.photo_url:
         old_path = AVATAR_DIR / Path(user.photo_url.rsplit("/", 1)[-1]).name
@@ -343,6 +366,7 @@ async def delete_avatar(
     await session.refresh(user)
     if old_path is not None and old_path.exists():
         old_path.unlink()
+    await delete_media(old_url, user_id=user.id)
     return user
 
 

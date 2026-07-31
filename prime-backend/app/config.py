@@ -13,6 +13,19 @@ class Settings(BaseSettings):
     run_db_migrations: bool = Field(default=True, alias="RUN_DB_MIGRATIONS")
     run_background_workers: bool = Field(default=True, alias="RUN_BACKGROUND_WORKERS")
     redis_url: str = Field(default="", alias="REDIS_URL")
+    s3_enabled: bool = Field(default=False, alias="S3_ENABLED")
+    s3_endpoint_url: str = Field(default="", alias="S3_ENDPOINT_URL")
+    s3_public_endpoint_url: str = Field(default="", alias="S3_PUBLIC_ENDPOINT_URL")
+    s3_access_key_id: str = Field(default="", alias="S3_ACCESS_KEY_ID")
+    s3_secret_access_key: str = Field(default="", alias="S3_SECRET_ACCESS_KEY")
+    s3_bucket: str = Field(default="prime-media", alias="S3_BUCKET")
+    s3_region: str = Field(default="us-east-1", alias="S3_REGION")
+    s3_presigned_url_expire_seconds: int = Field(
+        default=900,
+        ge=60,
+        le=86400,
+        alias="S3_PRESIGNED_URL_EXPIRE_SECONDS",
+    )
     jwt_secret_key: str = Field(alias="JWT_SECRET_KEY")
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
     jwt_issuer: str = Field(default="prime-api", alias="JWT_ISSUER")
