@@ -1,11 +1,11 @@
 import asyncio
 
 import pytest
+from fastapi.security import HTTPAuthorizationCredentials
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.db import get_session
 from app.direct_message_events import DirectMessagePush, direct_message_hub
 from app.main import app
 from app.models import AuthSession, User, utcnow
@@ -158,13 +158,12 @@ async def test_sse_cors_allows_cache_control_preflight() -> None:
 
 
 @pytest.mark.asyncio
-async def test_sse_rejects_revoked_token_on_connect() -> None:
+async def test_sse_rejects_revoked_token_on_connect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     engine, session = await make_session()
-
-    async def override_get_session():
-        yield session
-
-    app.dependency_overrides[get_session] = override_get_session
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr(notifications_router, "SessionLocal", factory)
     try:
         user = await _verified_user(session, "sse-old@example.com", "sse-old")
         access_token, _refresh = await issue_session(session, user, _FakeRequest())
@@ -181,6 +180,41 @@ async def test_sse_rejects_revoked_token_on_connect() -> None:
             )
         assert response.status_code == 401
     finally:
-        app.dependency_overrides.clear()
         await session.close()
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_sse_authentication_releases_database_session_before_streaming(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exited = False
+
+    class _Context:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *_args):
+            nonlocal exited
+            exited = True
+
+    async def fake_current_auth_session(credentials, session):
+        assert credentials.credentials == "token"
+        assert session is not None
+        auth_session = type("Auth", (), {"id": "session-id"})()
+        user = type("CurrentUser", (), {"id": "user-id"})()
+        return auth_session, user
+
+    monkeypatch.setattr(notifications_router, "SessionLocal", _Context)
+    monkeypatch.setattr(
+        notifications_router,
+        "get_current_auth_session",
+        fake_current_auth_session,
+    )
+
+    identity = await notifications_router._get_stream_identity(
+        HTTPAuthorizationCredentials(scheme="Bearer", credentials="token")
+    )
+
+    assert identity == ("session-id", "user-id")
+    assert exited is True

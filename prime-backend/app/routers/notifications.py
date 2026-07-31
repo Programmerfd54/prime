@@ -5,12 +5,13 @@ import time
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
 
 from ..db import SessionLocal, get_session
-from ..deps import get_current_auth_session, get_current_user
+from ..deps import bearer, get_current_auth_session, get_current_user
 from ..direct_message_events import (
     DirectChatReadPush,
     DirectMessagePush,
@@ -259,6 +260,22 @@ async def _session_still_valid(session: AsyncSession, *, user_id: str, auth_sess
     return row is not None
 
 
+async def _get_stream_identity(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+) -> tuple[str, str]:
+    """Authenticate SSE without retaining a database session for its lifetime.
+
+    FastAPI keeps generator dependencies alive until a streaming response closes.
+    Reusing the normal ``get_session`` dependency here therefore pins one database
+    connection per subscriber and exhausts the SQLAlchemy pool after a few dozen
+    clients.  Copy the scalar identifiers while a short-lived session is open and
+    release it before returning the StreamingResponse.
+    """
+    async with SessionLocal() as session:
+        auth_session, user = await get_current_auth_session(credentials, session)
+        return auth_session.id, user.id
+
+
 async def _notification_stream(user_id: str, auth_session_id: str):
     seen_ids: set[str] | None = None
     last_heartbeat = time.monotonic()
@@ -352,6 +369,7 @@ async def _notification_stream(user_id: str, auth_session_id: str):
             last_reconcile = now
 
             try:
+                pending_events: list[str] = []
                 async with SessionLocal() as session:
                     if not await _session_still_valid(
                         session,
@@ -384,7 +402,7 @@ async def _notification_stream(user_id: str, auth_session_id: str):
                         for item in pending:
                             seen_ids.add(item.id)
                             data = json.dumps(notification_payload(item), ensure_ascii=False)
-                            yield f"event: notification\ndata: {data}\n\n"
+                            pending_events.append(f"event: notification\ndata: {data}\n\n")
                             if item.type == "match" and item.read_at is None:
                                 try:
                                     payload = json.loads(item.payload or "{}")
@@ -392,7 +410,7 @@ async def _notification_stream(user_id: str, auth_session_id: str):
                                     payload = {}
                                 group_id = payload.get("group_id", "")
                                 match_data = json.dumps({"group_id": group_id}, ensure_ascii=False)
-                                yield f"event: match\ndata: {match_data}\n\n"
+                                pending_events.append(f"event: match\ndata: {match_data}\n\n")
 
                     new_direct = (
                         await session.execute(
@@ -412,9 +430,15 @@ async def _notification_stream(user_id: str, auth_session_id: str):
                             },
                             ensure_ascii=False,
                         )
-                        yield f"event: direct_message\ndata: {payload}\n\n"
+                        pending_events.append(f"event: direct_message\ndata: {payload}\n\n")
                         if message.created_at > last_direct_message_at:
                             last_direct_message_at = message.created_at
+
+                # Never suspend the generator while a database session (and its
+                # checked-out connection) is still open.  Slow clients must not be
+                # able to consume the entire SQLAlchemy pool.
+                for event in pending_events:
+                    yield event
 
                 now = time.monotonic()
                 if now - last_heartbeat >= 15:
@@ -428,11 +452,11 @@ async def _notification_stream(user_id: str, auth_session_id: str):
 
 @router.get("/events/stream")
 async def events_stream(
-    current: tuple = Depends(get_current_auth_session),
+    identity: tuple[str, str] = Depends(_get_stream_identity),
 ) -> StreamingResponse:
-    auth_session, user = current
+    auth_session_id, user_id = identity
     return StreamingResponse(
-        _notification_stream(user.id, auth_session.id),
+        _notification_stream(user_id, auth_session_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

@@ -250,13 +250,18 @@ def run_friend_flow(base_url: str) -> list[Result]:
     results.append(result)
 
     requests = (requests_body or {}).get("requests") or []
-    notifications = (notifications_body or {}).get("requests") or []
+    notifications = (notifications_body or {}).get("items") or []
+    friend_notifications = [
+        item for item in notifications if item.get("type") == "friend_request"
+    ]
     synced = (
         len(requests) == 1
-        and len(notifications) == 1
-        and requests[0]["id"] == notifications[0]["id"]
+        and len(friend_notifications) == 1
+        and requests[0]["id"]
+        == (friend_notifications[0].get("payload") or {}).get("request_id")
         and requests[0]["requester"]["nickname"] == a_nick
-        and notifications[0]["requester"]["nickname"] == a_nick
+        and (friend_notifications[0].get("payload") or {}).get("requester_nickname")
+        == a_nick
     )
     results.append(Result("friend_notifications_synced", synced, 200 if synced else 500, 0))
     return results
