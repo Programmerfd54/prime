@@ -11,7 +11,7 @@ from typing import Any, Union
 from uuid import uuid4
 
 from .config import get_settings
-from .redis_client import get_redis
+from .redis_client import create_redis_pubsub_client, get_redis
 
 
 logger = logging.getLogger("prime.realtime")
@@ -216,15 +216,18 @@ class DirectMessageEventHub:
                 SessionRevokedPush,
             )
         }
+        retry_delay = 1.0
         while True:
-            redis = await get_redis()
+            redis = await create_redis_pubsub_client()
             if redis is None:
-                await asyncio.sleep(2)
+                await asyncio.sleep(retry_delay)
+                retry_delay = min(retry_delay * 2, 30.0)
                 continue
             pubsub = None
             try:
                 pubsub = redis.pubsub(ignore_subscribe_messages=True)
                 await pubsub.subscribe(REDIS_CHANNEL)
+                retry_delay = 1.0
                 async for message in pubsub.listen():
                     raw = message.get("data")
                     if not isinstance(raw, str):
@@ -240,15 +243,26 @@ class DirectMessageEventHub:
                     self._enqueue(recipient, cls(**payload), broadcast=False)
             except asyncio.CancelledError:
                 raise
-            except Exception:
-                logger.warning("sse_redis_listener_failed", exc_info=True)
-                await asyncio.sleep(2)
+            except Exception as exc:
+                # Redis may be restarted independently of the API. Reconnect
+                # with bounded backoff and avoid multi-kilobyte tracebacks on
+                # every failed attempt.
+                logger.warning(
+                    "sse_redis_listener_reconnecting",
+                    extra={"error_type": type(exc).__name__, "retry_seconds": retry_delay},
+                )
+                await asyncio.sleep(retry_delay)
+                retry_delay = min(retry_delay * 2, 30.0)
             finally:
                 if pubsub is not None:
                     try:
                         await pubsub.aclose()
                     except Exception:
                         pass
+                try:
+                    await redis.aclose()
+                except Exception:
+                    pass
 
     async def close(self) -> None:
         task = self._redis_task

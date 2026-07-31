@@ -60,10 +60,10 @@ async def read_upload(
     if not content:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Файл пустой")
     if len(content) > max_bytes:
-        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Файл слишком большой")
+        raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail="Файл слишком большой")
     if content_type.startswith("image/"):
         if max_image_bytes is not None and len(content) > max_image_bytes:
-            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Изображение слишком большое")
+            raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail="Изображение слишком большое")
         if content_type not in SAFE_IMAGE_TYPES:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Этот формат изображения запрещён")
         content, content_type = normalize_image(content, content_type)

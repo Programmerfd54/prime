@@ -613,11 +613,11 @@ async def direct_chat_upload_media(
     if len(content) > max_bytes:
         if is_image:
             raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
                 detail="Изображение слишком большое. Максимальный размер — 10 МБ",
             )
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail="Файл слишком большой. Максимальный размер — 25 МБ",
         )
     if is_image:

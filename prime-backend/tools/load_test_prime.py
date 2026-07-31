@@ -315,6 +315,11 @@ def main() -> None:
     parser.add_argument("--base-url", default="https://api.inpr1me.ru/api/v1")
     parser.add_argument("--health-total", type=int, default=200)
     parser.add_argument("--health-concurrency", type=int, default=20)
+    parser.add_argument(
+        "--health-only",
+        action="store_true",
+        help="Only exercise the public health endpoint; does not create test users.",
+    )
     parser.add_argument("--users", type=int, default=30)
     parser.add_argument("--user-concurrency", type=int, default=10)
     parser.add_argument(

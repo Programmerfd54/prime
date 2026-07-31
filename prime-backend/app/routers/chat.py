@@ -390,19 +390,19 @@ async def chat_upload_media(
     if not content:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Файл пустой")
     if len(content) > MAX_MEDIA_BYTES:
-        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Файл больше 100 МБ")
+        raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail="Файл больше 100 МБ")
     is_image = content_type.startswith("image/")
     is_document = content_type in ALLOWED_DOCUMENT_TYPES
     if not content_type.startswith(ALLOWED_MEDIA_PREFIXES) and not is_document:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Неподдерживаемый формат файла")
     if is_image and len(content) > MAX_GROUP_IMAGE_BYTES:
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail="Изображение слишком большое. Максимальный размер — 10 МБ",
         )
     if is_document and len(content) > MAX_GROUP_FILE_BYTES:
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail="Файл слишком большой. Максимальный размер — 25 МБ",
         )
     mxc_url = await upload_media(user, session, filename, content_type, content, "group", group_id)

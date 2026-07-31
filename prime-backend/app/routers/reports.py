@@ -131,7 +131,7 @@ async def report_upload_media(
     if not content:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Файл пустой")
     if len(content) > MAX_MEDIA_BYTES:
-        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Файл больше 100 МБ")
+        raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail="Файл больше 100 МБ")
     if not content_type.startswith(ALLOWED_MEDIA_PREFIXES):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
