@@ -13,7 +13,7 @@ abstract final class DeviceTimezone {
         return _cached;
       }
       final tz = await FlutterTimezone.getLocalTimezone();
-      _cached = tz;
+      _cached = tz.identifier;
       return _cached;
     } catch (_) {
       return null;

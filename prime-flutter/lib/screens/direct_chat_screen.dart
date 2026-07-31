@@ -464,7 +464,7 @@ class _DirectChatScreenState extends State<DirectChatScreen>
   }
 
   Future<void> _pickFile() async {
-    final result = await FilePicker.platform.pickFiles(
+    final result = await FilePicker.pickFiles(
       withData: true,
       type: FileType.custom,
       allowedExtensions: const [
