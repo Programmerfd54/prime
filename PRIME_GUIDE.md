@@ -1112,7 +1112,7 @@ https://app.inpr1me.ru
 
 ```powershell
 cd C:\dev\prime-flutter
-flutter build web --release --dart-define=API_BASE_URL=https://api.inpr1me.ru
+flutter build web --release --no-web-resources-cdn --dart-define=API_BASE_URL=https://api.inpr1me.ru
 ```
 
 На backend нужно будет разрешить CORS для домена web-приложения.
