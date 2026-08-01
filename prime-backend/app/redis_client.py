@@ -75,6 +75,25 @@ async def create_redis_pubsub_client():
         return None
 
 
+async def mark_redis_unavailable(client) -> None:
+    """Retire a shared command client after an operation-level failure.
+
+    Connection creation is already fail-safe, but a live pooled connection can
+    still time out later under CPU or network pressure.  Removing it from the
+    cache gives subsequent requests the existing database fallback during the
+    retry window instead of making every request wait for the same bad pool.
+    """
+    global _redis, _redis_retry_after
+    if client is not _redis:
+        return
+    _redis = None
+    _redis_retry_after = time.monotonic() + _REDIS_RETRY_SECONDS
+    try:
+        await client.aclose()
+    except Exception:
+        pass
+
+
 async def close_redis() -> None:
     global _redis
     if _redis is not None:

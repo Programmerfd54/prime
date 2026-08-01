@@ -107,6 +107,16 @@ async def create_db_schema() -> None:
     from . import models  # noqa: F401
 
     async with engine.begin() as conn:
+        if conn.dialect.name == "postgresql":
+            # Every Gunicorn worker runs the application lifespan.  On a
+            # brand-new database, concurrent metadata.create_all() calls can
+            # race while PostgreSQL is creating table types.  A transaction-
+            # scoped advisory lock serializes bootstrap/migrations and is
+            # released automatically on commit or rollback.
+            await conn.execute(
+                text("SELECT pg_advisory_xact_lock(:lock_id)"),
+                {"lock_id": 717342370665433},
+            )
         await conn.run_sync(Base.metadata.create_all)
         migrations = (
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS matrix_access_token TEXT",
