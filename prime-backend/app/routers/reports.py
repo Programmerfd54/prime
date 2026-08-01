@@ -137,7 +137,15 @@ async def report_upload_media(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Для отчёта можно загрузить фото, видео, аудио или видеокружок",
         )
-    media_url = await upload_media(user, session, filename, content_type, content, "group", group_id)
+    media_url = await upload_media(
+        user,
+        session,
+        filename,
+        content_type,
+        content,
+        "report",
+        group_id,
+    )
     await session.commit()
     return {
         "storage_url": media_url,
