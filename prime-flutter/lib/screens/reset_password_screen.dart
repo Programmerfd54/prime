@@ -13,34 +13,30 @@ import '../ui/components/app_inline_error.dart';
 import '../ui/components/app_password_field.dart';
 import '../ui/components/app_primary_button.dart';
 import '../ui/components/app_snackbar.dart';
-import '../ui/components/app_text_field.dart';
 import '../ui/components/auth/auth_presentation.dart';
 
 class ResetPasswordScreen extends StatefulWidget {
-  const ResetPasswordScreen({super.key, this.initialToken = ''});
+  const ResetPasswordScreen({
+    super.key,
+    required this.email,
+    required this.code,
+  });
 
-  final String initialToken;
+  final String email;
+  final String code;
 
   @override
   State<ResetPasswordScreen> createState() => _ResetPasswordScreenState();
 }
 
 class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
-  late final TextEditingController _token;
   final _password = TextEditingController();
   final _formKey = GlobalKey<FormState>();
   bool _loading = false;
   String? _error;
 
   @override
-  void initState() {
-    super.initState();
-    _token = TextEditingController(text: widget.initialToken);
-  }
-
-  @override
   void dispose() {
-    _token.dispose();
     _password.dispose();
     super.dispose();
   }
@@ -58,7 +54,8 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
     });
     try {
       await context.read<ApiClient>().resetPassword(
-            token: _token.text.trim(),
+            email: widget.email,
+            code: widget.code,
             newPassword: _password.text,
           );
       if (!mounted) return;
@@ -94,24 +91,13 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
               badge: 'Безопасность',
               title: 'Новый пароль',
               subtitle:
-                  'Введите код восстановления и надёжный новый пароль.',
+                  'Код подтверждён. Придумайте надёжный пароль для входа.',
             ),
             const SizedBox(height: AppSpacing.lg),
             AuthFormCard(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  AppTextField(
-                    controller: _token,
-                    label: 'Код восстановления',
-                    validator: (value) {
-                      if ((value ?? '').trim().length < 16) {
-                        return 'Введите код из письма или ответа сервера';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: AppSpacing.md),
                   AppPasswordField(
                     controller: _password,
                     showRequirements: true,

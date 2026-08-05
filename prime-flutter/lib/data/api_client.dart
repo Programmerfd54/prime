@@ -398,6 +398,13 @@ class ApiClient {
     return (r.data as Map<String, dynamic>)['available'] as bool? ?? false;
   }
 
+  Future<void> checkDisplayNameValid(String name) async {
+    await dio.get(
+      '/auth/display-name-valid',
+      queryParameters: {'name': name.trim()},
+    );
+  }
+
   Future<({bool available, bool pendingVerification})> checkEmailAvailable(
     String email,
   ) async {
@@ -465,12 +472,24 @@ class ApiClient {
     return r.data as Map<String, dynamic>;
   }
 
+  Future<void> verifyResetCode({
+    required String email,
+    required String code,
+  }) async {
+    await dio.post('/auth/verify-reset-code', data: {
+      'email': email.trim().toLowerCase(),
+      'code': code.trim(),
+    });
+  }
+
   Future<void> resetPassword({
-    required String token,
+    required String email,
+    required String code,
     required String newPassword,
   }) async {
     await dio.post('/auth/reset-password', data: {
-      'token': token.trim(),
+      'email': email.trim().toLowerCase(),
+      'code': code.trim(),
       'new_password': newPassword,
     });
   }

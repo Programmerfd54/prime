@@ -61,6 +61,8 @@ class _AppCodeFieldState extends State<AppCodeField> {
   @override
   Widget build(BuildContext context) {
     final code = widget.controller.text;
+    final compact = MediaQuery.sizeOf(context).width < 360;
+    final gap = compact ? 6.0 : AppSpacing.xs;
     return ListenableBuilder(
       listenable: _focus,
       builder: (context, _) {
@@ -70,7 +72,7 @@ class _AppCodeFieldState extends State<AppCodeField> {
             Row(
               children: [
                 for (var i = 0; i < widget.length; i++) ...[
-                  if (i > 0) const SizedBox(width: AppSpacing.xs),
+                  if (i > 0) SizedBox(width: gap),
                   Expanded(
                     child: _CodeCell(
                       digit: i < code.length ? code[i] : '',
@@ -78,6 +80,7 @@ class _AppCodeFieldState extends State<AppCodeField> {
                           (i == code.length ||
                               (i == widget.length - 1 &&
                                   code.length == widget.length)),
+                      compact: compact,
                     ),
                   ),
                 ],
@@ -132,10 +135,15 @@ class _AppCodeFieldState extends State<AppCodeField> {
 }
 
 class _CodeCell extends StatelessWidget {
-  const _CodeCell({required this.digit, required this.active});
+  const _CodeCell({
+    required this.digit,
+    required this.active,
+    this.compact = false,
+  });
 
   final String digit;
   final bool active;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -143,7 +151,7 @@ class _CodeCell extends StatelessWidget {
     final filled = digit.isNotEmpty;
     return AnimatedContainer(
       duration: AppDurations.fast,
-      height: 60,
+      height: compact ? 48 : 52,
       alignment: Alignment.center,
       decoration: BoxDecoration(
         color: filled ? p.brandContainer : p.surfaceSoft,
@@ -157,6 +165,7 @@ class _CodeCell extends StatelessWidget {
       child: Text(
         digit,
         style: AppTypography.title1.copyWith(
+          fontSize: compact ? 16 : 17,
           color: filled ? p.ink : p.inkMuted,
           fontFeatures: const [FontFeature.tabularFigures()],
         ),

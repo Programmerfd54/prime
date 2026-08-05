@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../core/auth/nickname_suggestions.dart';
 import '../core/errors/failure_mapper.dart';
 import '../core/profile/profile_preferences.dart';
 import '../data/api_client.dart';
@@ -119,8 +120,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         ok = false;
       }
       final nickname = _nicknameCtrl.text.trim().toLowerCase();
-      if (nickname.length < 3) {
-        _nicknameError = 'Никнейм минимум 3 символа';
+      if (!isValidNicknameFormat(nickname)) {
+        _nicknameError = nicknameFormatError;
         ok = false;
       }
       final words = _aboutCtrl.text

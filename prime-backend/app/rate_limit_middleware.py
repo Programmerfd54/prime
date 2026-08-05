@@ -18,6 +18,7 @@ from .security import decode_access_token_claims
 _SKIP_PREFIXES = (
     "/api/v1/health",
     "/api/v1/auth/",
+    "/unsubscribe/",
     "/docs",
     "/redoc",
     "/openapi.json",

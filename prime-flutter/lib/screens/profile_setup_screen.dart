@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
+import '../core/auth/nickname_suggestions.dart';
 import '../core/errors/failure_mapper.dart';
 import '../data/api_client.dart';
 import '../design/haptics.dart';
@@ -163,8 +164,8 @@ class _ProfileSetupScreenState extends State<ProfileSetupScreen> {
   String? _validateNickname(String? value) {
     final nickname = (value ?? '').trim().replaceFirst(RegExp(r'^@'), '');
     if (nickname.isEmpty) return 'Укажите никнейм';
-    if (!RegExp(r'^[a-z0-9_][a-z0-9_.-]{2,31}$').hasMatch(nickname)) {
-      return '3–32 символа: a-z, 0-9, точка, дефис или _';
+    if (!isValidNicknameFormat(nickname)) {
+      return nicknameFormatError;
     }
     return null;
   }

@@ -6,8 +6,8 @@ import hashlib
 from dataclasses import dataclass
 from enum import Enum
 
-from .lexicon import ALLOWLIST, DETECTOR_VERSION, LEXICON_ALL, LEXICON_EN, LEXICON_RU, POLICY_VERSION
-from .normalize import compact, normalize_text, tokenize
+from .lexicon import ALLOWLIST, DETECTOR_VERSION, LEXICON_ALL, LEXICON_EN, LEXICON_RU, LEXICON_RU_CYRL, POLICY_VERSION
+from .normalize import compact, normalize_text, tokenize, tokenize_cyrillic
 
 
 class ConfidenceBand(str, Enum):
@@ -53,8 +53,16 @@ def _compact_match(text: str, lexicon: frozenset[str]) -> bool:
     for term in lexicon:
         if term in ALLOWLIST:
             continue
-        if term in c and len(term) >= 4:
+        if term in c and len(term) >= 3:
             return True
+    cyrillic = tokenize_cyrillic(text)
+    if cyrillic:
+        joined = "".join(cyrillic)
+        for term in LEXICON_RU_CYRL:
+            if term in ALLOWLIST:
+                continue
+            if term in joined and len(term) >= 3:
+                return True
     return False
 
 
@@ -71,8 +79,10 @@ def classify_text(text: str) -> ClassificationResult:
         )
 
     tokens = tokenize(text)
+    cyrillic_tokens = tokenize_cyrillic(text)
     en_hits = sum(1 for t in tokens if _match_token(t, LEXICON_EN))
     ru_hits = sum(1 for t in tokens if _match_token(t, LEXICON_RU))
+    ru_hits += sum(1 for t in cyrillic_tokens if _match_token(t, LEXICON_RU_CYRL))
 
     if en_hits == 0 and ru_hits == 0:
         if _compact_match(text, LEXICON_ALL):

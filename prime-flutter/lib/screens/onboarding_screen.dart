@@ -123,6 +123,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     };
   }
 
+  bool get _showContinueButton => switch (_page) {
+        2 || 6 || 7 => true,
+        _ => false,
+      };
+
   Future<void> _next() async {
     if (!_canContinue) return;
     Analytics.instance.onboardingStepCompleted(_page);
@@ -236,9 +241,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       ),
                       _StepScroll(
                         child: _StepContent(
-                          title: 'Один день — легко.\n30 дней — сложнее',
+                          title: 'Ваш темп — честный разбор',
                           body:
-                              'Большинство бросает не из-за лени, а из-за потери ритма.',
+                              'Ответьте на два вопроса о прошлом опыте — так мы покажем, где обычно ломается ритм.',
                           extra: Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
@@ -280,7 +285,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       ),
                       _StepScroll(
                         child: _StepContent(
-                          title: 'Как PRIME *удерживает* ритм',
+                          title: 'Как ПРАЙМ удерживает ритм',
                           body:
                               'Не через контроль — через систему из трёх простых опор и мягких правил.',
                           extra: OnboardingSoftSystemPreview(
@@ -290,7 +295,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       ),
                       _StepScroll(
                         child: _StepContent(
-                          title: 'Шестеро — *достаточно*, чтобы не пропасть',
+                          title: 'Шестеро — достаточно, чтобы не пропасть',
+                          titleAccent: 'достаточно',
                           body:
                               'Не контроль — поддержка, когда хочется исчезнуть после первого пропуска.',
                           extra: const OnboardingTeamRing(),
@@ -298,7 +304,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       ),
                       _StepScroll(
                         child: _StepContent(
-                          title: 'Один *взгляд* — весь прогресс',
+                          title: 'Один взгляд — весь прогресс',
+                          titleAccent: 'взгляд',
                           body:
                               'Серия, темп и Праймы — без сравнения с другими и токсичных рейтингов.',
                           extra: OnboardingMetricsPreview(
@@ -309,7 +316,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       ),
                       _StepScroll(
                         child: _StepContent(
-                          title: 'Что *важно* прямо сейчас?',
+                          title: 'Что важно прямо сейчас?',
+                          titleAccent: 'важно',
                           body: 'До трёх целей — подберём программу под вас.',
                           extra: OnboardingGoalPicker(
                             selected: _selectedGoals,
@@ -369,12 +377,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                         ),
                       ),
                       const SizedBox(height: AppSpacing.md),
-                      AppPrimaryButton(
-                        label: _page == _stepCount - 1
-                            ? 'Создать аккаунт'
-                            : AppCopy.continueLabel,
-                        onPressed: _canContinue ? _next : null,
-                      ),
+                      if (_showContinueButton)
+                        AppPrimaryButton(
+                          label: _page == _stepCount - 1
+                              ? 'Создать аккаунт'
+                              : AppCopy.continueLabel,
+                          onPressed: _canContinue ? _next : null,
+                        ),
                     ],
                   ),
                 ),
@@ -410,11 +419,13 @@ class _StepContent extends StatelessWidget {
   const _StepContent({
     required this.title,
     required this.body,
+    this.titleAccent,
     this.extra,
   });
 
   final String title;
   final String body;
+  final String? titleAccent;
   final Widget? extra;
 
   @override
@@ -422,10 +433,7 @@ class _StepContent extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        AppTypography.accentText(
-          title,
-          style: AppTypography.display.copyWith(fontSize: 30),
-        ),
+        _OnboardingTitle(title: title, accent: titleAccent),
         const SizedBox(height: AppSpacing.sm),
         Text(body, style: AppTypography.bodySecondary),
         if (extra != null) ...[
@@ -433,6 +441,42 @@ class _StepContent extends StatelessWidget {
           extra!,
         ],
       ],
+    );
+  }
+}
+
+class _OnboardingTitle extends StatelessWidget {
+  const _OnboardingTitle({required this.title, this.accent});
+
+  final String title;
+  final String? accent;
+
+  @override
+  Widget build(BuildContext context) {
+    final baseStyle = AppTypography.display.copyWith(
+      fontSize: 30,
+      color: AppColors.textPrimary,
+    );
+    final accentWord = accent;
+    if (accentWord == null || !title.contains(accentWord)) {
+      return Text(title, style: baseStyle);
+    }
+    final index = title.indexOf(accentWord);
+    return RichText(
+      text: TextSpan(
+        style: baseStyle,
+        children: [
+          TextSpan(text: title.substring(0, index)),
+          TextSpan(
+            text: accentWord,
+            style: baseStyle.copyWith(
+              color: AppColors.primarySoft,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          TextSpan(text: title.substring(index + accentWord.length)),
+        ],
+      ),
     );
   }
 }

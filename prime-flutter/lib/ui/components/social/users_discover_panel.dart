@@ -399,7 +399,7 @@ class _UsersDiscoverPanelState extends State<UsersDiscoverPanel> {
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20),
           child: Text(
-            'Участники PRIME',
+            'Участники ПРАЙМ',
             style: KitTypography.sectionTitle.copyWith(color: p.ink),
           ),
         ),
@@ -483,7 +483,7 @@ class _UsersDiscoverPanelState extends State<UsersDiscoverPanel> {
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20),
           child: Text(
-            'Участники PRIME',
+            'Участники ПРАЙМ',
             style: KitTypography.sectionTitle.copyWith(color: p.ink),
           ),
         ),

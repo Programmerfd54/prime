@@ -8,7 +8,6 @@ from .email_unsubscribe import (
     LETTER_MARKETING,
     LETTER_PASSWORD_RESET,
     LETTER_SIGNUP_VERIFICATION,
-    build_unsubscribe_url,
     letter_label,
 )
 
@@ -27,17 +26,12 @@ def _support_contact_email() -> str:
 
 def _footer_lines(
     *,
-    user_id: str,
     email: str,
     letter: str,
     transactional: bool,
+    unsubscribe_url: str,
 ) -> tuple[str, str]:
     """Plain + HTML footer with marketing unsubscribe."""
-    unsubscribe_url = build_unsubscribe_url(
-        user_id=user_id,
-        email=email,
-        letter=LETTER_MARKETING,
-    )
     letter_name = letter_label(letter)
     support_email = _support_contact_email()
     if transactional:
@@ -119,18 +113,18 @@ def build_verification_email(
     name: str,
     code: str,
     ttl_minutes: int,
-    user_id: str,
     email: str,
+    unsubscribe_url: str,
 ) -> tuple[str, str, str, str | None]:
     """Returns subject, text, html, list-unsubscribe URL."""
     greeting = f"{name}, здравствуйте!" if name.strip() else "Здравствуйте!"
     subject = "Подтверждение регистрации в ПРАЙМ"
     spaced_code = " ".join(code)
     footer_plain, footer_html = _footer_lines(
-        user_id=user_id,
         email=email,
         letter=LETTER_SIGNUP_VERIFICATION,
         transactional=True,
+        unsubscribe_url=unsubscribe_url,
     )
     text_body = (
         f"{greeting}\n\n"
@@ -157,7 +151,7 @@ def build_verification_email(
               <td style="padding:8px 32px 8px 32px;">
                 <div style="background:linear-gradient(135deg,{BRAND_PURPLE},{BRAND_DEEP});border-radius:18px;padding:24px;text-align:center;">
                   <div style="font-size:12px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.82);margin-bottom:8px;">Ваш код</div>
-                  <div style="font-size:36px;font-weight:800;letter-spacing:10px;color:#FFFFFF;">{spaced_code}</div>
+                  <div style="font-size:28px;font-weight:800;letter-spacing:6px;color:#FFFFFF;white-space:nowrap;word-break:keep-all;">{spaced_code}</div>
                 </div>
               </td>
             </tr>
@@ -188,36 +182,35 @@ def build_verification_email(
         body_rows=body_rows,
         footer_html=footer_html,
     )
-    unsubscribe_url = build_unsubscribe_url(
-        user_id=user_id,
-        email=email,
-        letter=LETTER_MARKETING,
-    )
     return subject, text_body, html_body, unsubscribe_url
 
 
 def build_password_reset_email(
     *,
     name: str,
-    token: str,
+    code: str,
     ttl_minutes: int,
-    user_id: str,
     email: str,
+    unsubscribe_url: str,
 ) -> tuple[str, str, str, str | None]:
     greeting = f"{name}, здравствуйте!" if name.strip() else "Здравствуйте!"
     subject = "Восстановление пароля в ПРАЙМ"
+    spaced_code = " ".join(code)
     footer_plain, footer_html = _footer_lines(
-        user_id=user_id,
         email=email,
         letter=LETTER_PASSWORD_RESET,
         transactional=True,
+        unsubscribe_url=unsubscribe_url,
     )
     text_body = (
         f"{greeting}\n\n"
         "Мы получили запрос на смену пароля в ПРАЙМ.\n\n"
-        f"{token}\n\n"
-        f"Введите его в приложении на экране «Новый пароль». Код действует {ttl_minutes} минут.\n\n"
-        "Если вы не запрашивали смену пароля, просто удалите это письмо."
+        f"Код для приложения: {code}\n\n"
+        "Как ввести код:\n"
+        "1. Откройте приложение ПРАЙМ\n"
+        "2. На экране «Код восстановления» введите 6 цифр из письма\n"
+        "3. Нажмите «Подтвердить» и задайте новый пароль\n\n"
+        f"Код действует {ttl_minutes} минут. Если вы не запрашивали смену пароля, просто удалите это письмо."
         f"{footer_plain}"
     )
     body_rows = f"""
@@ -230,12 +223,30 @@ def build_password_reset_email(
               </td>
             </tr>
             <tr>
-              <td style="padding:8px 32px 24px 32px;">
-                <div style="background:{BRAND_MIST};border:1px solid #E8E4F0;border-radius:16px;padding:20px;">
-                  <div style="font-size:12px;letter-spacing:1px;text-transform:uppercase;color:{INK_SOFT};margin-bottom:8px;">Код восстановления</div>
-                  <div style="font-size:18px;font-weight:700;letter-spacing:1px;color:{INK};word-break:break-all;">{escape(token)}</div>
+              <td style="padding:8px 32px 8px 32px;">
+                <div style="background:linear-gradient(135deg,{BRAND_PURPLE},{BRAND_DEEP});border-radius:18px;padding:24px;text-align:center;">
+                  <div style="font-size:12px;letter-spacing:1px;text-transform:uppercase;color:rgba(255,255,255,0.82);margin-bottom:8px;">Код восстановления</div>
+                  <div style="font-size:28px;font-weight:800;letter-spacing:6px;color:#FFFFFF;white-space:nowrap;word-break:keep-all;">{spaced_code}</div>
                 </div>
-                <p style="margin:16px 0 0 0;font-size:14px;line-height:1.65;color:{INK_MUTED};">
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:8px 32px 8px 32px;">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:{BRAND_MIST};border-radius:16px;">
+                  <tr>
+                    <td style="padding:18px 20px;font-size:14px;line-height:1.7;color:{INK_MUTED};">
+                      <strong style="color:{INK};">Как восстановить пароль:</strong><br/>
+                      1. Откройте приложение ПРАЙМ<br/>
+                      2. Введите 6 цифр из письма<br/>
+                      3. Подтвердите код и задайте новый пароль
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:8px 32px 24px 32px;">
+                <p style="margin:0;font-size:14px;line-height:1.65;color:{INK_MUTED};">
                   Код действует {ttl_minutes} мин. Если запрос делали не вы — удалите письмо.
                 </p>
               </td>
@@ -244,10 +255,5 @@ def build_password_reset_email(
         preheader="Код для восстановления пароля в ПРАЙМ.",
         body_rows=body_rows,
         footer_html=footer_html,
-    )
-    unsubscribe_url = build_unsubscribe_url(
-        user_id=user_id,
-        email=email,
-        letter=LETTER_MARKETING,
     )
     return subject, text_body, html_body, unsubscribe_url

@@ -64,6 +64,34 @@ async def test_nickname_available_without_auth() -> None:
 
 
 @pytest.mark.asyncio
+async def test_display_name_valid_without_auth() -> None:
+    engine, session = await make_session()
+    try:
+        async def override_get_session():
+            yield session
+
+        app.dependency_overrides[get_session] = override_get_session
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            ok = await client.get(
+                "/api/v1/auth/display-name-valid",
+                params={"name": "Даниил"},
+            )
+            bad = await client.get(
+                "/api/v1/auth/display-name-valid",
+                params={"name": "хуй"},
+            )
+
+        assert ok.status_code == 200
+        assert ok.json()["available"] is True
+        assert bad.status_code == 400
+    finally:
+        app.dependency_overrides.clear()
+        await session.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_email_available_without_auth() -> None:
     engine, session = await make_session()
     try:

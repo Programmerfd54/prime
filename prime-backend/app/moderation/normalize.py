@@ -8,6 +8,7 @@ import unicodedata
 _ZERO_WIDTH = re.compile(r"[\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]")
 _REPEAT = re.compile(r"(.)\1{3,}")
 _SPLITTER = re.compile(r"[\s.\-_·•*,!@#$%^&*()+={}\[\]|\\/:;\"'<>?`~]+")
+_CYRILLIC = re.compile(r"[\u0401\u0451\u0410-\u044f\u0400-\u04ff]")
 
 # Latin letters that look like Cyrillic and vice versa.
 _HOMOGLYPHS = str.maketrans(
@@ -63,6 +64,16 @@ def tokenize(value: str) -> list[str]:
     if not normalized:
         return []
     return normalized.split(" ")
+
+
+def tokenize_cyrillic(value: str) -> list[str]:
+    """Tokenize without homoglyph folding so Cyrillic lexicon terms match."""
+    text = unicodedata.normalize("NFKC", value or "")
+    text = _ZERO_WIDTH.sub("", text)
+    text = text.lower()
+    text = _SPLITTER.sub(" ", text)
+    text = _REPEAT.sub(r"\1\1", text)
+    return [token for token in text.split() if _CYRILLIC.search(token)]
 
 
 def compact(value: str) -> str:

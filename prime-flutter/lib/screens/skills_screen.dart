@@ -702,42 +702,44 @@ class _HowItWorksCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: AppSpacing.sm),
-          Row(
-            children: [
-              for (var i = 0; i < _steps.length; i++) ...[
-                if (i > 0)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
-                    child: Icon(
-                      Icons.chevron_right_rounded,
-                      size: 16,
-                      color: p.inkMuted,
-                    ),
-                  ),
-                Expanded(
-                  child: Column(
-                    children: [
-                      Icon(
-                        _steps[i].$1,
-                        size: 22,
-                        color: p.brandSoft,
-                      ),
-                      const SizedBox(height: AppSpacing.xxs),
-                      Text(
-                        _steps[i].$2,
-                        textAlign: TextAlign.center,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: AppTypography.caption.copyWith(
-                          fontWeight: FontWeight.w600,
-                          height: 1.25,
-                        ),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final narrow = constraints.maxWidth < 360;
+              if (narrow) {
+                return Column(
+                  children: [
+                    for (var i = 0; i < _steps.length; i++) ...[
+                      if (i > 0) const SizedBox(height: AppSpacing.sm),
+                      _HowItWorksStep(
+                        icon: _steps[i].$1,
+                        label: _steps[i].$2,
                       ),
                     ],
-                  ),
-                ),
-              ],
-            ],
+                  ],
+                );
+              }
+              return Row(
+                children: [
+                  for (var i = 0; i < _steps.length; i++) ...[
+                    if (i > 0)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        child: Icon(
+                          Icons.chevron_right_rounded,
+                          size: 16,
+                          color: p.inkMuted,
+                        ),
+                      ),
+                    Expanded(
+                      child: _HowItWorksStep(
+                        icon: _steps[i].$1,
+                        label: _steps[i].$2,
+                      ),
+                    ),
+                  ],
+                ],
+              );
+            },
           ),
           const SizedBox(height: AppSpacing.xs),
           Text(
@@ -748,6 +750,34 @@ class _HowItWorksCard extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _HowItWorksStep extends StatelessWidget {
+  const _HowItWorksStep({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.prime;
+    return Column(
+      children: [
+        Icon(icon, size: 22, color: p.brandSoft),
+        const SizedBox(height: AppSpacing.xxs),
+        Text(
+          label,
+          textAlign: TextAlign.center,
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
+          style: AppTypography.caption.copyWith(
+            fontWeight: FontWeight.w600,
+            height: 1.25,
+          ),
+        ),
+      ],
     );
   }
 }

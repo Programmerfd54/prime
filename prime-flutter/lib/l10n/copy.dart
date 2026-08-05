@@ -43,7 +43,7 @@ abstract final class AppCopy {
       'Пока ждёте: перечитайте «О себе» и подготовьте, как будете отчитываться каждый день.';
 
   // Team day
-  static const dayClosesTogether = 'День закрывается вместе';
+  static const dayClosesTogether = 'Закрываем день вместе';
   static const primesForTeamDay = 'Прайм — за полный день команды';
   static const reportSavedStreakSafe =
       'Ваш отчёт сохранён — серия не сгорит';

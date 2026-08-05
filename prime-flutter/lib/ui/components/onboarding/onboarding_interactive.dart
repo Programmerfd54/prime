@@ -199,6 +199,14 @@ class OnboardingExperienceCard extends StatelessWidget {
                 ),
             ],
           ),
+          const SizedBox(height: AppSpacing.sm),
+          Text(
+            'Это разные вопросы: можно начать один раз и бросать несколько — так бывает у многих.',
+            style: AppTypography.caption.copyWith(
+              color: AppColors.textMuted,
+              height: 1.35,
+            ),
+          ),
         ],
       ),
     );
@@ -258,7 +266,10 @@ class OnboardingInsightCard extends StatelessWidget {
                   height: 1.45,
                 ),
                 children: [
-                  TextSpan(text: 'Вы начинали $_attemptLabel и бросали $_quitLabel. '),
+                  TextSpan(text: 'Вы начинали $_attemptLabel и бросали $_quitLabel — '),
+                  const TextSpan(
+                    text: 'это два разных измерения опыта. ',
+                  ),
                   const TextSpan(text: 'Обычно ритм ломается на '),
                   TextSpan(
                     text: '$_breakDay-й день',
@@ -385,7 +396,7 @@ class OnboardingSoftSystemPreview extends StatelessWidget {
         ),
         const SizedBox(height: AppSpacing.md),
         Text(
-          'Три опоры PRIME',
+          'Три опоры ПРАЙМ',
           style: AppTypography.caption.copyWith(
             color: AppColors.primarySoft,
             fontWeight: FontWeight.w700,

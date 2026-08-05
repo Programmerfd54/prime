@@ -17,8 +17,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from app.config import get_settings  # noqa: E402
+from app.db import SessionLocal, create_db_schema  # noqa: E402
 from app.email_templates import build_verification_email  # noqa: E402
+from app.email_unsubscribe import LETTER_MARKETING, create_unsubscribe_link  # noqa: E402
 from app.mailer import send_email, smtp_configured  # noqa: E402
+from app.models import User  # noqa: E402
+from app.security import hash_password  # noqa: E402
 
 
 async def main() -> int:
@@ -30,12 +34,30 @@ async def main() -> int:
         print("SMTP is not configured. Set SMTP_HOST, SMTP_USERNAME, MAIL_FROM in .env", file=sys.stderr)
         return 1
     settings = get_settings()
-    subject, text, html, unsubscribe_url = build_verification_email(
+    await create_db_schema()
+    async with SessionLocal() as session:
+        user = await session.get(User, "00000000-0000-0000-0000-000000000001")
+        if user is None:
+            user = User(
+                id="00000000-0000-0000-0000-000000000001",
+                email=recipient,
+                password_hash=hash_password("unused"),
+                name="Тест",
+                nickname="testmail",
+            )
+            session.add(user)
+            await session.commit()
+        unsubscribe_url = await create_unsubscribe_link(
+            session,
+            user_id=user.id,
+            letter=LETTER_MARKETING,
+        )
+    subject, text, html, _ = build_verification_email(
         name="Тест",
         code="123456",
         ttl_minutes=15,
-        user_id="00000000-0000-0000-0000-000000000001",
         email=recipient,
+        unsubscribe_url=unsubscribe_url,
     )
     ok = await send_email(
         to=recipient,

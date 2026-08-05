@@ -43,6 +43,7 @@ def _auth_hint(route: APIRoute) -> str:
         "/api/v1/auth/resend-verification",
         "/api/v1/auth/login",
         "/api/v1/auth/forgot-password",
+        "/api/v1/auth/verify-reset-code",
         "/api/v1/auth/reset-password",
     }
     if path in public_auth:

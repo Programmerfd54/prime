@@ -36,7 +36,7 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
     name: str = Field(min_length=1, max_length=120)
-    nickname: str = Field(min_length=3, max_length=33)
+    nickname: str = Field(min_length=3, max_length=20)
 
     @field_validator("email")
     @classmethod
@@ -222,7 +222,7 @@ class UpdateEmailPreferencesRequest(BaseModel):
 
 class UpdateUserRequest(BaseModel):
     name: str | None = Field(default=None, max_length=120)
-    nickname: str | None = Field(default=None, max_length=33)
+    nickname: str | None = Field(default=None, max_length=20)
     about: str | None = Field(default=None, max_length=4000)
     photo_url: str | None = Field(default=None, max_length=500)
     city: str | None = Field(default=None, max_length=120)
@@ -392,14 +392,41 @@ class ForgotPasswordRequest(BaseModel):
         return value.strip().lower()
 
 
+class VerifyResetCodeRequest(BaseModel):
+    email: EmailStr
+    code: str = Field(min_length=6, max_length=6)
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @field_validator("code")
+    @classmethod
+    def normalize_code(cls, value: str) -> str:
+        code = value.strip()
+        if not code.isdigit():
+            raise ValueError("Код должен состоять из 6 цифр")
+        return code
+
+
 class ResetPasswordRequest(BaseModel):
-    token: str = Field(min_length=16, max_length=128)
+    email: EmailStr
+    code: str = Field(min_length=6, max_length=6)
     new_password: str = Field(min_length=8, max_length=128)
 
-    @field_validator("token")
+    @field_validator("email")
     @classmethod
-    def strip_token(cls, value: str) -> str:
-        return value.strip()
+    def normalize_email(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @field_validator("code")
+    @classmethod
+    def normalize_code(cls, value: str) -> str:
+        code = value.strip()
+        if not code.isdigit():
+            raise ValueError("Код должен состоять из 6 цифр")
+        return code
 
     @field_validator("new_password")
     @classmethod

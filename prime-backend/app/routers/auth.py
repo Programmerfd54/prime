@@ -15,9 +15,15 @@ from ..audit import record_audit
 from ..db import get_session
 from ..deps import get_current_auth_session
 from ..email_templates import build_password_reset_email, build_verification_email
+from ..email_unsubscribe import LETTER_MARKETING, create_unsubscribe_link
 from ..mailer import public_list_unsubscribe_url, send_email
 from ..models import AuthSession, EmailVerificationCode, PasswordResetToken, User, utcnow
-from ..nicknames import validate_nickname
+from ..nicknames import (
+    DISPLAY_NAME_PROFANITY_ERROR,
+    NICKNAME_PROFANITY_ERROR,
+    validate_nickname,
+)
+from ..moderation.profanity import classify_text
 from ..rate_limit import enforce as enforce_rate_limit
 from ..rate_limit import record_failure as record_rate_limit_failure
 from ..schemas import (
@@ -32,6 +38,7 @@ from ..schemas import (
     ResetPasswordRequest,
     TokenResponse,
     VerifyEmailRequest,
+    VerifyResetCodeRequest,
 )
 from ..security import hash_password, verify_password
 from ..sessions import hash_refresh_token, issue_session, revoke_session, revoke_user_sessions
@@ -45,6 +52,33 @@ _login_failures: dict[str, list[float]] = {}
 _verification_failures: dict[str, list[float]] = {}
 def _fingerprint(value: str) -> str:
     return hashlib.sha256(value.strip().lower().encode("utf-8")).hexdigest()[:12]
+
+
+def _validate_nickname_for_signup(raw: str) -> str:
+    nickname = validate_nickname(raw)
+    result = classify_text(nickname)
+    if not result.allowed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=NICKNAME_PROFANITY_ERROR,
+        )
+    return nickname
+
+
+def _validate_display_name_for_signup(raw: str) -> str:
+    name = raw.strip()
+    if not name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Введите имя",
+        )
+    result = classify_text(name)
+    if not result.allowed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=DISPLAY_NAME_PROFANITY_ERROR,
+        )
+    return name
 
 
 def _login_rate_keys(request: Request, email: str, prefix: str = "auth") -> tuple[str, str]:
@@ -172,12 +206,17 @@ async def _issue_verification_code(
     )
     await session.commit()
 
-    subject, text_body, html_body, unsubscribe_url = build_verification_email(
+    unsubscribe_url = await create_unsubscribe_link(
+        session,
+        user_id=user.id,
+        letter=LETTER_MARKETING,
+    )
+    subject, text_body, html_body, _ = build_verification_email(
         name=user.name,
         code=code,
         ttl_minutes=settings.email_verification_code_ttl_minutes,
-        user_id=user.id,
         email=user.email,
+        unsubscribe_url=unsubscribe_url,
     )
     background_tasks.add_task(
         send_email,
@@ -230,7 +269,9 @@ async def nickname_available(
             detail="Слишком много запросов. Попробуйте позже.",
         )
     try:
-        normalized = validate_nickname(nickname)
+        normalized = _validate_nickname_for_signup(nickname)
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -248,6 +289,27 @@ async def nickname_available(
         ):
             return NicknameAvailabilityResponse(available=True)
     return NicknameAvailabilityResponse(available=False)
+
+
+@router.get("/display-name-valid", response_model=NicknameAvailabilityResponse)
+async def display_name_valid(
+    name: str,
+    session: AsyncSession = Depends(get_session),
+    request: Request = None,
+) -> NicknameAvailabilityResponse:
+    """Public pre-check for signup display names — no auth required."""
+    settings = get_settings()
+    if request is not None and settings.auth_login_rate_limit_enabled:
+        client = request.client.host if request.client else "unknown"
+        await enforce_rate_limit(
+            session,
+            f"auth:lookup:ip:{client}",
+            limit=60,
+            window_seconds=settings.auth_login_rate_limit_window_seconds,
+            detail="Слишком много запросов. Попробуйте позже.",
+        )
+    _validate_display_name_for_signup(name)
+    return NicknameAvailabilityResponse(available=True)
 
 
 @router.get("/email-available", response_model=EmailAvailabilityResponse)
@@ -315,7 +377,8 @@ async def register(
             detail="Аккаунт с такой почтой уже существует",
         )
 
-    nickname = validate_nickname(payload.nickname)
+    nickname = _validate_nickname_for_signup(payload.nickname)
+    display_name = _validate_display_name_for_signup(payload.name)
     nickname_owner = await session.scalar(select(User).where(User.nickname == nickname))
     if nickname_owner is not None and (
         existing is None or nickname_owner.id != existing.id
@@ -329,7 +392,7 @@ async def register(
         user = User(
             email=payload.email,
             password_hash=hash_password(payload.password),
-            name=payload.name.strip(),
+            name=display_name,
             nickname=nickname,
         )
     else:
@@ -337,7 +400,7 @@ async def register(
         # signup be restarted instead of dead-ending on a 409.
         user = existing
         user.password_hash = hash_password(payload.password)
-        user.name = payload.name.strip()
+        user.name = display_name
         user.nickname = nickname
     session.add(user)
     try:
@@ -572,8 +635,72 @@ async def login(
     return tokens
 
 
-def _hash_reset_token(token: str) -> str:
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+def _hash_reset_code(user_id: str, code: str) -> str:
+    """Keyed digest: a leaked table cannot be brute-forced without the secret."""
+    settings = get_settings()
+    return hmac.new(
+        settings.jwt_secret_key.encode("utf-8"),
+        f"reset:{user_id}:{code}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+async def _lookup_active_reset_token(
+    session: AsyncSession,
+    user_id: str,
+) -> PasswordResetToken | None:
+    row = await session.scalar(
+        select(PasswordResetToken)
+        .where(
+            PasswordResetToken.user_id == user_id,
+            PasswordResetToken.used_at.is_(None),
+        )
+        .order_by(PasswordResetToken.created_at.desc())
+        .limit(1)
+    )
+    if row is None or _as_utc(row.expires_at) < utcnow():
+        return None
+    return row
+
+
+async def _seconds_until_password_reset_allowed(session: AsyncSession, user_id: str) -> int:
+    settings = get_settings()
+    cooldown = settings.password_reset_resend_cooldown_seconds
+    if cooldown <= 0:
+        return 0
+    last_sent_at = await session.scalar(
+        select(func.max(PasswordResetToken.created_at)).where(
+            PasswordResetToken.user_id == user_id
+        )
+    )
+    if last_sent_at is None:
+        return 0
+    elapsed = (utcnow() - _as_utc(last_sent_at)).total_seconds()
+    return max(0, math.ceil(cooldown - elapsed))
+
+
+async def _validate_reset_code(
+    session: AsyncSession,
+    email: str,
+    code: str,
+) -> tuple[User, PasswordResetToken]:
+    invalid = HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Код восстановления недействителен или истёк",
+    )
+    user = await session.scalar(select(User).where(User.email == email.strip().lower()))
+    if user is None:
+        raise invalid
+    row = await _lookup_active_reset_token(session, user.id)
+    if row is None:
+        raise invalid
+    expected = _hash_reset_code(user.id, code)
+    if not hmac.compare_digest(row.token_hash, expected):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Неверный код восстановления",
+        )
+    return user, row
 
 
 @router.post("/forgot-password")
@@ -585,6 +712,24 @@ async def forgot_password(
 ) -> dict:
     """Always returns the same shape to avoid email enumeration."""
     settings = get_settings()
+    response: dict = {
+        "status": "ok",
+        "message": (
+            "Если аккаунт с этой почтой существует, "
+            "используйте код восстановления для смены пароля."
+        ),
+        "resend_available_in_seconds": settings.password_reset_resend_cooldown_seconds,
+        "code_ttl_minutes": settings.password_reset_token_ttl_minutes,
+    }
+    user = await session.scalar(select(User).where(User.email == payload.email))
+    if user is None:
+        return response
+
+    wait_seconds = await _seconds_until_password_reset_allowed(session, user.id)
+    if wait_seconds > 0:
+        response["resend_available_in_seconds"] = wait_seconds
+        return response
+
     if request is not None:
         for key in _login_rate_keys(request, payload.email, "reset"):
             await enforce_rate_limit(
@@ -594,38 +739,37 @@ async def forgot_password(
                 window_seconds=settings.password_reset_rate_limit_window_seconds,
                 detail="Слишком много запросов. Попробуйте позже.",
             )
-        await _record_rate_limit_keys(
-            session,
-            _login_rate_keys(request, payload.email, "reset"),
-            window_seconds=settings.password_reset_rate_limit_window_seconds,
-        )
-    response: dict = {
-        "status": "ok",
-        "message": (
-            "Если аккаунт с этой почтой существует, "
-            "используйте код восстановления для смены пароля."
-        ),
-    }
-    user = await session.scalar(select(User).where(User.email == payload.email))
-    if user is None:
-        return response
 
-    raw_token = secrets.token_urlsafe(32)
-    expires_at = utcnow() + timedelta(minutes=settings.password_reset_token_ttl_minutes)
+    now = utcnow()
+    await session.execute(
+        update(PasswordResetToken)
+        .where(
+            PasswordResetToken.user_id == user.id,
+            PasswordResetToken.used_at.is_(None),
+        )
+        .values(used_at=now)
+    )
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    expires_at = now + timedelta(minutes=settings.password_reset_token_ttl_minutes)
     session.add(
         PasswordResetToken(
             user_id=user.id,
-            token_hash=_hash_reset_token(raw_token),
+            token_hash=_hash_reset_code(user.id, code),
             expires_at=expires_at,
         )
     )
     await session.commit()
-    subject, text_body, html_body, unsubscribe_url = build_password_reset_email(
-        name=user.name,
-        token=raw_token,
-        ttl_minutes=settings.password_reset_token_ttl_minutes,
+    unsubscribe_url = await create_unsubscribe_link(
+        session,
         user_id=user.id,
+        letter=LETTER_MARKETING,
+    )
+    subject, text_body, html_body, _ = build_password_reset_email(
+        name=user.name,
+        code=code,
+        ttl_minutes=settings.password_reset_token_ttl_minutes,
         email=user.email,
+        unsubscribe_url=unsubscribe_url,
     )
     if background_tasks is not None:
         background_tasks.add_task(
@@ -644,7 +788,38 @@ async def forgot_password(
             "delivery": "email",
         },
     )
+    if request is not None:
+        await _record_rate_limit_keys(
+            session,
+            _login_rate_keys(request, payload.email, "reset"),
+            window_seconds=settings.password_reset_rate_limit_window_seconds,
+        )
     return response
+
+
+@router.post("/verify-reset-code")
+async def verify_reset_code(
+    payload: VerifyResetCodeRequest,
+    session: AsyncSession = Depends(get_session),
+    request: Request = None,
+) -> dict:
+    settings = get_settings()
+    if request is not None:
+        for key in _login_rate_keys(request, payload.email, "reset-verify"):
+            await enforce_rate_limit(
+                session,
+                key,
+                limit=settings.password_reset_rate_limit_attempts,
+                window_seconds=settings.password_reset_rate_limit_window_seconds,
+                detail="Слишком много запросов. Попробуйте позже.",
+            )
+        await _record_rate_limit_keys(
+            session,
+            _login_rate_keys(request, payload.email, "reset-verify"),
+            window_seconds=settings.password_reset_rate_limit_window_seconds,
+        )
+    await _validate_reset_code(session, payload.email, payload.code)
+    return {"valid": True}
 
 
 @router.post("/reset-password")
@@ -655,7 +830,7 @@ async def reset_password(
 ) -> dict:
     settings = get_settings()
     if request is not None:
-        for key in _login_rate_keys(request, payload.token, "reset-token"):
+        for key in _login_rate_keys(request, payload.email, "reset-token"):
             await enforce_rate_limit(
                 session,
                 key,
@@ -665,29 +840,11 @@ async def reset_password(
             )
         await _record_rate_limit_keys(
             session,
-            _login_rate_keys(request, payload.token, "reset-token"),
+            _login_rate_keys(request, payload.email, "reset-token"),
             window_seconds=settings.password_reset_rate_limit_window_seconds,
         )
-    token_hash = _hash_reset_token(payload.token)
-    row = await session.scalar(
-        select(PasswordResetToken).where(PasswordResetToken.token_hash == token_hash)
-    )
+    user, row = await _validate_reset_code(session, payload.email, payload.code)
     now = utcnow()
-    if (
-        row is None
-        or row.used_at is not None
-        or _as_utc(row.expires_at) < now
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Код восстановления недействителен или истёк",
-        )
-    user = await session.scalar(select(User).where(User.id == row.user_id))
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Код восстановления недействителен или истёк",
-        )
     user.password_hash = hash_password(payload.new_password)
     row.used_at = now
     await revoke_user_sessions(session, user.id)

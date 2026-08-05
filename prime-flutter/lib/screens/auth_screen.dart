@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../core/auth/nickname_suggestions.dart';
 import '../core/analytics/analytics.dart';
 import '../core/errors/app_failure.dart';
 import '../core/errors/failure_mapper.dart';
@@ -33,7 +34,9 @@ import '../ui/components/app_inline_error.dart';
 import '../ui/components/prime_text_field.dart';
 import '../ui/components/app_snackbar.dart';
 
-enum _NicknameAvailability { idle, checking, available, taken }
+enum _NicknameAvailability { idle, checking, available, taken, inappropriate }
+
+enum _NameAvailability { idle, checking, valid, inappropriate }
 
 enum _EmailAvailability { idle, checking, available, taken, pendingVerification }
 
@@ -64,7 +67,6 @@ class _AuthScreenState extends State<AuthScreen> {
   final _code = TextEditingController();
   final _emailFocus = FocusNode();
   final _emailRegex = RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$');
-  final _nicknameRegex = RegExp(r'^[a-z0-9_][a-z0-9_.-]{2,31}$');
 
   /// Register is the primary path; login is a secondary toggle.
   bool _isLogin = false;
@@ -75,6 +77,9 @@ class _AuthScreenState extends State<AuthScreen> {
   bool _offerSwitchToLogin = false;
   _NicknameAvailability _nicknameStatus = _NicknameAvailability.idle;
   Timer? _nicknameDebounce;
+  List<String> _nicknameSuggestions = const [];
+  _NameAvailability _nameStatus = _NameAvailability.idle;
+  Timer? _nameDebounce;
   _EmailAvailability _emailStatus = _EmailAvailability.idle;
   Timer? _emailDebounce;
 
@@ -100,8 +105,8 @@ class _AuthScreenState extends State<AuthScreen> {
     _isLogin = widget.startInLogin;
     _nickname.addListener(_onNicknameChanged);
     _email.addListener(_onEmailChanged);
+    _name.addListener(_onNameChanged);
     _password.addListener(_onFormChanged);
-    _name.addListener(_onFormChanged);
     _code.addListener(_onFormChanged);
     _termsRecognizer = TapGestureRecognizer()
       ..onTap = () => _openUrl('https://inpr1me.ru/terms');
@@ -109,6 +114,7 @@ class _AuthScreenState extends State<AuthScreen> {
       ..onTap = () => _openUrl('https://inpr1me.ru/privacy');
     if (!_isLogin) {
       Analytics.instance.registerStepViewed(0);
+      _nicknameSuggestions = NicknameSuggestions.suggestNicknames('');
     }
   }
 
@@ -116,11 +122,12 @@ class _AuthScreenState extends State<AuthScreen> {
   void dispose() {
     _nicknameDebounce?.cancel();
     _emailDebounce?.cancel();
+    _nameDebounce?.cancel();
     _resendTimer?.cancel();
     _nickname.removeListener(_onNicknameChanged);
     _email.removeListener(_onEmailChanged);
+    _name.removeListener(_onNameChanged);
     _password.removeListener(_onFormChanged);
-    _name.removeListener(_onFormChanged);
     _code.removeListener(_onFormChanged);
     _email.dispose();
     _password.dispose();
@@ -162,10 +169,53 @@ class _AuthScreenState extends State<AuthScreen> {
     await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
+  void _onNameChanged() {
+    _onFormChanged();
+    _nameDebounce?.cancel();
+    if (_isLogin || _registerStep != 0) {
+      if (_nameStatus != _NameAvailability.idle) {
+        setState(() => _nameStatus = _NameAvailability.idle);
+      }
+      return;
+    }
+    final name = _name.text.trim();
+    if (_validateName(name) != null) {
+      setState(() => _nameStatus = _NameAvailability.idle);
+      return;
+    }
+    setState(() => _nameStatus = _NameAvailability.checking);
+    _nameDebounce = Timer(const Duration(milliseconds: 400), () {
+      unawaited(_checkName(name));
+    });
+  }
+
+  Future<void> _checkName(String name) async {
+    try {
+      await context.read<ApiClient>().checkDisplayNameValid(name);
+      if (!mounted || _name.text.trim() != name) return;
+      setState(() => _nameStatus = _NameAvailability.valid);
+    } on DioException catch (e) {
+      if (!mounted || _name.text.trim() != name) return;
+      final failure = FailureMapper.from(e);
+      if (failure is ValidationFailure &&
+          failure.message.contains('недопустим')) {
+        setState(() => _nameStatus = _NameAvailability.inappropriate);
+        return;
+      }
+      setState(() => _nameStatus = _NameAvailability.idle);
+    } catch (_) {
+      if (!mounted || _name.text.trim() != name) return;
+      setState(() => _nameStatus = _NameAvailability.idle);
+    }
+  }
+
   void _onNicknameChanged() {
     _nicknameDebounce?.cancel();
     final nickname = _normalizedNickname;
-    if (_isLogin || !_nicknameRegex.hasMatch(nickname)) {
+    setState(() {
+      _nicknameSuggestions = NicknameSuggestions.suggestNicknames(nickname);
+    });
+    if (_isLogin || !isValidNicknameFormat(nickname)) {
       setState(() => _nicknameStatus = _NicknameAvailability.idle);
       return;
     }
@@ -173,6 +223,12 @@ class _AuthScreenState extends State<AuthScreen> {
     _nicknameDebounce = Timer(const Duration(milliseconds: 400), () {
       unawaited(_checkNickname(nickname));
     });
+  }
+
+  void _applyNicknameSuggestion(String suggestion) {
+    _nickname.text = suggestion;
+    _nickname.selection = TextSelection.collapsed(offset: suggestion.length);
+    _onNicknameChanged();
   }
 
   Future<void> _checkNickname(String nickname) async {
@@ -183,11 +239,21 @@ class _AuthScreenState extends State<AuthScreen> {
             forEmail: forEmail,
           );
       if (!mounted || _normalizedNickname != nickname) return;
+      final reserved = _isOwnPendingNickname;
       setState(
-        () => _nicknameStatus = available
+        () => _nicknameStatus = (available || reserved)
             ? _NicknameAvailability.available
             : _NicknameAvailability.taken,
       );
+    } on DioException catch (e) {
+      if (!mounted || _normalizedNickname != nickname) return;
+      final failure = FailureMapper.from(e);
+      if (failure is ValidationFailure &&
+          failure.message.contains('недопустим')) {
+        setState(() => _nicknameStatus = _NicknameAvailability.inappropriate);
+        return;
+      }
+      setState(() => _nicknameStatus = _NicknameAvailability.idle);
     } catch (_) {
       if (!mounted || _normalizedNickname != nickname) return;
       setState(() => _nicknameStatus = _NicknameAvailability.idle);
@@ -200,7 +266,7 @@ class _AuthScreenState extends State<AuthScreen> {
           await context.read<ApiClient>().checkEmailAvailable(email);
       if (!mounted || _email.text.trim().toLowerCase() != email) return;
       setState(() {
-        if (result.available) {
+        if (result.available || _isOwnPendingEmail) {
           _emailStatus = _EmailAvailability.available;
         } else {
           _emailStatus = _EmailAvailability.taken;
@@ -220,6 +286,16 @@ class _AuthScreenState extends State<AuthScreen> {
     return draft.isNotEmpty ? draft : null;
   }
 
+  bool get _isOwnPendingNickname =>
+      _registrationPending &&
+      _registeredNickname != null &&
+      _normalizedNickname == _registeredNickname;
+
+  bool get _isOwnPendingEmail =>
+      _registrationPending &&
+      _pendingEmail != null &&
+      _email.text.trim().toLowerCase() == _pendingEmail!.trim().toLowerCase();
+
   bool get _registrationDraftChanged {
     if (!_registrationPending) return true;
     final email = _email.text.trim().toLowerCase();
@@ -237,7 +313,12 @@ class _AuthScreenState extends State<AuthScreen> {
       _notice = null;
     });
     if (_registerStep == 0) {
-      _refreshNicknameAvailability();
+      if (_isOwnPendingNickname) {
+        setState(() => _nicknameStatus = _NicknameAvailability.available);
+      } else {
+        _refreshNicknameAvailability();
+      }
+      _refreshNameValidity();
     } else if (_registerStep == 1) {
       _refreshEmailAvailability();
     }
@@ -245,7 +326,14 @@ class _AuthScreenState extends State<AuthScreen> {
 
   void _refreshNicknameAvailability() {
     final nickname = _normalizedNickname;
-    if (!_nicknameRegex.hasMatch(nickname)) {
+    setState(() {
+      _nicknameSuggestions = NicknameSuggestions.suggestNicknames(nickname);
+    });
+    if (_isOwnPendingNickname) {
+      setState(() => _nicknameStatus = _NicknameAvailability.available);
+      return;
+    }
+    if (!isValidNicknameFormat(nickname)) {
       setState(() => _nicknameStatus = _NicknameAvailability.idle);
       return;
     }
@@ -253,8 +341,22 @@ class _AuthScreenState extends State<AuthScreen> {
     unawaited(_checkNickname(nickname));
   }
 
+  void _refreshNameValidity() {
+    final name = _name.text.trim();
+    if (_validateName(name) != null) {
+      setState(() => _nameStatus = _NameAvailability.idle);
+      return;
+    }
+    setState(() => _nameStatus = _NameAvailability.checking);
+    unawaited(_checkName(name));
+  }
+
   void _refreshEmailAvailability() {
     final email = _email.text.trim().toLowerCase();
+    if (_isOwnPendingEmail) {
+      setState(() => _emailStatus = _EmailAvailability.available);
+      return;
+    }
     if (_validateEmail(email) != null) {
       setState(() => _emailStatus = _EmailAvailability.idle);
       return;
@@ -294,7 +396,8 @@ class _AuthScreenState extends State<AuthScreen> {
       return;
     }
 
-    if (!_isLogin && _nicknameStatus == _NicknameAvailability.taken) {
+    if (!_isLogin && _nicknameStatus == _NicknameAvailability.taken &&
+        !_isOwnPendingNickname) {
       setState(() {
         _error = null;
         if (_registerStep != 0) _registerStep = 0;
@@ -591,13 +694,13 @@ class _AuthScreenState extends State<AuthScreen> {
       case 0:
         return _validateName(_name.text) == null &&
             _validateNickname(_nickname.text) == null &&
-            _nicknameStatus != _NicknameAvailability.checking &&
-            _nicknameStatus != _NicknameAvailability.taken;
+            _nameStatus == _NameAvailability.valid &&
+            _nicknameStatus == _NicknameAvailability.available;
       case 1:
         return _validateEmail(_email.text) == null &&
             _validatePassword(_password.text) == null &&
             _emailStatus != _EmailAvailability.checking &&
-            _emailStatus != _EmailAvailability.taken &&
+            (_emailStatus == _EmailAvailability.available || _isOwnPendingEmail) &&
             _emailStatus != _EmailAvailability.pendingVerification;
       default:
         return true;
@@ -635,14 +738,20 @@ class _AuthScreenState extends State<AuthScreen> {
     if (!_agreed) return false;
     if (_validateName(_name.text) != null) return false;
     if (_validateNickname(_nickname.text) != null) return false;
+    if (_nameStatus == _NameAvailability.checking ||
+        _nameStatus == _NameAvailability.inappropriate) {
+      return false;
+    }
     if (_validateEmail(_email.text) != null) return false;
     if (_validatePassword(_password.text) != null) return false;
     if (_nicknameStatus == _NicknameAvailability.checking ||
-        _nicknameStatus == _NicknameAvailability.taken) {
+        (_nicknameStatus == _NicknameAvailability.taken &&
+            !_isOwnPendingNickname) ||
+        _nicknameStatus == _NicknameAvailability.inappropriate) {
       return false;
     }
     if (_emailStatus == _EmailAvailability.checking ||
-        _emailStatus == _EmailAvailability.taken ||
+        (_emailStatus == _EmailAvailability.taken && !_isOwnPendingEmail) ||
         _emailStatus == _EmailAvailability.pendingVerification) {
       return false;
     }
@@ -669,6 +778,9 @@ class _AuthScreenState extends State<AuthScreen> {
     final name = value?.trim() ?? '';
     if (name.isEmpty) return 'Введите имя';
     if (name.length < 2) return 'Имя должно быть длиннее';
+    if (_nameStatus == _NameAvailability.inappropriate) {
+      return 'Имя содержит недопустимые слова';
+    }
     return null;
   }
 
@@ -676,10 +788,13 @@ class _AuthScreenState extends State<AuthScreen> {
     final nickname =
         (value ?? '').trim().toLowerCase().replaceFirst(RegExp(r'^@'), '');
     if (nickname.isEmpty) return 'Введите никнейм';
-    if (!_nicknameRegex.hasMatch(nickname)) {
-      return '3–32 символа: a-z, 0-9, точка, дефис или _';
+    if (!isValidNicknameFormat(nickname)) {
+      return nicknameFormatError;
     }
-    if (_nicknameStatus == _NicknameAvailability.taken) {
+    if (_nicknameStatus == _NicknameAvailability.inappropriate) {
+      return 'Никнейм содержит недопустимые слова';
+    }
+    if (_nicknameStatus == _NicknameAvailability.taken && !_isOwnPendingNickname) {
       return 'Никнейм уже занят';
     }
     return null;
@@ -709,6 +824,7 @@ class _AuthScreenState extends State<AuthScreen> {
       _registeredNickname = null;
       _registeredPassword = null;
       _nicknameStatus = _NicknameAvailability.idle;
+      _nameStatus = _NameAvailability.idle;
       _emailStatus = _EmailAvailability.idle;
     });
   }
@@ -732,6 +848,7 @@ class _AuthScreenState extends State<AuthScreen> {
       _registeredNickname = null;
       _registeredPassword = null;
       _nicknameStatus = _NicknameAvailability.idle;
+      _nameStatus = _NameAvailability.idle;
       _emailStatus = _EmailAvailability.available;
     });
   }
@@ -755,6 +872,7 @@ class _AuthScreenState extends State<AuthScreen> {
       _registeredNickname = null;
       _registeredPassword = null;
       _nicknameStatus = _NicknameAvailability.idle;
+      _nameStatus = _NameAvailability.idle;
       _emailStatus = _EmailAvailability.idle;
     });
   }
@@ -787,20 +905,40 @@ class _AuthScreenState extends State<AuthScreen> {
         _EmailAvailability.idle => AuthFieldHintTone.neutral,
       };
 
+  String? get _nameHelper {
+    if (_isLogin || _registerStep != 0) return null;
+    return switch (_nameStatus) {
+      _NameAvailability.checking => 'Проверяем имя…',
+      _NameAvailability.inappropriate => 'Имя содержит недопустимые слова',
+      _NameAvailability.valid || _NameAvailability.idle => null,
+    };
+  }
+
+  AuthFieldHintTone get _nameHintTone => switch (_nameStatus) {
+        _NameAvailability.checking => AuthFieldHintTone.loading,
+        _NameAvailability.inappropriate => AuthFieldHintTone.negative,
+        _NameAvailability.valid || _NameAvailability.idle =>
+          AuthFieldHintTone.neutral,
+      };
+
   String? get _nicknameHelper {
     if (_isLogin) return null;
     return switch (_nicknameStatus) {
       _NicknameAvailability.checking => 'Проверяем никнейм…',
-      _NicknameAvailability.available => 'Никнейм свободен',
+      _NicknameAvailability.available =>
+        _isOwnPendingNickname ? 'Ваш текущий никнейм' : 'Никнейм свободен',
       _NicknameAvailability.taken => 'Никнейм уже занят',
-      _NicknameAvailability.idle => 'Уникальный логин для поиска друзей',
+      _NicknameAvailability.inappropriate => 'Никнейм содержит недопустимые слова',
+      _NicknameAvailability.idle => nicknameFormatHint,
     };
   }
 
   AuthFieldHintTone get _nicknameHintTone => switch (_nicknameStatus) {
         _NicknameAvailability.checking => AuthFieldHintTone.loading,
         _NicknameAvailability.available => AuthFieldHintTone.positive,
-        _NicknameAvailability.taken => AuthFieldHintTone.negative,
+        _NicknameAvailability.taken ||
+        _NicknameAvailability.inappropriate =>
+          AuthFieldHintTone.negative,
         _NicknameAvailability.idle => AuthFieldHintTone.neutral,
       };
 
@@ -824,7 +962,7 @@ class _AuthScreenState extends State<AuthScreen> {
       return 'Продолжите привычки и общение в команде.';
     }
     return switch (_registerStep) {
-      0 => 'Имя видно команде. Никнейм уникален — по нему найдут друзья.',
+      0 => 'Имя видно команде. Никнейм уникален — по нему найдут друзья. $nicknameFormatHint',
       1 => 'Email для входа. Пароль проверим на силу — слабый не пропустим.',
       _summaryStep =>
         'Проверьте данные и примите условия — затем отправим код на почту.',
@@ -871,6 +1009,13 @@ class _AuthScreenState extends State<AuthScreen> {
                         autofillHints: const [AutofillHints.name],
                         validator: _validateName,
                       ),
+                      if (_nameHelper != null) ...[
+                        const SizedBox(height: AppSpacing.xs),
+                        AuthFieldHint(
+                          text: _nameHelper!,
+                          tone: _nameHintTone,
+                        ),
+                      ],
                       const SizedBox(height: AppSpacing.md),
                       PrimeTextField(
                         key: const ValueKey('auth-register-nickname'),
@@ -884,13 +1029,50 @@ class _AuthScreenState extends State<AuthScreen> {
                         enableSuggestions: false,
                         inputFormatters: [
                           FilteringTextInputFormatter.deny(RegExp(r'\s')),
+                          LengthLimitingTextInputFormatter(
+                            NicknameSuggestions.maxLength,
+                          ),
                         ],
                         validator: _validateNickname,
                       ),
                       if (_nicknameHelper != null) ...[
+                        const SizedBox(height: AppSpacing.xs),
                         AuthFieldHint(
                           text: _nicknameHelper!,
                           tone: _nicknameHintTone,
+                        ),
+                      ],
+                      if (_nicknameSuggestions.isNotEmpty) ...[
+                        const SizedBox(height: AppSpacing.sm),
+                        Wrap(
+                          spacing: AppSpacing.xs,
+                          runSpacing: AppSpacing.xs,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            Text(
+                              'Идеи:',
+                              style: AppTypography.caption.copyWith(
+                                color: AppColors.textMuted,
+                              ),
+                            ),
+                            for (final suggestion in _nicknameSuggestions)
+                              ActionChip(
+                                label: Text('@$suggestion'),
+                                onPressed: () =>
+                                    _applyNicknameSuggestion(suggestion),
+                              ),
+                            ActionChip(
+                              label: const Icon(Icons.refresh_rounded, size: 16),
+                              onPressed: () {
+                                setState(() {
+                                  _nicknameSuggestions =
+                                      NicknameSuggestions.suggestNicknames(
+                                    _normalizedNickname,
+                                  );
+                                });
+                              },
+                            ),
+                          ],
                         ),
                       ],
                     ],

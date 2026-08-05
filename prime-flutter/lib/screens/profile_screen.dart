@@ -330,10 +330,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 onTap: () {
                   Navigator.of(context).push(
                     PrimeRoute.sharedAxis(
-                      builder: (_) => TournamentsScreen(
-                        onShowMessage: () =>
-                            showAppSnackBar(context, 'Турниры скоро'),
-                      ),
+                      builder: (_) => const TournamentsScreen(),
                     ),
                   );
                 },

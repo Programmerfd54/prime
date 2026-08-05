@@ -226,7 +226,7 @@ class PublicProfileProjection {
               value: consistency7 > 0 ? '$consistency7%' : '—',
             ),
             ProfilePublicStat(
-              label: 'Дней в PRIME',
+              label: 'Дней в ПРАЙМ',
               value: '${profile.successfulDays}',
             ),
             ProfilePublicStat(
@@ -327,7 +327,7 @@ ProfileAboutData buildOwnAboutData({
     ),
     ProfileAboutFact(
       icon: LucideIcons.calendar,
-      label: 'В PRIME с',
+      label: 'В ПРАЙМ с',
       value: profileMemberSinceLabel(user.createdAt),
       accent: ProfilePalette.coolGrey,
     ),

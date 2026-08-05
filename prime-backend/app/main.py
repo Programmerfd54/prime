@@ -14,6 +14,7 @@ from .logging_config import configure_logging
 from .middleware import request_log_middleware, security_headers_middleware
 from .rate_limit_middleware import global_rate_limit_middleware
 from .matrix import migrate_legacy_tokens
+from .email_unsubscribe_cleanup import run_email_unsubscribe_cleanup_worker
 from .outbox_worker import run_outbox_worker
 from .media_pipeline.worker import run_media_worker
 from .redis_client import close_redis
@@ -59,6 +60,7 @@ async def lifespan(app: FastAPI):
         workers = [
             asyncio.create_task(run_outbox_worker(stop_event)),
             asyncio.create_task(run_media_worker(stop_event)),
+            asyncio.create_task(run_email_unsubscribe_cleanup_worker(stop_event)),
         ]
     try:
         yield
@@ -206,7 +208,7 @@ app.add_middleware(
 )
 
 app.include_router(auth.router, prefix="/api/v1")
-app.include_router(email.router, prefix="/api/v1")
+app.include_router(email.router)
 app.include_router(mfa.router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")
 app.include_router(users.legacy_router, prefix="/api/v1")

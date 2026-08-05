@@ -92,6 +92,11 @@ class Settings(BaseSettings):
         ge=5,
         alias="PASSWORD_RESET_TOKEN_TTL_MINUTES",
     )
+    password_reset_resend_cooldown_seconds: int = Field(
+        default=60,
+        ge=0,
+        alias="PASSWORD_RESET_RESEND_COOLDOWN_SECONDS",
+    )
     email_verification_code_ttl_minutes: int = Field(
         default=15,
         ge=1,
@@ -124,9 +129,34 @@ class Settings(BaseSettings):
     smtp_timeout_seconds: int = Field(default=15, ge=1, alias="SMTP_TIMEOUT_SECONDS")
     mail_from: str = Field(default="", alias="MAIL_FROM")
     mail_from_name: str = Field(default="ПРАЙМ", alias="MAIL_FROM_NAME")
-    # Shown as Reply-To; use support@your-domain so users can answer if needed.
+    # Shown as Reply-To in outgoing mail; keep in sync with noreply@inpr1me.ru.
     mail_reply_to: str = Field(default="", alias="MAIL_REPLY_TO")
-    # Public base URL for links embedded in outgoing mail (unsubscribe, etc.).
+    # Public base URL for links embedded in outgoing mail (unsubscribe landing pages).
+    public_mail_base_url: str = Field(
+        default="http://localhost:8080",
+        alias="PUBLIC_MAIL_BASE_URL",
+    )
+    email_unsubscribe_token_ttl_days: int = Field(
+        default=90,
+        ge=1,
+        alias="EMAIL_UNSUBSCRIBE_TOKEN_TTL_DAYS",
+    )
+    email_unsubscribe_rate_limit_attempts: int = Field(
+        default=30,
+        ge=1,
+        alias="EMAIL_UNSUBSCRIBE_RATE_LIMIT_ATTEMPTS",
+    )
+    email_unsubscribe_rate_limit_window_seconds: int = Field(
+        default=60,
+        ge=1,
+        alias="EMAIL_UNSUBSCRIBE_RATE_LIMIT_WINDOW_SECONDS",
+    )
+    email_unsubscribe_cleanup_interval_seconds: int = Field(
+        default=86400,
+        ge=60,
+        alias="EMAIL_UNSUBSCRIBE_CLEANUP_INTERVAL_SECONDS",
+    )
+    # Legacy alias kept for any external scripts; prefer PUBLIC_MAIL_BASE_URL.
     public_api_base_url: str = Field(
         default="http://localhost:8080/api/v1",
         alias="PUBLIC_API_BASE_URL",
@@ -162,7 +192,7 @@ class Settings(BaseSettings):
     )
     matrix_password_secret: str = Field(default="", alias="MATRIX_PASSWORD_SECRET")
     password_reset_rate_limit_attempts: int = Field(
-        default=3,
+        default=10,
         ge=1,
         alias="PASSWORD_RESET_RATE_LIMIT_ATTEMPTS",
     )

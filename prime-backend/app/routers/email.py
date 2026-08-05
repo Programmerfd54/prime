@@ -2,101 +2,135 @@
 from __future__ import annotations
 
 import logging
+import re
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import get_settings
 from ..db import get_session
 from ..email_unsubscribe import (
-    LETTER_MARKETING,
-    letter_label,
-    parse_unsubscribe_token,
+    apply_marketing_unsubscribe,
+    lookup_unsubscribe_token,
+)
+from ..email_unsubscribe_pages import (
+    already_unsubscribed_page,
+    expired_page,
+    invalid_page,
+    success_page,
 )
 from ..models import User, utcnow
+from ..rate_limit import enforce as enforce_rate_limit
+from ..rate_limit import record_failure as record_rate_limit_failure
 
-router = APIRouter(prefix="/email", tags=["email"])
+router = APIRouter(tags=["email-public"])
 logger = logging.getLogger("prime.email")
 
-
-def _success_page(*, title: str, body: str, email: str, letter: str) -> str:
-    letter_name = letter_label(letter)
-    return f"""<!doctype html>
-<html lang="ru">
-  <head>
-    <meta charset="utf-8"/>
-    <meta name="viewport" content="width=device-width, initial-scale=1"/>
-    <title>{title} · ПРАЙМ</title>
-    <style>
-      body {{
-        margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-        background: #F4F2F8; color: #1A1524; padding: 32px 16px;
-      }}
-      .card {{
-        max-width: 520px; margin: 0 auto; background: #fff; border-radius: 24px;
-        padding: 32px; box-shadow: 0 12px 40px rgba(109,40,217,0.08);
-      }}
-      .badge {{
-        display: inline-block; padding: 8px 14px; border-radius: 999px;
-        background: linear-gradient(135deg, #8B5CF6, #6D28D9); color: #fff;
-        font-size: 12px; font-weight: 700; letter-spacing: 2px;
-      }}
-      h1 {{ margin: 20px 0 12px; font-size: 28px; line-height: 1.2; }}
-      p {{ margin: 0 0 12px; line-height: 1.65; color: #5C5468; }}
-      .meta {{ font-size: 13px; color: #7C6B96; margin-top: 20px; }}
-    </style>
-  </head>
-  <body>
-    <div class="card">
-      <div class="badge">ПРАЙМ</div>
-      <h1>{title}</h1>
-      <p>{body}</p>
-      <p class="meta">Почта: {email}<br/>Письмо: {letter_name}</p>
-    </div>
-  </body>
-</html>"""
+_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
+_REFERRER_POLICY = {"Referrer-Policy": "no-referrer"}
 
 
-@router.get("/unsubscribe", response_class=HTMLResponse)
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _html_response(content: str, *, status_code: int = 200) -> HTMLResponse:
+    return HTMLResponse(
+        content=content,
+        status_code=status_code,
+        headers=_REFERRER_POLICY,
+    )
+
+
+async def _enforce_unsubscribe_rate_limit(session: AsyncSession, request: Request) -> None:
+    settings = get_settings()
+    client = request.client.host if request.client else "unknown"
+    key = f"email:unsubscribe:ip:{client}"
+    await enforce_rate_limit(
+        session,
+        key,
+        limit=settings.email_unsubscribe_rate_limit_attempts,
+        window_seconds=settings.email_unsubscribe_rate_limit_window_seconds,
+        detail="Слишком много запросов. Попробуйте позже.",
+    )
+    await record_rate_limit_failure(
+        session,
+        key,
+        window_seconds=settings.email_unsubscribe_rate_limit_window_seconds,
+    )
+
+
+async def _process_unsubscribe(
+    *,
+    token: str,
+    session: AsyncSession,
+    request: Request,
+) -> HTMLResponse:
+    await _enforce_unsubscribe_rate_limit(session, request)
+
+    normalized = token.strip()
+    if not _TOKEN_PATTERN.fullmatch(normalized):
+        return _html_response(invalid_page(), status_code=400)
+
+    token_row = await lookup_unsubscribe_token(session, normalized)
+    if token_row is None:
+        return _html_response(invalid_page(), status_code=404)
+
+    if token_row.used_at is not None:
+        user = await session.scalar(select(User).where(User.id == token_row.user_id))
+        email = user.email if user is not None else "—"
+        return _html_response(already_unsubscribed_page(email=email))
+
+    if token_row.expires_at is not None and _as_utc(token_row.expires_at) < utcnow():
+        return _html_response(expired_page(), status_code=410)
+
+    user = await session.scalar(select(User).where(User.id == token_row.user_id))
+    if user is None or not user.is_active:
+        return _html_response(invalid_page(), status_code=404)
+
+    if not user.marketing_emails_opt_in:
+        if token_row.used_at is None:
+            token_row.used_at = utcnow()
+            session.add(token_row)
+            await session.commit()
+        return _html_response(already_unsubscribed_page(email=user.email))
+
+    applied = await apply_marketing_unsubscribe(
+        session,
+        user=user,
+        token_row=token_row,
+    )
+    if not applied:
+        return _html_response(already_unsubscribed_page(email=user.email))
+
+    logger.info(
+        "marketing_unsubscribed",
+        extra={"user_id": user.id, "letter": token_row.letter},
+    )
+    return _html_response(
+        success_page(email=user.email, letter=token_row.letter),
+    )
+
+
+@router.get("/unsubscribe/{token}", response_class=HTMLResponse)
 async def unsubscribe_by_token(
-    token: str = Query(min_length=8),
+    token: str,
+    request: Request,
     session: AsyncSession = Depends(get_session),
 ) -> HTMLResponse:
-    payload = parse_unsubscribe_token(token)
-    if payload is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Ссылка отписки недействительна или устарела",
-        )
+    return await _process_unsubscribe(token=token, session=session, request=request)
 
-    user = await session.scalar(select(User).where(User.id == payload.user_id))
-    if user is None or not user.is_active or user.email.lower() != payload.email:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Аккаунт не найден",
-        )
 
-    # Marketing opt-out applies to newsletter-style mail. Transactional signup
-    # letters still include the link so users can opt out of future tips.
-    if payload.letter in {LETTER_MARKETING, "signup_verification", "password_reset"}:
-        user.marketing_emails_opt_in = False
-        user.marketing_emails_unsubscribed_at = utcnow()
-        session.add(user)
-        await session.commit()
-        logger.info(
-            "marketing_unsubscribed",
-            extra={"user_id": user.id, "letter": payload.letter},
-        )
-
-    html = _success_page(
-        title="Вы отписались от рассылки",
-        body=(
-            "Мы больше не будем присылать новости, советы и подборки от ПРАЙМ "
-            "на эту почту. Служебные письма — подтверждение входа, безопасность — "
-            "могут приходить, когда это необходимо."
-        ),
-        email=user.email,
-        letter=payload.letter,
-    )
-    return HTMLResponse(content=html, status_code=200)
+@router.post("/unsubscribe/{token}", response_class=HTMLResponse)
+async def unsubscribe_one_click(
+    token: str,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> HTMLResponse:
+    """RFC 8058 one-click unsubscribe from List-Unsubscribe-Post."""
+    return await _process_unsubscribe(token=token, session=session, request=request)

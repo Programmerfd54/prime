@@ -6,6 +6,7 @@ import signal
 
 from .logging_config import configure_logging
 from .media_pipeline.worker import run_media_worker
+from .email_unsubscribe_cleanup import run_email_unsubscribe_cleanup_worker
 from .outbox_worker import run_outbox_worker
 from .config import get_settings
 from .db import engine
@@ -28,6 +29,7 @@ async def main() -> None:
     tasks = [
         asyncio.create_task(run_outbox_worker(stop_event)),
         asyncio.create_task(run_media_worker(stop_event)),
+        asyncio.create_task(run_email_unsubscribe_cleanup_worker(stop_event)),
     ]
     logger.info("prime_worker_started")
     try:

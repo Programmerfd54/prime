@@ -16,7 +16,7 @@ class AuthPageShell extends StatelessWidget {
     super.key,
     required this.child,
     this.loading = false,
-    this.loadingLabel = 'Подключаем PRIME…',
+    this.loadingLabel = 'Подключаем ПРАЙМ…',
     this.appBar,
   });
 
@@ -352,19 +352,20 @@ class _SummaryRow extends StatelessWidget {
     final p = context.prime;
     return Row(
       children: [
-        Expanded(
+        SizedBox(
+          width: 80,
           child: Text(
             label,
             style: KitTypography.caption.copyWith(color: p.inkMuted),
           ),
         ),
-        Flexible(
-          child: Text(
+        const SizedBox(width: AppSpacing.sm),
+        Expanded(
+          flex: 3,
+          child: SelectableText(
             value,
-            textAlign: TextAlign.end,
             style: KitTypography.cardTitle.copyWith(color: p.ink, fontSize: 15),
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
+            maxLines: 1,
           ),
         ),
       ],
